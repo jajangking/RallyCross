@@ -294,8 +294,7 @@ body.is-touch #board-head {
   padding-bottom: 3px;
 }
 
-#lampbar button[data-tv],
-#lampbar button[data-heli] {
+#lampbar button[data-tv] {
   font-size: 11px;
   letter-spacing: 0.04em;
 }
@@ -593,8 +592,7 @@ body.is-touch #lampbar {
   }
 
   #lampbar button.ai,
-  #lampbar button[data-tv],
-  #lampbar button[data-heli] {
+  #lampbar button[data-tv] {
     font-size: 9px;
     letter-spacing: 0.02em;
   }

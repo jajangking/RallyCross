@@ -1,0 +1,391 @@
+/**
+ * Preview tanpa browser.
+ *
+ * Merender scene three.js ke PNG dengan rasterizer z-buffer kecil di Node —
+ * berguna untuk memeriksa siluet model, proporsi, dan komposisi kamera ketika
+ * tidak ada Chromium di mesin ini (CI, Termux, sandbox).
+ *
+ *   npm run shot            # semua
+ *   npm run shot -- heli    # hanya helikopter (3 sudut)
+ *   npm run shot -- arena   # hanya arena (udara, darat, peta)
+ *
+ * Hasilnya di `shots/` (di-ignore git).
+ *
+ * Catatan: ini **bukan** renderer tiga.js yang asli. Tekstur diganti warna
+ * rata-rata, tidak ada kabut/bayangan, dan pencahayaan toon disederhanakan jadi
+ * 4 langkah. Cukup untuk menilai bentuk dan komposisi, bukan warna akhir.
+ */
+import { deflateSync } from 'node:zlib';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import * as THREE from 'three';
+
+/* ------------------------------------------------------------------ canvas */
+
+type Rgba = [number, number, number, number];
+
+const parseColor = (input: string): Rgba => {
+  if (typeof input !== 'string') return [255, 0, 255, 1];
+  const text = input.trim();
+  if (text.startsWith('#')) {
+    const h = text.slice(1);
+    const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+    return [
+      parseInt(full.slice(0, 2), 16),
+      parseInt(full.slice(2, 4), 16),
+      parseInt(full.slice(4, 6), 16),
+      1,
+    ];
+  }
+  const m = text.match(/rgba?\(([^)]+)\)/);
+  if (m) {
+    const parts = m[1].split(',').map((v) => parseFloat(v));
+    return [parts[0], parts[1], parts[2], parts[3] ?? 1];
+  }
+  return [255, 0, 255, 1];
+};
+
+/**
+ * Kanvas 2D mini: mencatat `fillRect`/gradien ke satu warna rata-rata, supaya
+ * material ber-`map` masih punya warna yang masuk akal (aspal gelap, rumput
+ * hijau, tribun ramai) walau tidak ada piksel sungguhan.
+ */
+class StubCanvas {
+  width = 1;
+  height = 1;
+  private readonly sum = Object.assign([0, 0, 0, 0], { n: 0 });
+
+  getContext(_kind: string) {
+    const canvas = this;
+    const gradient = {
+      addColorStop(_offset: number, color: string) {
+        canvas.paint(color, 1);
+      },
+    };
+    return {
+      canvas,
+      fillStyle: '#ffffff',
+      strokeStyle: '#000000',
+      lineWidth: 1,
+      font: '10px sans-serif',
+      textAlign: 'center',
+      textBaseline: 'middle',
+      createLinearGradient: () => gradient,
+      createRadialGradient: () => gradient,
+      fillRect(_x: number, _y: number, w: number, h: number) {
+        canvas.paint(this.fillStyle, Math.abs(w * h));
+      },
+      clearRect() {},
+      strokeRect() {},
+      beginPath() {},
+      moveTo() {},
+      lineTo() {},
+      arc() {},
+      fill() {},
+      stroke() {},
+      fillText() {},
+      save() {},
+      restore() {},
+      translate() {},
+      rotate() {},
+      scale() {},
+      setTransform() {},
+      measureText: (t: string) => ({ width: t.length * 6 }),
+    };
+  }
+
+  paint(color: string, area: number) {
+    const [r, g, b, a] = parseColor(color);
+    const weight = Math.min(1, Math.max(0.05, area / 4096));
+    this.sum[0] += r * weight;
+    this.sum[1] += g * weight;
+    this.sum[2] += b * weight;
+    this.sum[3] += a * weight;
+    this.sum.n += weight;
+  }
+
+  average(): Rgba {
+    const n = this.sum.n || 1;
+    return [this.sum[0] / n, this.sum[1] / n, this.sum[2] / n, this.sum[3] / n];
+  }
+}
+
+(globalThis as unknown as { document: unknown }).document = {
+  createElement: () => new StubCanvas(),
+};
+
+/* --------------------------------------------------------------------- png */
+
+const crcTable = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+const crc32 = (buf: Buffer) => {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) c = crcTable[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+};
+
+const chunk = (type: string, data: Buffer) => {
+  const out = Buffer.alloc(8 + data.length + 4);
+  out.writeUInt32BE(data.length, 0);
+  out.write(type, 4, 'ascii');
+  data.copy(out, 8);
+  out.writeUInt32BE(crc32(Buffer.concat([Buffer.from(type, 'ascii'), data])), 8 + data.length);
+  return out;
+};
+
+const writePng = (path: string, w: number, h: number, rgb: Uint8Array) => {
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  for (let y = 0; y < h; y++) {
+    const row = y * (w * 3 + 1);
+    for (let x = 0; x < w; x++) {
+      const s = (y * w + x) * 3;
+      const d = row + 1 + x * 3;
+      raw[d] = rgb[s];
+      raw[d + 1] = rgb[s + 1];
+      raw[d + 2] = rgb[s + 2];
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  writeFileSync(
+    path,
+    Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      chunk('IHDR', ihdr),
+      chunk('IDAT', deflateSync(raw, { level: 9 })),
+      chunk('IEND', Buffer.alloc(0)),
+    ]),
+  );
+};
+
+/* ---------------------------------------------------------------- renderer */
+
+const W = 640;
+const H = 400;
+const LIGHT = new THREE.Vector3(0.45, 0.82, 0.36).normalize();
+/** Empat langkah cel shading, seperti `toonRamp()`. */
+const BANDS = [0.62, 0.82, 1.0, 1.18];
+
+const mapColor = new WeakMap<THREE.Texture, Rgba>();
+
+const materialColor = (material: THREE.Material): { color: Rgba; alpha: number } => {
+  const m = material as THREE.MeshToonMaterial;
+  const base: Rgba = m.color
+    ? [m.color.r * 255, m.color.g * 255, m.color.b * 255, 1]
+    : [200, 200, 200, 1];
+  if (m.map) {
+    let avg = mapColor.get(m.map);
+    if (!avg) {
+      const canvas = (m.map as unknown as { image?: StubCanvas }).image;
+      avg = canvas?.average ? canvas.average() : [200, 200, 200, 1];
+      mapColor.set(m.map, avg);
+    }
+    base[0] = (base[0] * avg[0]) / 255;
+    base[1] = (base[1] * avg[1]) / 255;
+    base[2] = (base[2] * avg[2]) / 255;
+  }
+  return { color: base, alpha: m.transparent ? m.opacity : 1 };
+};
+
+interface Cam {
+  eye: THREE.Vector3;
+  target: THREE.Vector3;
+  fov: number;
+}
+
+const render = (root: THREE.Object3D, cam: Cam, sky: [number, number, number], path: string) => {
+  const depth = new Float32Array(W * H).fill(Infinity);
+  const color = new Uint8Array(W * H * 3);
+  for (let i = 0; i < W * H * 3; i += 3) {
+    color[i] = sky[0];
+    color[i + 1] = sky[1];
+    color[i + 2] = sky[2];
+  }
+
+  const camera = new THREE.PerspectiveCamera(cam.fov, W / H, 0.05, 3000);
+  camera.position.copy(cam.eye);
+  camera.lookAt(cam.target);
+  camera.updateMatrixWorld(true);
+  const view = camera.matrixWorldInverse;
+  const focal = H / Math.tan((cam.fov * Math.PI) / 360);
+
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  const e1 = new THREE.Vector3();
+  const e2 = new THREE.Vector3();
+  const normal = new THREE.Vector3();
+  const eye = new THREE.Vector3();
+  const m4 = new THREE.Matrix4();
+  const instanceMatrix = new THREE.Matrix4();
+
+  const triangle = (p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, col: Rgba, alpha: number) => {
+    // Tidak ada clipper: buang saja segitiga yang menyentuh bidang dekat.
+    if (p0.z > -0.02 || p1.z > -0.02 || p2.z > -0.02) return;
+    const x0 = ((p0.x / -p0.z) * 0.5 * focal + W / 2) | 0;
+    const y0 = (H / 2 - (p0.y / -p0.z) * 0.5 * focal) | 0;
+    const x1 = ((p1.x / -p1.z) * 0.5 * focal + W / 2) | 0;
+    const y1 = (H / 2 - (p1.y / -p1.z) * 0.5 * focal) | 0;
+    const x2 = ((p2.x / -p2.z) * 0.5 * focal + W / 2) | 0;
+    const y2 = (H / 2 - (p2.y / -p2.z) * 0.5 * focal) | 0;
+
+    const minX = Math.max(0, Math.min(x0, x1, x2));
+    const maxX = Math.min(W - 1, Math.max(x0, x1, x2));
+    const minY = Math.max(0, Math.min(y0, y1, y2));
+    const maxY = Math.min(H - 1, Math.max(y0, y1, y2));
+    if (minX > maxX || minY > maxY) return;
+
+    const area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+    if (area === 0) return;
+    const inv = 1 / area;
+    const iz0 = 1 / -p0.z;
+    const iz1 = 1 / -p1.z;
+    const iz2 = 1 / -p2.z;
+
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        const w0 = ((x1 - x) * (y2 - y) - (x2 - x) * (y1 - y)) * inv;
+        const w1 = ((x2 - x) * (y0 - y) - (x0 - x) * (y2 - y)) * inv;
+        const w2 = 1 - w0 - w1;
+        if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+        const iz = w0 * iz0 + w1 * iz1 + w2 * iz2;
+        if (iz <= 0) continue;
+        const z = 1 / iz;
+        const idx = y * W + x;
+        if (z >= depth[idx]) continue;
+        depth[idx] = z;
+        const o = idx * 3;
+        if (alpha >= 0.999) {
+          color[o] = col[0];
+          color[o + 1] = col[1];
+          color[o + 2] = col[2];
+        } else {
+          color[o] = color[o] * (1 - alpha) + col[0] * alpha;
+          color[o + 1] = color[o + 1] * (1 - alpha) + col[1] * alpha;
+          color[o + 2] = color[o + 2] * (1 - alpha) + col[2] * alpha;
+        }
+      }
+    }
+  };
+
+  root.updateMatrixWorld(true);
+  root.traverse((object) => {
+    const mesh = object as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.visible) return;
+    for (let p = mesh.parent; p; p = p.parent) if (!p.visible) return;
+    const geometry = mesh.geometry;
+    const position = geometry?.getAttribute('position');
+    if (!position) return;
+    const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+    if (!material) return;
+    const { color: base, alpha } = materialColor(material);
+    const index = geometry.getIndex();
+    const count = (mesh as THREE.InstancedMesh).isInstancedMesh
+      ? (mesh as THREE.InstancedMesh).count
+      : 1;
+
+    // Urutkan dari jauh ke dekat supaya alpha blend (kaca, asap) tidak salah.
+    for (let inst = 0; inst < count; inst++) {
+      m4.copy(mesh.matrixWorld);
+      if ((mesh as THREE.InstancedMesh).isInstancedMesh) {
+        (mesh as THREE.InstancedMesh).getMatrixAt(inst, instanceMatrix);
+        m4.multiply(instanceMatrix);
+      }
+      const tris = index ? index.count : position.count;
+      for (let i = 0; i < tris; i += 3) {
+        const i0 = index ? index.getX(i) : i;
+        const i1 = index ? index.getX(i + 1) : i + 1;
+        const i2 = index ? index.getX(i + 2) : i + 2;
+        a.fromBufferAttribute(position, i0).applyMatrix4(m4);
+        b.fromBufferAttribute(position, i1).applyMatrix4(m4);
+        c.fromBufferAttribute(position, i2).applyMatrix4(m4);
+        e1.subVectors(b, a);
+        e2.subVectors(c, a);
+        normal.crossVectors(e2, e1).normalize();
+        eye.subVectors(cam.eye, a);
+        // Dua sisi: normal selalu dibalik menghadap kamera (z-buffer yang urus).
+        if (normal.dot(eye) < 0) normal.negate();
+        const band = BANDS[Math.min(3, Math.floor(Math.max(0, normal.dot(LIGHT)) * 4))];
+        const col: Rgba = [
+          Math.min(255, base[0] * band),
+          Math.min(255, base[1] * band),
+          Math.min(255, base[2] * band),
+          1,
+        ];
+        a.applyMatrix4(view);
+        b.applyMatrix4(view);
+        c.applyMatrix4(view);
+        triangle(a, b, c, col, alpha);
+      }
+    }
+  });
+
+  writePng(path, W, H, color);
+  console.log('wrote', path);
+};
+
+/* ------------------------------------------------------------------ scenes */
+
+const SKY: [number, number, number] = [176, 214, 240];
+
+const main = async () => {
+  mkdirSync('shots', { recursive: true });
+  const what = process.argv[2] ?? 'all';
+
+  if (what === 'heli' || what === 'all') {
+    const { Helicopter } = await import('../src/world/Heli');
+    const heli = new Helicopter();
+    heli.place(new THREE.Vector3(0, 0, 0));
+    for (let i = 0; i < 4; i++) heli.update(1 / 60, new THREE.Vector3(0, 0, 0));
+    // rotor diputar sedikit supaya bilahnya tidak berimpit di render statis
+    const root = heli.root;
+    root.position.set(0, 0, 0);
+    root.rotation.set(0, 0, 0);
+    root.visible = true;
+    render(root, { eye: new THREE.Vector3(13, 3.4, 0.5), target: new THREE.Vector3(0, 0.5, -0.8), fov: 34 }, SKY, 'shots/heli-side.png');
+    render(root, { eye: new THREE.Vector3(9, 4.6, 8), target: new THREE.Vector3(0, 0.4, -0.4), fov: 34 }, SKY, 'shots/heli-front.png');
+    render(root, { eye: new THREE.Vector3(-8, -2, 9), target: new THREE.Vector3(0, 0.6, -0.6), fov: 38 }, SKY, 'shots/heli-low.png');
+  }
+
+  if (what === 'arena' || what === 'all') {
+    const { buildTrackVisuals, TRACK } = await import('../src/world/track');
+    const scene = new THREE.Scene();
+    buildTrackVisuals(scene, true);
+    const p = TRACK.at(TRACK.start);
+    // komposisi gambar udara heli
+    render(
+      scene,
+      {
+        eye: new THREE.Vector3(p.pos.x + 24, p.pos.y + 26, p.pos.z - 24),
+        target: new THREE.Vector3(p.pos.x, p.pos.y, p.pos.z),
+        fov: 46,
+      },
+      SKY,
+      'shots/arena-aerial.png',
+    );
+    render(
+      scene,
+      { eye: new THREE.Vector3(p.pos.x - 18, 9, p.pos.z + 16), target: new THREE.Vector3(p.pos.x, 1.5, p.pos.z), fov: 55 },
+      SKY,
+      'shots/arena-ground.png',
+    );
+    render(
+      scene,
+      { eye: new THREE.Vector3(66, 190, 210), target: new THREE.Vector3(66, 0, 10), fov: 55 },
+      SKY,
+      'shots/arena-map.png',
+    );
+  }
+};
+
+void main();

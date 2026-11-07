@@ -320,17 +320,9 @@ async function boot() {
     spectateToggle?.updateDisplay();
   };
 
-  const heliButton = document.querySelector<HTMLButtonElement>('#lampbar button[data-heli]');
-
-  /** Tombol HELI di HP: langsung ke kamera udara, tekan lagi kembali ke chase. */
-  const toggleHeli = () => {
-    cameraRig.setMode(cameraRig.modeName === 'heli' ? 'chase' : 'heli');
-  };
-
   const input = new Input({
     reset: resetCar,
     camera: () => cameraRig.toggleMode(),
-    heli: toggleHeli,
     gui: () => setGui(!guiOpen),
     ai: () => setAutopilot(!auto.enabled),
     spectate: () => setSpectate(!spectate.on),
@@ -432,7 +424,7 @@ async function boot() {
     },
   };
   fCam
-    .add(camModes, 'mode', ['chase', 'hood', 'tv', 'heli'])
+    .add(camModes, 'mode', ['chase', 'hood', 'tv'])
     .name('mode kamera')
     .onChange((v: string) => cameraRig.setMode(v as CameraMode));
   // Panel: lompat ke kamera TV berikutnya (berguna untuk mengecek semua sudut).
@@ -633,16 +625,17 @@ async function boot() {
     skidMarks.flush();
     smoke.update(raw);
 
-    // Heli selalu terbang (kelihatan di langit arena), apa pun kameranya.
+    // Heli selalu terbang mengelilingi mobil yang disorot; lensanya jadi salah
+    // satu kamera siaran TV (sutradara menyelipkannya tiap 8–15 detik).
     updateCamFocus();
     heli.update(raw, camFocus);
-    // Di mode heli kita "naik" ke dalamnya, jadi modelnya disembunyikan.
-    heli.root.visible = cameraRig.modeName !== 'heli';
+    cameraRig.setAerialEye(heli.cameraPosition);
+    // Saat siaran sedang memakai gambar heli, kamera ada di dagunya: sembunyikan
+    // bodi supaya tidak menutupi frame (dan tetap terlihat dari kamera lain).
+    heli.root.visible = !cameraRig.aerialActive;
 
     if (cameraRig.modeName === 'tv') {
       cameraRig.updateBroadcast(raw, camFocus, camFocusDistance, TRACK.length);
-    } else if (cameraRig.modeName === 'heli') {
-      cameraRig.updateAerial(raw, heli.cameraPosition, camFocus);
     } else {
       cameraRig.update(raw, car);
     }
@@ -673,12 +666,7 @@ async function boot() {
       records,
       now() < newRecordUntil,
     );
-    hud.setCamera(cameraRig.modeName, cameraRig.broadcastName);
-    const heliOn = cameraRig.modeName === 'heli';
-    if (heliButton && heliButton.classList.contains('on') !== heliOn) {
-      heliButton.classList.toggle('on', heliOn);
-      heliButton.setAttribute('aria-pressed', String(heliOn));
-    }
+    hud.setCamera(cameraRig.modeName === 'tv', cameraRig.broadcastName);
     hud.setFinish(
       race.winner === null
         ? null

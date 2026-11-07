@@ -9,6 +9,7 @@
     "preview": "vite preview --host",
     "check": "tsc --noEmit",
     "smoke": "tsx scripts/smoke.ts",
+    "shot": "tsx scripts/preview.ts",
     "check:browser": "node scripts/browser-check.mjs"
   },
   "dependencies": {

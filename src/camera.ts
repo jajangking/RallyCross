@@ -6,7 +6,14 @@ import { BroadcastDirector } from './camera/BroadcastDirector';
 const up = new THREE.Vector3(0, 1, 0);
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
-export type CameraMode = 'chase' | 'hood' | 'tv' | 'heli';
+export type CameraMode = 'chase' | 'hood' | 'tv';
+
+/** Jeda gambar darat sebelum siaran "naik" ke helikopter (detik). */
+const AERIAL_EVERY: [number, number] = [8, 15];
+/** Berapa lama gambar udara bertahan (detik). */
+const AERIAL_HOLD: [number, number] = [4.5, 7];
+/** Kamera darat harus sudah tampil selama ini sebelum boleh ditinggalkan. */
+const AERIAL_MIN_GROUND = 2.4;
 
 export class CameraRig {
   readonly camera: THREE.PerspectiveCamera;
@@ -24,8 +31,15 @@ export class CameraRig {
   private readonly desiredPos = new THREE.Vector3();
   private readonly desiredLook = new THREE.Vector3();
   private readonly fwd = new THREE.Vector3();
-  /** Minta kamera udara langsung "pindah" (potong), bukan meluncur dari kamera lama. */
-  private snapAerial = false;
+
+  /* --- kamera udara (helikopter), ikut disiarkan sebagai salah satu kamera --- */
+  /** Posisi lensa helikopter, di-set tiap frame oleh main. */
+  private readonly aerialEye = new THREE.Vector3();
+  private hasAerial = false;
+  private readonly aerialAim = new THREE.Vector3();
+  private readonly prevFocus = new THREE.Vector3();
+  private hasFocus = false;
+  private readonly aerial = { active: false, wait: 11, held: 0, limit: 5, cut: false };
 
   constructor(aspect: number, spots: BroadcastSpot[] = []) {
     this.camera = new THREE.PerspectiveCamera(this.fovBase, aspect, 0.1, 400);
@@ -33,29 +47,44 @@ export class CameraRig {
     this.director = spots.length ? new BroadcastDirector(spots) : null;
   }
 
-  /** `C`: kamera chase -> kap -> TV -> heli -> chase. */
+  /** `C`: kamera chase -> kap -> TV -> chase. */
   toggleMode() {
-    const next: Record<CameraMode, CameraMode> = {
-      chase: 'hood',
-      hood: 'tv',
-      tv: 'heli',
-      heli: 'chase',
-    };
-    this.setMode(next[this.currentMode]);
+    this.setMode(
+      this.currentMode === 'chase' ? 'hood' : this.currentMode === 'hood' ? 'tv' : 'chase',
+    );
   }
 
   setMode(mode: CameraMode) {
-    if (mode !== 'tv' && this.currentMode === 'heli') this.tvFov = 56;
-    if (mode === 'heli') {
-      this.snapAerial = true;
-      this.tvFov = 52;
-    }
     this.currentMode = mode;
-    if (mode === 'tv') this.director?.takeCut();
+    if (mode === 'tv') {
+      this.director?.takeCut();
+      // Siaran yang baru masuk TV mulai dari kamera darat dulu.
+      this.aerial.active = false;
+      this.aerial.held = 0;
+      this.aerial.wait = AERIAL_EVERY[0];
+    }
   }
 
   get modeName(): CameraMode {
     return this.currentMode;
+  }
+
+  /**
+   * Daftarkan lensa helikopter. `null` = tidak ada kamera udara (mis. sebelum
+   * heli dibuat), dan siaran kembali ke kamera darat saja.
+   */
+  setAerialEye(eye: THREE.Vector3 | null) {
+    if (eye) {
+      this.aerialEye.copy(eye);
+      this.hasAerial = true;
+    } else {
+      this.hasAerial = false;
+    }
+  }
+
+  /** Sedang memakai gambar helikopter? (dipakai untuk menyembunyikan modelnya) */
+  get aerialActive(): boolean {
+    return this.currentMode === 'tv' && this.aerial.active;
   }
 
   /** Pindah ke kamera TV berikutnya (manual) dan aktifkan mode TV. */
@@ -66,26 +95,25 @@ export class CameraRig {
     return spot.name;
   }
 
-  /** Nama kamera TV yang sedang dipakai, mis. "T3". */
+  /** Nama kamera TV yang sedang dipakai, mis. "T3" — atau "HELI". */
   get broadcastName(): string | null {
-    return this.currentMode === 'tv' ? (this.director?.current?.name ?? null) : null;
+    if (this.currentMode !== 'tv') return null;
+    if (this.aerial.active) return 'HELI';
+    return this.director?.current?.name ?? null;
   }
 
   snap(phys: VehiclePhysics) {
-    if (this.currentMode === 'heli') {
-      // Kamera udara punya posisi sendiri (dari heli); cukup luruskan bidikan.
-      this.look.copy(phys.position);
-      this.camera.lookAt(this.look);
-      return;
-    }
     if (this.currentMode === 'tv') {
       const spot = this.director?.current;
-      if (spot) {
+      if (this.aerial.active && this.hasAerial) {
+        this.pos.copy(this.aerialEye);
+        this.look.copy(phys.position);
+      } else if (spot) {
         this.pos.copy(spot.position);
         this.look.copy(spot.aim);
-        this.camera.position.copy(this.pos);
-        this.camera.lookAt(this.look);
       }
+      this.camera.position.copy(this.pos);
+      this.camera.lookAt(this.look);
       return;
     }
     this.computeDesired(phys);
@@ -96,17 +124,56 @@ export class CameraRig {
   }
 
   /**
-   * Kamera TV: duduk diam di menara pinggir trek, mengikuti mobil dengan pan
-   * halus, dan memotong ke kamera lain saat sutradara memilih sudut baru.
+   * Kamera TV: kamera tetap di pinggir trek, mengikuti mobil dengan pan halus,
+   * dan memotong ke kamera lain saat sutradara memilih sudut baru. Sesekali
+   * potongannya ke **helikopter** — gambar udara yang mengikuti mobil dari atas,
+   * seperti siaran rallycross sungguhan.
    */
   updateBroadcast(dt: number, focus: THREE.Vector3, trackDistance: number, lapLength: number) {
-    const spot = this.director?.update(dt, focus, trackDistance, lapLength);
+    // Arah gerak mobil (untuk menaruh mobil di bawah frame + melihat ke depan).
+    if (!this.hasFocus) {
+      this.prevFocus.copy(focus);
+      this.hasFocus = true;
+    }
+    this.fwd.subVectors(focus, this.prevFocus).divideScalar(Math.max(dt, 1e-4));
+    this.fwd.y = 0;
+    if (this.fwd.lengthSq() > 60 * 60) this.fwd.setLength(60);
+    this.prevFocus.copy(focus);
+    this.aerialAim.copy(focus).addScaledVector(this.fwd, 0.22).addScaledVector(up, 0.6);
+
+    const director = this.director;
+    const spot = director?.update(dt, focus, trackDistance, lapLength) ?? null;
+    const wasAerial = this.aerial.active;
+
+    if (this.aerialStep(dt)) {
+      // ---- gambar udara ----
+      const cut = !wasAerial;
+      if (cut) {
+        this.pos.copy(this.aerialEye);
+        this.look.copy(this.aerialAim);
+        this.aerial.cut = true;
+      } else {
+        this.pos.lerp(this.aerialEye, 1 - Math.exp(-9 * dt));
+        this.look.lerp(this.aerialAim, 1 - Math.exp(-5 * dt));
+      }
+      this.camera.position.copy(this.pos);
+      this.camera.lookAt(this.look);
+      const targetFov = clamp(52 - (this.pos.distanceTo(focus) - 24) * 0.5, 32, 58);
+      this.tvFov += (targetFov - this.tvFov) * (1 - Math.exp(-5 * dt));
+      this.camera.fov = this.tvFov;
+      this.camera.updateProjectionMatrix();
+      return;
+    }
+
     if (!spot) return;
 
-    const cut = this.director?.takeCut() ?? false;
+    // Kembali dari helikopter: langsung potong ke kamera darat terpilih.
+    const cut = (director?.takeCut() ?? false) || wasAerial;
     if (cut) {
       this.pos.copy(spot.position);
       this.look.copy(focus);
+      // Kembali dari gambar udara, lensanya ikut "potong" (bukan zoom pelan).
+      if (wasAerial) this.tvFov = 30;
     } else {
       this.pos.lerp(spot.position, 1 - Math.exp(-6 * dt));
       this.look.lerp(focus, 1 - Math.exp(-7 * dt));
@@ -124,24 +191,31 @@ export class CameraRig {
   }
 
   /**
-   * Kamera udara: duduk di perut helikopter, membidik mobil dari atas.
-   * Lensa lebar (bukan tele) supaya sirkuitnya ikut terbaca.
+   * Jadwal selipan kamera udara. `true` = frame ini pakai gambar helikopter.
    */
-  updateAerial(dt: number, eye: THREE.Vector3, focus: THREE.Vector3) {
-    if (this.snapAerial) {
-      this.pos.copy(eye);
-      this.look.copy(focus);
-      this.snapAerial = false;
-    } else {
-      this.pos.lerp(eye, 1 - Math.exp(-8 * dt));
+  private aerialStep(dt: number): boolean {
+    const a = this.aerial;
+    if (!this.hasAerial) {
+      a.active = false;
+      return false;
     }
-    this.look.lerp(focus, 1 - Math.exp(-10 * dt));
-    this.camera.position.copy(this.pos);
-    this.camera.lookAt(this.look);
-    const targetFov = 52 + Math.min(10, this.pos.distanceTo(focus) * 0.12);
-    this.tvFov += (targetFov - this.tvFov) * (1 - Math.exp(-4 * dt));
-    this.camera.fov = this.tvFov;
-    this.camera.updateProjectionMatrix();
+    if (a.active) {
+      a.held += dt;
+      if (a.held < a.limit) return true;
+      a.active = false;
+      a.held = 0;
+      a.wait = AERIAL_EVERY[0] + Math.random() * (AERIAL_EVERY[1] - AERIAL_EVERY[0]);
+      return false;
+    }
+    a.wait -= dt;
+    const groundSettled = (this.director?.dwell ?? 0) > AERIAL_MIN_GROUND;
+    if (a.wait <= 0 && groundSettled) {
+      a.active = true;
+      a.held = 0;
+      a.limit = AERIAL_HOLD[0] + Math.random() * (AERIAL_HOLD[1] - AERIAL_HOLD[0]);
+      return true;
+    }
+    return false;
   }
 
   private computeDesired(phys: VehiclePhysics) {
@@ -160,9 +234,9 @@ export class CameraRig {
     }
   }
 
-  /** Kamera chase/kap. Mode TV/heli punya jalur sendiri. */
+  /** Kamera chase/kap. Mode TV punya jalur sendiri. */
   update(dt: number, phys: VehiclePhysics) {
-    if (this.currentMode === 'tv' || this.currentMode === 'heli') return;
+    if (this.currentMode === 'tv') return;
     this.computeDesired(phys);
 
     const posK = 1 - Math.exp(-9 * dt);

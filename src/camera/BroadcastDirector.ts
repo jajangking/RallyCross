@@ -21,7 +21,7 @@ const MIN_DWELL = 1.6;
  */
 export class BroadcastDirector {
   private index = -1;
-  private dwell = 0;
+  private dwellValue = 0;
   private cut = true;
   /** Detik sisa pilihan manual sebelum sutradara otomatis jalan lagi. */
   private manualFor = 0;
@@ -32,6 +32,11 @@ export class BroadcastDirector {
 
   get current(): BroadcastSpot | null {
     return this.index >= 0 ? this.spots[this.index] : null;
+  }
+
+  /** Sudah berapa lama kamera sekarang dipakai (detik). */
+  get dwell(): number {
+    return this.dwellValue;
   }
 
   /** Sekali pakai: true kalau kamera baru saja berganti (gambar harus "cut"). */
@@ -52,7 +57,7 @@ export class BroadcastDirector {
     lapLength: number,
   ): BroadcastSpot | null {
     if (!this.spots.length) return null;
-    this.dwell += dt;
+    this.dwellValue += dt;
     if (this.manualFor > 0) {
       this.manualFor -= dt;
       return this.current;
@@ -78,9 +83,9 @@ export class BroadcastDirector {
       }
     }
 
-    if (best !== this.index && (this.index < 0 || this.dwell > MIN_DWELL)) {
+    if (best !== this.index && (this.index < 0 || this.dwellValue > MIN_DWELL)) {
       this.index = best;
-      this.dwell = 0;
+      this.dwellValue = 0;
       this.cut = true;
     }
     return this.current;
@@ -95,14 +100,14 @@ export class BroadcastDirector {
     this.index = (this.index + 1) % this.spots.length;
     this.cut = true;
     this.manualFor = 6;
-    this.dwell = 0;
+    this.dwellValue = 0;
     return this.current;
   }
 
   /** Lepas pilihan manual supaya sutradara otomatis langsung jalan lagi. */
   release() {
     this.manualFor = 0;
-    this.dwell = 0;
+    this.dwellValue = 0;
   }
 
   private angle(spot: BroadcastSpot, focus: THREE.Vector3): number {

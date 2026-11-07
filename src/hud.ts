@@ -121,13 +121,12 @@ export class Hud {
   }
 
   /** Overlay kamera TV: muncul hanya saat kamera siaran aktif. */
-  setCamera(mode: 'chase' | 'hood' | 'tv' | 'heli', name: string | null) {
+  setCamera(live: boolean, name: string | null) {
     const el = this.tvEl;
     if (!el) return;
-    const show = mode === 'tv' || mode === 'heli';
-    el.classList.toggle('hide', !show);
-    const text = mode === 'heli' ? '● KAMERA UDARA' : name ? `● LIVE · ${name}` : '● LIVE';
-    if (show && el.textContent !== text) el.textContent = text;
+    el.classList.toggle('hide', !live);
+    const text = name ? `● LIVE · ${name}` : '● LIVE';
+    if (live && el.textContent !== text) el.textContent = text;
   }
 
   /** Banner hasil balapan; `null` menyembunyikannya. */

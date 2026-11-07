@@ -6,3 +6,6 @@ dist
 
 # local test artefacts
 scripts/*.png
+
+# preview renderer output (npm run shot)
+shots/

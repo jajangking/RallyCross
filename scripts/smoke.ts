@@ -806,13 +806,13 @@ async function run() {
   console.log('\n— helikopter kamera udara —');
   const rig = new CameraRig(16 / 9, BROADCAST_SPOTS);
   const cycle: string[] = [rig.modeName];
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 3; i++) {
     rig.toggleMode();
     cycle.push(rig.modeName);
   }
   check(
-    cycle.includes('heli') && cycle[0] === cycle[4],
-    'C cycles chase -> kap -> TV -> heli -> chase',
+    cycle.join('→') === 'chase→hood→tv→chase',
+    'C cycles chase -> kap -> TV -> chase',
     cycle.join(' → '),
   );
 
@@ -838,6 +838,22 @@ async function run() {
     `${cam0.x.toFixed(0)}, ${cam0.y.toFixed(0)}, ${cam0.z.toFixed(0)}`,
   );
 
+  // Model heli: cukup detail tapi tetap ringan (bagian diam digabung per material).
+  let heliMeshes = 0;
+  let heliTris = 0;
+  heli.root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    heliMeshes++;
+    const index = mesh.geometry.getIndex();
+    heliTris += (index ? index.count : mesh.geometry.getAttribute('position').count) / 3;
+  });
+  check(
+    heliMeshes <= 18 && heliTris > 1200,
+    'the helicopter model stays detailed but cheap to draw',
+    `${heliMeshes} meshes, ${heliTris.toFixed(0)} triangles`,
+  );
+
   // Mobil bergerak: heli harus ikut, bukan tertinggal.
   let heliMaxLag = 0;
   for (let i = 0; i < 240; i++) {
@@ -852,19 +868,81 @@ async function run() {
     `worst ${heliMaxLag.toFixed(0)} m behind`,
   );
 
-  // Kamera udara membidik mobil dari posisi heli.
-  rig.setMode('heli');
-  for (let i = 0; i < 40; i++) rig.updateAerial(1 / 60, heli.cameraPosition, heliFocus);
+  // Kamera udara ikut jadi bagian siaran TV: sutradara menyelipkannya berkala.
+  const liveRig = new CameraRig(16 / 9, BROADCAST_SPOTS);
+  liveRig.setMode('tv');
+  const liveFocus = new THREE.Vector3();
+  const eye = new THREE.Vector3();
+  let aerialSegments = 0;
+  let aerialFrames = 0;
+  let longestAerial = 0;
+  let run = 0;
+  let groundFrames = 0;
+  let ladder = 0;
+  let maxEyeLag = 0;
+  let minAerialHeight = Infinity;
+  for (let time = 0; time < 90; time += dt) {
+    const d = (time * 24) % lap;
+    const p = TRACK.at(d);
+    liveFocus.copy(p.pos);
+    liveFocus.y += 0.9;
+    // heli mengorbit fokus, 26 m di atas dan 30 m ke samping
+    const a = time * 0.16;
+    eye.set(liveFocus.x + Math.cos(a) * 30, liveFocus.y + 26, liveFocus.z + Math.sin(a) * 30);
+    liveRig.setAerialEye(eye);
+    const trackDistance = ((d - TRACK.start) % lap + lap) % lap;
+    liveRig.updateBroadcast(dt, liveFocus, trackDistance, lap);
+    if (liveRig.aerialActive) {
+      aerialFrames++;
+      run += dt;
+      longestAerial = Math.max(longestAerial, run);
+      if (liveRig.broadcastName !== 'HELI') ladder++;
+      maxEyeLag = Math.max(maxEyeLag, liveRig.camera.position.distanceTo(eye));
+      minAerialHeight = Math.min(minAerialHeight, liveRig.camera.position.y - liveFocus.y);
+    } else {
+      groundFrames++;
+      if (run > 0) aerialSegments++;
+      run = 0;
+      if (liveRig.broadcastName === 'HELI') ladder++;
+    }
+  }
+  if (run > 0) aerialSegments++;
+  check(aerialSegments >= 5, 'the director cuts to the helicopter regularly', `${aerialSegments} aerial shots in 90 s`);
   check(
-    rig.camera.position.distanceTo(heli.cameraPosition) < 8,
-    'the aerial camera rides on the helicopter',
-    `${rig.camera.position.distanceTo(heli.cameraPosition).toFixed(1)} m from the heli`,
+    longestAerial > 4 && longestAerial < 7.5,
+    'aerial shots last a few seconds, not forever',
+    `longest ${longestAerial.toFixed(1)} s`,
   );
   check(
-    rig.camera.fov >= 45,
-    'the aerial lens is wide enough to read the circuit',
-    `${rig.camera.fov.toFixed(0)}° fov`,
+    aerialFrames > 0 && groundFrames > aerialFrames,
+    'the aerials are a spice, not the main course',
+    `${((aerialFrames / (aerialFrames + groundFrames)) * 100).toFixed(0)}% of the time`,
   );
+  check(
+    ladder === 0 && maxEyeLag < 12 && minAerialHeight > 10,
+    'the aerial shot really rides on the helicopter',
+    `max ${maxEyeLag.toFixed(1)} m behind the lens, never below ${minAerialHeight.toFixed(0)} m`,
+  );
+  check(
+    liveRig.camera.fov > 28 && liveRig.camera.fov < 62,
+    'the aerial lens stays in a sane range',
+    `${liveRig.camera.fov.toFixed(0)}°`,
+  );
+
+  // Tanpa heli, siaran tetap jalan seperti biasa (kamera darat saja).
+  const noAerial = new CameraRig(16 / 9, BROADCAST_SPOTS);
+  noAerial.setMode('tv');
+  noAerial.setAerialEye(null);
+  let groundOnly = true;
+  for (let time = 0; time < 40; time += dt) {
+    const d = (time * 24) % lap;
+    const p = TRACK.at(d);
+    liveFocus.copy(p.pos);
+    const trackDistance = ((d - TRACK.start) % lap + lap) % lap;
+    noAerial.updateBroadcast(dt, liveFocus, trackDistance, lap);
+    if (noAerial.aerialActive || noAerial.broadcastName === 'HELI') groundOnly = false;
+  }
+  check(groundOnly, 'without a helicopter the broadcast stays on the ground cameras', 'ground only');
 
   console.log(`\n${failures === 0 ? '✅ all checks passed' : `❌ ${failures} check(s) failed`}\n`);
   if (failures > 0) process.exitCode = 1;

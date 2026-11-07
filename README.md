@@ -1,6 +1,6 @@
 # RallyCross — Vehicle Physics Prototype
 
-Prototipe **mobil rally 3D di web** (three.js + Rapier) dengan gaya **kartun** (cel shading, langit gradasi, bayangan blob): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **grid 6 mobil** (kamu + 5 lawan AI) yang balapan 3 lap, **jejak ban + asap/debu** dari ban yang benar-benar selip, papan klasemen langsung, **9 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI, dan **helikopter siaran** yang terbang di atas arena sebagai kamera udara. Belum ada multiplayer.
+Prototipe **mobil rally 3D di web** (three.js + Rapier) dengan gaya **kartun** (cel shading, langit gradasi, bayangan blob): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **grid 6 mobil** (kamu + 5 lawan AI) yang balapan 3 lap, **jejak ban + asap/debu** dari ban yang benar-benar selip, papan klasemen langsung, **9 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI, dan **helikopter siaran** yang gambar udaranya ikut masuk ke siaran TV. Belum ada multiplayer.
 
 ## Jalanin
 
@@ -15,6 +15,7 @@ Di Android/Termux: jalankan `npm run dev`, lalu buka `http://localhost:5173` di 
 npm run build      # type-check + bundle
 npm run preview    # serve hasil build
 npm run smoke      # test fisika headless (tanpa browser)
+npm run shot       # render PNG scene ke shots/ tanpa browser/WebGL
 ```
 
 ## Kontrol
@@ -32,7 +33,7 @@ Semua input **analog/proporsional** — bukan tombol on/off:
 | Lampu utama | `L` | tombol ◐ |
 | Handbrake | `Space` | HB |
 | Reset mobil | `R` | — |
-| Ganti kamera (chase → kap → TV → **heli**) | `C` | tombol **HELI** (kamera udara) |
+| Ganti kamera (chase → kap → TV) | `C` | — |
 | Tonton **AI vs AI** — 6 mobil, kamera TV | `V` | tombol **TV** (kiri atas) |
 | Panel tuning | `G` | tombol **⚙** (kiri atas) |
 | **AI autopilot on/off** | `P` | tombol **AI** (kiri atas) |
@@ -89,6 +90,7 @@ public/models/
 └─ CREDITS.md               # atribusi + daftar perubahan model
 scripts/
 ├─ smoke.ts                 # test fisika headless (Node + Rapier, tanpa render)
+├─ preview.ts               # rasterizer kecil: render scene ke PNG tanpa WebGL
 └─ browser-check.mjs        # opsional: cek render/console di Chromium headless
 .github/workflows/ci.yml    # check + smoke + build di setiap push
 ```
@@ -244,9 +246,11 @@ Ada **9 kamera** tetap di pinggir trek: satu di **luar setiap tikungan** (T1–T
 
 Kamera **garis start** sengaja dinaikkan ke **15 m** dan digeser 2 m lebih jauh ke luar: di ketinggian 9 m menara itu tertutup atap **tribun utama** (garis pandang ke garis start menembus bangku penonton), sedangkan di 15 m pandangannya bersih. Uji `smoke` memeriksa ini secara geometri — kotak pembatas (OBB, sudah diputar sesuai yaw) tiap tribun dan gedung race control diuji terhadap segmen kamera → titik bidik, jadi kalau ada kamera yang kembali tertutup, build langsung merah.
 
-### Helikopter (kamera udara)
+### Helikopter siaran (salah satu kamera TV)
 
-Sebuah **helikopter siaran** (badan pod merah, rotor utama + rotor ekor, dua skid) terbang **34 m di atas** mobil yang sedang disorot, mengelilinginya pelan (radius 26 m, ±1 putaran per 29 s) dengan sudut kamera yang mengikuti arah terbang. Tekan **`C`** sampai mode **HELI** atau tombol **HELI** di HP: kamera pindah ke perut heli (1,6 m di bawah rotor hub) dan membidik mobil, lensa melebar 52–62° supaya tikungan di sekitarnya ikut terbaca. Modelnya disembunyikan saat mode ini aktif (kita sedang "naik" di dalamnya), dan heli tetap terlihat terbang di langit arena saat memakai kamera chase/kap/TV.
+Sebuah **helikopter** terbang **26 m di atas** mobil yang sedang disorot, mengelilinginya pelan (radius 32 m) sambil menghadap arah terbangnya. Modelnya bukan primitif asal jadi: badan *lathe* membulat dengan kaca depan + kaca samping, boom ekor meruncing, sirip bersayap, rotor ekor di samping sirip, dua skid dengan pipa silang, dek mesin + knalpot, kamera gimbal di dagu, dan dua lampu anti-tabrakan yang berkedip.
+
+**Heli itu bukan mode kamera terpisah — dia bagian dari siaran.** Saat menonton (`V` / kamera TV), sutradara tetap memotong antar kamera darat, lalu **tiap 8–15 detik menyelipkan gambar udara** dari helikopter dan bertahan 4,5–7 detik sebelum kembali ke kamera darat. Overlay HUD menulis `● LIVE · HELI` untuk shot itu. Lensa heli duduk di gimbal dagu dan membidik mobil dengan sedikit "lead" ke arah geraknya, fov 32–58° (menyesuaikan jarak) supaya mobil tetap besar di frame tapi sirkuitnya masih terbaca. Modelnya disembunyikan hanya selama gambar udaranya dipakai; dari kamera chase/kap/darat, heli terlihat terbang di langit arena.
 
 Tekan **`V`** (atau tombol **TV** di HP) untuk **AI vs AI**: mobilmu disetir AI, lawan disetir AI, kameranya pindah ke siaran TV. Tombol **`AI`** mematikan mode ini dan mengembalikan setir (juga kamera) ke pemain.
 
@@ -342,7 +346,7 @@ cara paling murah untuk merender:
 - **lawan AI menyelesaikan putaran** (35–38 s), tetap di dekat trek, dan dua mobil tidak saling menembus
 - 9 kamera TV berdiri di luar trek, sutradara memakai ≥5 kamera berbeda, tidak ada shot < 1,6 s, dan mobil yang dibidik tidak pernah lebih dari 220 m
 - **tidak ada kamera TV yang tertutup bangunan**: tiap segmen kamera → titik bidik diuji terhadap kotak pembatas (OBB) tribun utama, tribun kedua, dan race control; kamera garis start juga diperiksa berada di atas atap tribun (> 10 m)
-- **helikopter**: siklus `C` kembali ke chase setelah 4 tekan (chase → kap → TV → heli → chase), heli menjaga jarak 18–40 m dari mobil pada ketinggian > 20 m, ikut mengikuti mobil sepanjang putaran (< 60 m), kamera udara benar-benar menempel di posisi heli, dan lensanya lebar (≥ 45°)
+- **helikopter**: menjaga jarak 18–40 m dari mobil pada ketinggian > 20 m, ikut mengikuti mobil sepanjang putaran (< 60 m), posisi kameranya valid, dan dalam 90 detik siaran TV ia mendapat ≥ 5 shot udara yang masing-masing 4–7,5 detik (≈ 30 % dari waktu siaran), kameranya menempel di lensa heli, dan tanpa heli siaran tetap 100 % kamera darat
 
 `npm run check:browser` (opsional, perlu Chromium) menambah cek UI: bukaan gas/rem 1:1 (50 %, 85 %, 70 %), gas dan rem saling independen, rem tidak menambah throttle, semuanya menutup saat dilepas, slider setir balik ke tengah, tombol D/R memindah gigi + HUD menampilkan `R` saat mundur, rem tidak membalikkan mobil, dan arah setir cocok dengan layar. Untuk detail visual: lampu rem menguat saat pedal ditekan, sein kiri berkedip sementara kanan tetap mati, repeater HUD menyala, lampu utama menyala, lampu mundur menyala di gigi R, empat hub suspensi berada di rentang travel, dan setir berputar.
 
@@ -361,3 +365,4 @@ Status terakhir: **semua lolos**.
 - `typescript` dipin ke **5.x** — TS 7 (native) belum punya binary Android ARM64.
 - `npm run check:browser` butuh Chromium. Di Termux: `CHROME_BIN=$PREFIX/bin/headless_shell npm run check:browser` (setelah `npm run build` + `npm run preview` di port 4173). CI hanya menjalankan `check`, `smoke`, dan `build`.
 - Headless SwiftShader di Android kehilangan konteks WebGL setelah ~1 detik. Itu batasan environment; script cek render lewat jumlah draw call/triangle, bukan pixel.
+- Tanpa Chromium sama sekali? `npm run shot` merender scene ke PNG dengan rasterizer z-buffer di Node (tekstur diganti warna rata-rata, tanpa kabut/bayangan). Hasilnya di `shots/` — cukup untuk menilai siluet model baru dan komposisi kamera saat tidak bisa membuka game.
