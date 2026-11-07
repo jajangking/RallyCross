@@ -959,8 +959,18 @@ export const TRACK = {
   start: START_DIST,
   jumps: JUMPS,
   /** Pose on the racing line `distance` metres into the lap. */
-  at(distance: number): { pos: THREE.Vector3; tangent: THREE.Vector3; yaw: number } {
+  at(distance: number): {
+    pos: THREE.Vector3;
+    tangent: THREE.Vector3;
+    side: THREE.Vector3;
+    yaw: number;
+  } {
     const p = pointAt(MAIN, distance);
-    return { pos: p.pos.clone(), tangent: p.tangent.clone(), yaw: Math.atan2(p.tangent.x, p.tangent.z) };
+    return {
+      pos: p.pos.clone(),
+      tangent: p.tangent.clone(),
+      side: p.side.clone(),
+      yaw: Math.atan2(p.tangent.x, p.tangent.z),
+    };
   },
 };

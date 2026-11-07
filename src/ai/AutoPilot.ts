@@ -48,6 +48,11 @@ export interface AutoPilotOptions {
   wheelbase: number;
   /** Kecepatan maksimum yang dianggap aman melewati lompatan, m/s. */
   jumpSpeed: number;
+  /** Pengali target kecepatan: <1 membuat pembalap lebih mudah dikalahkan. */
+  pace: number;
+  /** Geser garis balap ke samping, meter (dipakai supaya dua mobil tidak
+   *  berebut ruang yang sama). Positif = ke sisi `+side`. */
+  laneOffset: number;
   /** Ambil joker lap? */
   useJoker: boolean;
 }
@@ -65,10 +70,28 @@ export const defaultPilotOptions: AutoPilotOptions = {
   topSpeed: 55,
   wheelbase: 2.64,
   jumpSpeed: 19,
+  pace: 1,
+  laneOffset: 0,
   useJoker: true,
 };
 
+/** Apa yang perlu diketahui AI tentang mobil lain di lintasan. */
+export interface TrafficCar {
+  position: THREE.Vector3;
+  speed: number;
+}
+
 export type PilotMode = 'drive' | 'reverse' | 'align';
+
+/**
+ * Garis balap yang digeser ke samping. Menggeser *jalurnya* (bukan cuma titik
+ * tujuan) membuat semua perhitungan lain — kelengkungan, lebar trek, deteksi
+ * melebar — tetap konsisten, jadi dua mobil bisa punya lajur masing-masing.
+ */
+function shiftPath(path: PathSample[], metres: number): PathSample[] {
+  if (!metres) return path;
+  return path.map((s) => ({ ...s, pos: s.pos.clone().addScaledVector(s.side, metres) }));
+}
 
 
 export class AutoPilot {
@@ -104,8 +127,8 @@ export class AutoPilot {
 
   constructor(main: PathSample[], joker: PathSample[], options: Partial<AutoPilotOptions> = {}) {
     this.options = { ...defaultPilotOptions, ...options };
-    this.plain = lapPath(main, joker, false);
-    this.withJoker = lapPath(main, joker, true);
+    this.plain = shiftPath(lapPath(main, joker, false), this.options.laneOffset);
+    this.withJoker = shiftPath(lapPath(main, joker, true), this.options.laneOffset);
     this.path = this.options.useJoker ? this.withJoker : this.plain;
     this.index = this.nearest(this.path, new THREE.Vector3(0, 0, 0), 0);
     this.rebuildSteps();
@@ -130,7 +153,8 @@ export class AutoPilot {
    * Satu langkah kontrol. `dt` hanya dipakai untuk timer pemulihan, keputusan
    * setir/gas memakai state mobil saat ini.
    */
-  update(dt: number, car: PilotCar): VehicleInput {
+  /** Mobil lain di sekitarnya — supaya AI tidak menabrak bagian belakang. */
+  update(dt: number, car: PilotCar, others: ReadonlyArray<TrafficCar> = []): VehicleInput {
     this.clock += dt;
 
     const idx = this.nearest(this.path, car.position, this.index);
@@ -161,7 +185,7 @@ export class AutoPilot {
       this.stuckTime = 0;
     }
 
-    return this.drive(car, s, yaw, speed);
+    return this.drive(car, s, yaw, speed, others);
   }
 
   /** Lupakan status balap (dipakai setelah mobil di-reset). */
@@ -190,13 +214,32 @@ export class AutoPilot {
 
   /* ------------------------------------------------------------------ */
 
-  private drive(car: PilotCar, s: PathSample, yaw: number, speed: number): VehicleInput {
+  private drive(
+    car: PilotCar,
+    s: PathSample,
+    yaw: number,
+    speed: number,
+    others: ReadonlyArray<TrafficCar>,
+  ): VehicleInput {
     const o = this.options;
     let target = this.speedTarget(this.index, speed);
     // Sudah melebar? Batasi kecepatan supaya sempat kembali ke garis.
     const wide = Math.abs(this.lateral) / Math.max(s.halfWidth, 1);
     if (wide > 0.9) target = Math.min(target, 11);
     else if (wide > 0.55) target = Math.min(target, 18);
+    // Mobil di depan: jangan sampai menabrak bagian belakangnya. Jarak ~6 m
+    // dipakai sebagai "ikuti dia", makin jauh batasnya makin longgar.
+    const fx = Math.sin(yaw);
+    const fz = Math.cos(yaw);
+    for (const other of others) {
+      const ox = other.position.x - car.position.x;
+      const oz = other.position.z - car.position.z;
+      const dist = Math.hypot(ox, oz);
+      if (dist < 0.01 || dist > 18) continue;
+      if ((ox * fx + oz * fz) / dist < 0.8) continue;
+      target = Math.min(target, Math.max(0, other.speed + (dist - 6) * 1.6));
+    }
+    target *= o.pace;
 
     // --- setir: pure pursuit murni (radius tikungan, bukan gain sudut) ---
     // Menghitung lengkung yang dibutuhkan lalu menerjemahkannya ke sudut roda

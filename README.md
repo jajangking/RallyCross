@@ -1,6 +1,6 @@
 # RallyCross — Vehicle Physics Prototype
 
-Prototipe **mobil rally 3D di web** (three.js + Rapier): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot** yang bisa menyetir sendiri (termasuk joker lap). Belum ada multiplayer.
+Prototipe **mobil rally 3D di web** (three.js + Rapier): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot** yang bisa menyetir sendiri (termasuk joker lap) dan **satu lawan AI** yang balapan 3 lap melawan kamu (bisa dimatikan dari panel). Belum ada multiplayer.
 
 ## Jalanin
 
@@ -35,6 +35,7 @@ Semua input **analog/proporsional** — bukan tombol on/off:
 | Ganti kamera (chase/hood) | `C` | — |
 | Panel tuning | `G` | tombol **⚙** (kiri atas) |
 | **AI autopilot on/off** | `P` | tombol **AI** (kiri atas) |
+| Ulangi balapan (grid + lap) | `R` | — |
 
 Cara kerjanya:
 
@@ -64,6 +65,9 @@ src/
 ├─ world/circuit.ts         # geometri sirkuit: node, sampling, ribbon (tanpa DOM)
 ├─ world/track.ts           # arena rallycross
 │  ├─ buildTrackColliders() # permukaan + barrier + joker — tanpa DOM
+│  └─ ...
+│ src/race/                # LapCounter (odometer) + Rival (mobil AI kedua)
+│ src/ai/AutoPilot.ts      # pure pursuit + speed profile + pemulihan
 │  └─ buildTrackVisuals()   # mesh, tekstur canvas, gantry, stand — hanya browser
 ├─ camera.ts                # chase / hood cam + FOV dinamis
 ├─ input.ts                 # slider setir/gas/rem analog + gigi D/R + sein/lampu
@@ -202,6 +206,18 @@ Cara kerjanya (`src/ai/AutoPilot.ts`, murni matematika, tanpa DOM):
 
 Hasil uji headless dengan fisika asli: **satu putaran 29,2 s**, tidak pernah keluar tepi trek, 0 reset, dan stabil di 6 putaran berturut-turut (aspal & gravel, dengan/tanpa joker).
 
+## Lawan AI (1 mobil)
+
+Di grid selalu ada **mobil kedua berwarna merah** yang kamu lawan balapan **3 lap** (jumlahnya bisa diubah di panel → *Lawan*). Lawan memakai `VehiclePhysics` yang sama — ban, suspensi, lompatan, dan tabrakan diperlakukan sama seperti mobilmu, jadi tidak ada hax:
+
+- **Garis sendiri.** `AutoPilot` bisa menggeser seluruh garis balapnya ke samping (`laneOffset`), bukan cuma titik tujuannya. Lawan mengambil lajur kiri 2 m, jadi dua mobil tidak berebut potongan aspal yang sama.
+- **Tidak menabrak dari belakang.** Kalau ada mobil < 18 m di depan dalam kerucut pandang, target kecepatannya dipotong mengikuti kecepatan mobil itu (`kecepatan lawan + (jarak − 6) × 1,6`). Lawan yang mengejar mobil yang sedang berhenti berhenti sendiri, bukan menabrak.
+- **Putaran dihitung di garis start**, bukan di ujung data spline: `LapCounter` memakai odometer yang tidak pernah wrap, jadi mobil yang mundur melewati garis tidak menambah/mengurangi lap secara salah.
+- **Terbalik / terlempar** → kembali ke garis balap (bukan ke grid) menghadap arah putaran.
+- Badge **LAWAN** di HUD menunjukkan lap dan selisih jarak (hijau = kamu di depan, merah = lawan di depan). Selesai 3 lap → banner `FINISH · KAMU MENANG` / `LAWAN MENANG`; `R` mengulang dari grid.
+
+Hasil uji headless: lawan menyelesaikan putaran **33,2 s** (kamu 31,1 s), tidak pernah keluar trek, dan jarak terdekat dua mobil sepanjang balapan **8,7 m** (tidak pernah saling tembus).
+
 Agar AI bisa secepat itu, tepi trek juga diperbaiki: bahu jalan sekarang punya **bahu datar 2,6 m** di ketinggian aspal sebelum turun ke rumput, jadi roda yang melebar di bibir lompatan tidak lagi menghantam "tebing" dan berhenti mendadak. Joker juga keluar-masuk secara tangensial (bukan kink 40°) supaya mobil tidak terlempar ke pagar saat menyatu kembali.
 
 ## Verifikasi
@@ -222,6 +238,8 @@ Agar AI bisa secepat itu, tepi trek juga diperbaiki: bahu jalan sekarang punya *
 - `buildTrackColliders()` jalan tanpa DOM, ramp melontarkan mobil lalu mendarat tegak
 - jalur lap (utama + joker) punya jarak yang monoton dan joker memang lebih pendek
 - **AI menyelesaikan satu putaran sendiri** (29 s), tidak keluar tepi trek, tanpa reset
+- penghitung lap menambah tepat satu lap per putaran, odometer cocok dengan panjang trek
+- **lawan AI menyelesaikan putaran** (33 s), tetap di trek, dan dua mobil tidak saling menembus
 
 `npm run check:browser` (opsional, perlu Chromium) menambah cek UI: bukaan gas/rem 1:1 (50 %, 85 %, 70 %), gas dan rem saling independen, rem tidak menambah throttle, semuanya menutup saat dilepas, slider setir balik ke tengah, tombol D/R memindah gigi + HUD menampilkan `R` saat mundur, rem tidak membalikkan mobil, dan arah setir cocok dengan layar. Untuk detail visual: lampu rem menguat saat pedal ditekan, sein kiri berkedip sementara kanan tetap mati, repeater HUD menyala, lampu utama menyala, lampu mundur menyala di gigi R, empat hub suspensi berada di rentang travel, dan setir berputar.
 

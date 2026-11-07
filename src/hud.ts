@@ -9,6 +9,8 @@ export class Hud {
   private readonly gearEl = document.getElementById('gear')!;
   private readonly telemEl = document.getElementById('telem')!;
   private readonly autoEl = document.getElementById('auto');
+  private readonly rivalEl = document.getElementById('rival');
+  private readonly finishEl = document.getElementById('finish');
   private readonly indLeft = document.getElementById('ind-left');
   private readonly indRight = document.getElementById('ind-right');
   private readonly indBeam = document.getElementById('ind-beam');
@@ -48,6 +50,28 @@ export class Hud {
         (Number.isFinite(best) ? ` · best ${best.toFixed(1)}s` : '')
       : 'AI nonaktif · P';
     if (el.textContent !== text) el.textContent = text;
+  }
+
+  /**
+   * Baris status lawan. `gap` dalam meter: positif berarti lawan di depan.
+   */
+  setRival(on: boolean, lap: number, laps: number, gap: number) {
+    const el = this.rivalEl;
+    if (!el) return;
+    el.classList.toggle('ahead', on && gap <= 0);
+    el.classList.toggle('behind', on && gap > 0);
+    const text = !on
+      ? 'LAWAN nonaktif'
+      : `LAWAN · lap ${Math.min(lap + 1, laps)}/${laps} · ${gap > 0 ? '+' : '−'}${Math.abs(gap).toFixed(0)} m`;
+    if (el.textContent !== text) el.textContent = text;
+  }
+
+  /** Banner hasil balapan; `null` menyembunyikannya. */
+  setFinish(text: string | null) {
+    const el = this.finishEl;
+    if (!el) return;
+    el.classList.toggle('hide', !text);
+    if (text && el.textContent !== text) el.textContent = text;
   }
 
   update(phys: VehiclePhysics, dt: number) {

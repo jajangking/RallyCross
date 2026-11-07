@@ -8,6 +8,8 @@ import { defaultConfig, VehiclePhysics, type VehicleInput } from '../src/vehicle
 import { buildTrackColliders, TRACK } from '../src/world/track';
 import { lapPath, type PathSample } from '../src/world/circuit';
 import { AutoPilot } from '../src/ai/AutoPilot';
+import { LapCounter } from '../src/race/LapCounter';
+import { Rival } from '../src/race/Rival';
 
 const DT = 1 / 60;
 let failures = 0;
@@ -326,6 +328,61 @@ async function run() {
   check(maxExcess < 3, 'the AI keeps the car on the road', `max ${maxExcess.toFixed(1)} m past the edge`);
   check(resets === 0, 'the AI never needs a reset', `${resets} resets`);
   check(pilot.bestLap < 45, 'AI lap time is sane', `best ${pilot.bestLap.toFixed(1)} s`);
+
+  /* ---------------------------------------------------------------- */
+  console.log('\n— lap counter & rival —');
+  // Walk a virtual car around the path: the counter must tick exactly once
+  // per loop, and not at all before the first crossing.
+  const counter = new LapCounter(plainPath, TRACK.start);
+  let ticks = 0;
+  const startIdx = plainPath.reduce(
+    (best, s, i) => (Math.abs(s.distance - TRACK.start) < Math.abs(plainPath[best].distance - TRACK.start) ? i : best),
+    0,
+  );
+  for (let passes = 0; passes < 3; passes++) {
+    for (let k = 0; k < plainPath.length; k++) {
+      const before = counter.lap;
+      counter.update(plainPath[(startIdx + k) % plainPath.length].pos);
+      if (counter.lap !== before) ticks++;
+    }
+  }
+  // one more step to actually cross the line after the third loop
+  const beforeFinal = counter.lap;
+  counter.update(plainPath[startIdx].pos);
+  if (counter.lap !== beforeFinal) ticks++;
+  check(ticks === 3, 'lap counter ticks once per lap', `${ticks} laps counted`);
+  check(Math.abs(counter.odometer - pathLength(plainPath) * 3) < 60, 'odometer tracks the distance', `${counter.odometer.toFixed(1)} m`);
+
+  // Two cars, one world: the rival must race cleanly around the player.
+  const raceWorld = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+  raceWorld.timestep = DT;
+  buildTrackColliders(raceWorld);
+  const raceCar = new VehiclePhysics(raceWorld, defaultConfig, new THREE.Vector3(0, 0.95, -10));
+  const racePilot = new AutoPilot(TRACK.main, TRACK.joker);
+  const gridRow = TRACK.at(TRACK.start - 20);
+  const rival = new Rival(raceWorld, {
+    position: new THREE.Vector3(gridRow.pos.x, 0.95, gridRow.pos.z).addScaledVector(gridRow.side, -3.8),
+    yaw: gridRow.yaw,
+    main: TRACK.main,
+    joker: TRACK.joker,
+    startDistance: TRACK.start,
+  });
+  let rivalExcess = 0;
+  let closest = Infinity;
+  let raceTime = 0;
+  for (let i = 0; i < Math.round(80 / DT) && rival.lap < 1; i++) {
+    raceCar.fixedStep(DT, racePilot.update(DT, raceCar, [{ position: rival.car.position, speed: rival.car.speed }]));
+    rival.step(DT, [{ position: raceCar.position, speed: raceCar.speed }]);
+    raceWorld.step();
+    raceCar.sync();
+    rival.sync();
+    raceTime += DT;
+    rivalExcess = Math.max(rivalExcess, Math.abs(rival.pilot.lateral) - rival.pilot.sample.halfWidth);
+    closest = Math.min(closest, rival.car.position.distanceTo(raceCar.position));
+  }
+  check(rival.lap >= 1, 'the rival drives a full lap', `${raceTime.toFixed(1)} s`);
+  check(rivalExcess < 3, 'the rival stays on the road', `max ${rivalExcess.toFixed(1)} m past the edge`);
+  check(closest > 1.4, 'the two cars never clip each other', `closest ${closest.toFixed(1)} m`);
 
   console.log(`\n${failures === 0 ? '✅ all checks passed' : `❌ ${failures} check(s) failed`}\n`);
   if (failures > 0) process.exitCode = 1;

@@ -159,6 +159,7 @@ export class VehiclePhysics {
 
   private readonly world: RAPIER.World;
   private readonly spawn: THREE.Vector3;
+  private readonly spawnYaw: number;
   private readonly ray = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
   private readonly comPos = new THREE.Vector3();
 
@@ -183,6 +184,7 @@ export class VehiclePhysics {
     this.world = world;
     this.cfg = { ...cfg };
     this.spawn = spawn.clone();
+    this.spawnYaw = yaw;
 
     const desc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(spawn.x, spawn.y, spawn.z)
@@ -284,9 +286,10 @@ export class VehiclePhysics {
     return Math.atan2(h.x * this.velocity.z - h.z * this.velocity.x, h.x * this.velocity.x + h.z * this.velocity.z);
   }
 
-  reset() {
-    this.body.setTranslation({ x: this.spawn.x, y: this.spawn.y, z: this.spawn.z }, true);
-    this.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
+  /** Teleport ke pose bebas: dipakai reset grid dan menghidupkan lagi lawan. */
+  placeAt(pos: THREE.Vector3, yaw = this.spawnYaw) {
+    this.body.setTranslation({ x: pos.x, y: pos.y, z: pos.z }, true);
+    this.body.setRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) }, true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     this.steerAngle = 0;
@@ -301,6 +304,10 @@ export class VehiclePhysics {
       w.surfaceMu = 1;
     }
     this.syncTransform();
+  }
+
+  reset() {
+    this.placeAt(this.spawn, this.spawnYaw);
   }
 
   private syncTransform() {

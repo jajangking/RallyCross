@@ -5,7 +5,9 @@ import { defaultConfig, VehiclePhysics, type VehicleInput } from './vehicle/Vehi
 import { CarVisual } from './vehicle/CarVisual';
 import { CarModelVisual } from './vehicle/CarModelVisual';
 import { buildTrack, TRACK } from './world/track';
-import { AutoPilot } from './ai/AutoPilot';
+import { AutoPilot, type TrafficCar } from './ai/AutoPilot';
+import { Rival } from './race/Rival';
+import { LapCounter } from './race/LapCounter';
 import { Input } from './input';
 import { Hud } from './hud';
 import { CameraRig } from './camera';
@@ -101,6 +103,42 @@ async function boot() {
     carVisual = model;
   });
 
+  /* ---------------- lawan (mobil kedua, disetir AI) ---------------- */
+  // Same physics, same tyres: the rival only knows the racing line better and
+  // starts one grid row back, with its own lane so the two cars do not fight
+  // for the same piece of tarmac.
+  const gridRow = TRACK.at(TRACK.start - 20);
+  const rival = new Rival(world, {
+    position: new THREE.Vector3(gridRow.pos.x, 0.95, gridRow.pos.z).addScaledVector(gridRow.side, -3.8),
+    yaw: gridRow.yaw,
+    main: TRACK.main,
+    joker: TRACK.joker,
+    startDistance: TRACK.start,
+    pace: 0.94,
+    laneOffset: -2,
+  });
+  const rivalProcedural = new CarVisual(scene, rival.car, { detail: !lowQuality });
+  let rivalVisual: CarVisual | CarModelVisual = rivalProcedural;
+  void CarModelVisual.load(scene, rival.car, new URL('models/honda-civic-eg6.glb', document.baseURI).href, {
+    detail: !lowQuality,
+    paint: 0xc22a1c,
+  }).then((model) => {
+    if (!model) return;
+    rivalProcedural.dispose();
+    rivalVisual = model;
+  });
+
+  const playerLaps = new LapCounter(TRACK.main, TRACK.start, car.position);
+  const race = {
+    laps: 3,
+    rival: true,
+    pace: rival.pilot.options.pace,
+    winner: null as null | 'player' | 'rival',
+  };
+  // Preallocated "what is around me" lists for the two pilots.
+  const rivalAround: TrafficCar[] = [{ position: rival.car.position, speed: 0 }];
+  const playerAround: TrafficCar[] = [{ position: car.position, speed: 0 }];
+
   /* ---------------- autopilot ---------------- */
   // The pilot drives the very same `VehicleInput` interface as the keyboard,
   // so it can be switched on and off mid-lap without touching the physics.
@@ -111,6 +149,7 @@ async function boot() {
     jumpSpeed: pilot.options.jumpSpeed,
   };
   let aiToggle: { updateDisplay(): void } | null = null;
+  let rivalToggle: { updateDisplay(): void } | null = null;
 
   /* ---------------- camera / input / hud ---------------- */
   const cameraRig = new CameraRig(window.innerWidth / window.innerHeight);
@@ -134,6 +173,20 @@ async function boot() {
     cameraRig.snap(car);
     input.setGear(1);
     pilot.reset(car.position);
+    playerLaps.reset(car.position);
+    if (race.rival) rival.resetToGrid();
+    rivalVisual.root.visible = race.rival;
+    race.winner = null;
+  };
+
+  const setRival = (on: boolean) => {
+    race.rival = on;
+    rivalVisual.root.visible = on;
+    if (on) rival.resetToGrid();
+    else rival.park();
+    playerLaps.reset(car.position);
+    race.winner = null;
+    rivalToggle?.updateDisplay();
   };
 
   const setAutopilot = (on: boolean) => {
@@ -264,6 +317,16 @@ async function boot() {
       pilot.options.jumpSpeed = v;
     });
 
+  const fRival = gui.addFolder('Lawan');
+  rivalToggle = fRival.add(race, 'rival').name('lawan AI').onChange((v: boolean) => setRival(v));
+  fRival
+    .add(race, 'pace', 0.8, 1.05, 0.01)
+    .name('kecepatan lawan')
+    .onChange((v: number) => {
+      rival.pilot.options.pace = v;
+    });
+  fRival.add(race, 'laps', 1, 9, 1).name('jumlah lap');
+
   const fPreset = gui.addFolder('Presets');
   fPreset.add(actions, 'Tarmac');
   fPreset.add(actions, 'Gravel');
@@ -285,6 +348,15 @@ async function boot() {
     headlights: false,
   };
 
+  const rivalLights: CarLightState = {
+    brake: 0,
+    reverse: false,
+    left: false,
+    right: false,
+    hazard: false,
+    headlights: true,
+  };
+
   const timer = new THREE.Timer();
   timer.connect(document);
   let accumulator = 0;
@@ -304,14 +376,20 @@ async function boot() {
 
     let steps = 0;
     while (accumulator >= FIXED_DT && steps < MAX_SUBSTEPS) {
+      rivalAround[0].speed = rival.car.speed;
+      playerAround[0].speed = car.speed;
       if (auto.enabled) {
         // fresh transform each substep: the pilot is a closed loop
         car.sync();
-        command = pilot.update(FIXED_DT, car);
+        command = pilot.update(FIXED_DT, car, rivalAround);
       } else {
         command = input.state;
       }
       car.fixedStep(FIXED_DT, command);
+      if (race.rival) {
+        const rivalCommand = rival.step(FIXED_DT, playerAround);
+        if (rivalCommand) rivalLights.brake = rivalCommand.brake;
+      }
       world.step();
       accumulator -= FIXED_DT;
       steps++;
@@ -323,6 +401,15 @@ async function boot() {
     if (steps === MAX_SUBSTEPS) accumulator = 0;
 
     car.sync();
+    if (race.rival) {
+      rival.sync();
+      rivalLights.reverse = rival.car.gear === -1;
+    }
+    playerLaps.update(car.position);
+    if (!race.winner) {
+      if (playerLaps.lap >= race.laps) race.winner = 'player';
+      else if (race.rival && rival.lap >= race.laps) race.winner = 'rival';
+    }
 
     lightState.brake = command.brake;
     lightState.reverse = car.gear === -1;
@@ -333,10 +420,24 @@ async function boot() {
 
     track.update(raw);
     carVisual.update(car, raw, lightState);
+    if (race.rival) rivalVisual.update(rival.car, raw, rivalLights);
     cameraRig.update(raw, car);
     hud.update(car, raw);
     hud.setLamps(lightState);
     hud.setAutopilot(auto.enabled, pilot.lap, auto.enabled ? pilot.lapTime : 0, pilot.bestLap);
+    hud.setRival(
+      race.rival,
+      rival.lap,
+      race.laps,
+      race.rival ? rival.odometer - playerLaps.odometer : 0,
+    );
+    hud.setFinish(
+      race.winner === null
+        ? null
+        : race.winner === 'player'
+          ? `finish · kamu menang · ${race.laps} lap`
+          : `finish · lawan menang · ${race.laps} lap`,
+    );
     followSun();
 
     renderer.render(scene, cameraRig.camera);
@@ -362,6 +463,10 @@ async function boot() {
     pilot,
     auto,
     setAutopilot,
+    rival,
+    race,
+    playerLaps,
+    setRival,
     cameraRig,
     renderer,
     scene,

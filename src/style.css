@@ -171,6 +171,53 @@ body {
   background: rgba(255, 255, 255, 0.07);
 }
 
+#rival {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  padding: 3px 7px;
+  border-radius: 4px;
+  justify-self: start;
+  color: var(--dim);
+  background: rgba(255, 255, 255, 0.07);
+  font-variant-numeric: tabular-nums;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+#rival.ahead {
+  color: #0d1117;
+  background: rgba(87, 214, 141, 0.85);
+}
+
+#rival.behind {
+  color: #fff;
+  background: rgba(224, 74, 60, 0.85);
+}
+
+#finish {
+  position: fixed;
+  top: 22%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(1);
+  padding: 12px 26px;
+  border-radius: 12px;
+  background: rgba(10, 14, 20, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(10px);
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #fff;
+  text-align: center;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+#finish.hide {
+  opacity: 0;
+}
+
 /* ---------- help ---------- */
 
 #help {
