@@ -12,7 +12,7 @@ import { RaceControl, type ServiceHandle } from '../src/race/RaceControl';
 import { ServiceVehicle } from '../src/race/ServiceVehicle';
 import { VehicleDamage } from '../src/vehicle/Damage';
 import { BroadcastDirector } from '../src/camera/BroadcastDirector';
-import { lapPath, type PathSample } from '../src/world/circuit';
+import { lapPath, nearestSample, type PathSample } from '../src/world/circuit';
 import { AutoPilot } from '../src/ai/AutoPilot';
 import { LapCounter } from '../src/race/LapCounter';
 import { Rival } from '../src/race/Rival';
@@ -1684,7 +1684,12 @@ async function run() {
       let rescuedAt = -1;
       let towed = false;
       let t = 0;
-      for (let i = 0; i < Math.round(90 / DT); i++) {
+      // Ambulans tidak boleh menyetir lawan arah (dulu ia melakukannya supaya
+      // cepat sampai): hitung frame yang arahnya berlawanan dengan garis balap.
+      let wrongFrames = 0;
+      let worstWrong = 0;
+      const ambFwd = new THREE.Vector3();
+      for (let i = 0; i < Math.round(120 / DT); i++) {
         towAmb.step(DT);
         towSafety.step(DT);
         towWorld.step();
@@ -1694,6 +1699,13 @@ async function run() {
         realControl.update(DT, cars);
         if (wreckCar.isTowed) towed = true;
         t += DT;
+        if (towAmb.car.speed > 6) {
+          ambFwd.set(Math.sin(towAmb.car.yaw), 0, Math.cos(towAmb.car.yaw));
+          const tangent = TRACK.main[nearestSample(TRACK.main, towAmb.car.position)].tangent;
+          const along = ambFwd.x * tangent.x + ambFwd.z * tangent.z;
+          if (along < -0.3) wrongFrames++;
+          worstWrong = Math.max(worstWrong, -along);
+        }
         if (wreckCar.damage.bodyHealth === 1 && wreckCar.damage.engineHealth === 1) {
           rescuedAt = t;
           break;
@@ -1701,6 +1713,11 @@ async function run() {
       }
       const atBox = wreckCar.position.distanceTo(box.position);
       check(towed, 'integrasi: mobil mogok benar-benar diangkut derek');
+      check(
+        wrongFrames < 60,
+        'ambulans tidak menyetir lawan arah',
+        `${wrongFrames} frame lawan arah (maks ${worstWrong.toFixed(2)})`,
+      );
       check(
         rescuedAt > 0 && atBox < 8,
         'integrasi: diderek ke pit, diservis, lalu mobil sehat di kotaknya',

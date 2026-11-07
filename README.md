@@ -283,6 +283,8 @@ Kamera **garis start** sengaja dinaikkan ke **15 m** dan digeser 2 m lebih jauh 
 
 Sebuah **helikopter** terbang **26 m di atas** mobil yang sedang disorot, mengelilinginya pelan (radius 32 m) sambil menghadap arah terbangnya. Modelnya bukan primitif asal jadi: badan *lathe* membulat dengan kaca depan + kaca samping, boom ekor meruncing, sirip bersayap, rotor ekor di samping sirip, dua skid dengan pipa silang, dek mesin + knalpot, kamera gimbal di dagu, dan dua lampu anti-tabrakan yang berkedip.
 
+**Selama bendera kuning heli mengambil alih.** Begitu ada mobil kecelakaan (mesin mati, roda copot, terbalik, atau nyangkut lama), siaran langsung naik ke gambar udara helikopter yang membidik mobil itu — dan bertahan di sana sampai insiden selesai, derek selesai, dan bendera hijau kembali; setelah itu kamera pulih ke mode yang kamu pakai sebelumnya.
+
 **Heli itu bukan mode kamera terpisah — dia bagian dari siaran.** Saat menonton (`V` / kamera TV), sutradara tetap memotong antar kamera darat, lalu **tiap 8–15 detik menyelipkan gambar udara** dari helikopter dan bertahan 4,5–7 detik sebelum kembali ke kamera darat. Overlay HUD menulis `● LIVE · HELI` untuk shot itu. Lensa heli duduk di gimbal dagu dan membidik mobil dengan sedikit "lead" ke arah geraknya, fov 32–58° (menyesuaikan jarak) supaya mobil tetap besar di frame tapi sirkuitnya masih terbaca. Modelnya disembunyikan hanya selama gambar udaranya dipakai; dari kamera chase/kap/darat, heli terlihat terbang di langit arena.
 
 Tekan **`V`** (atau tombol **TV** di HP) untuk **AI vs AI**: mobilmu disetir AI, lawan disetir AI, kameranya pindah ke siaran TV. Tombol **`AI`** mematikan mode ini dan mengembalikan setir (juga kamera) ke pemain.

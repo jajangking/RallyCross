@@ -266,11 +266,9 @@ async function boot() {
     color: 0xf5f7fa,
     detail: !lowQuality,
   });
-  const ambPose = (() => {
-    const post = TRACK.at(TRACK.start + 120);
-    const pos = post.pos.clone().addScaledVector(post.side, 26);
-    return { position: new THREE.Vector3(pos.x, 0.95, pos.z), yaw: post.yaw };
-  })();
+  // Ambulans menunggu di area servis (bukan di rumput seberang): dari sana ia
+  // bisa langsung masuk garis balap begitu dipanggil.
+  const ambPose = pitPose(PIT.from + 10, 7.4);
   const ambulance = new ServiceVehicle({
     kind: 'ambulance',
     world,
@@ -664,6 +662,12 @@ async function boot() {
   // diperbarui, jadi kamera TV membidik titik nol = garis start.)
   const camFocus = focusDirector.focus;
   const updateCamFocus = (dt: number) => focusDirector.update(dt);
+  /**
+   * Selama bendera kuning siaran naik ke helikopter untuk mengawasi mobil yang
+   * kecelakaan. Kamera yang dipakai sebelumnya diingat supaya bisa dipulihkan
+   * begitu hijau lagi.
+   */
+  let yellowCamReturn: CameraMode | null = null;
 
   const timer = new THREE.Timer();
   timer.connect(document);
@@ -832,6 +836,23 @@ async function boot() {
     }
     // Satu bidikan untuk semua pemakai: kamera TV, heli, frustum bayangan.
     updateCamFocus(raw);
+
+    // --- bendera kuning: helikopter mengawasi mobil yang kecelakaan ---
+    // Selama kuning kamera dipaksa ke gambar udara yang membidik mobil itu;
+    // begitu hijau, kamera kembali ke mode yang dipakai sebelum insiden.
+    const incident = raceControl.incident;
+    const watchingCrash = raceControl.flag === 'yellow' && incident !== null;
+    if (watchingCrash) {
+      if (yellowCamReturn === null) yellowCamReturn = cameraRig.modeName;
+      cameraRig.setForcedAerial(true);
+      if (cameraRig.modeName !== 'tv') cameraRig.setMode('tv');
+    } else if (yellowCamReturn !== null) {
+      cameraRig.setForcedAerial(false);
+      cameraRig.setMode(yellowCamReturn);
+      yellowCamReturn = null;
+    }
+    /** Titik yang dibidik: mobil kecelakaan selama kuning, kalau tidak mobil biasa. */
+    const camTarget = watchingCrash && incident ? incident.target.position : camFocus;
     // Bayangan blob: ikut mobil, sembunyi saat roda tidak menyentuh tanah.
     if (sunRig.shadows) {
       // Frustum bayangan ikut mobil yang disorot (sama dengan kamera TV).
@@ -848,7 +869,7 @@ async function boot() {
     // Heli selalu terbang mengelilingi mobil yang disorot; lensanya jadi salah
     // satu kamera siaran TV (sutradara menyelipkannya tiap 8–15 detik).
     // Satu kali per frame: bidikan kamera ditentukan di depan (sebelum bayangan).
-    heli.update(raw, camFocus);
+    heli.update(raw, camTarget);
     cameraRig.setAerialEye(heli.cameraPosition);
     // Saat siaran sedang memakai gambar heli, kamera ada di dagunya: sembunyikan
     // bodi supaya tidak menutupi frame (dan tetap terlihat dari kamera lain).
@@ -857,7 +878,7 @@ async function boot() {
     if (cameraRig.modeName === 'tv') {
       cameraRig.updateBroadcast(
         raw,
-        camFocus,
+        camTarget,
         focusDirector.distance,
         TRACK.length,
         focusDirector.cut,

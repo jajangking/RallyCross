@@ -105,8 +105,8 @@ export interface RaceControlOptions {
 
 export const defaultRaceControlOptions: RaceControlOptions = {
   stoppedSpeed: 1.2,
-  stuckTime: 4,
-  minSafetyTime: 12,
+  stuckTime: 8,
+  minSafetyTime: 10,
   attendTime: 5,
   hookTime: 1.2,
   yellowPace: 0.55,
@@ -139,6 +139,9 @@ export class RaceControl {
   private towTarget: TowTarget | null = null;
   /** Tahap derek: susuri trek dulu ke pintu pit, lalu belok ke kotaknya. */
   private towLeg: 'line' | 'box' = 'line';
+  /** Tahap pulang safety car & ambulans: susuri trek dulu, lalu ke kotaknya. */
+  private scLeg: 'line' | 'box' = 'line';
+  private ambLeg: 'line' | 'box' = 'line';
   /** Lama servis di pit untuk mobil yang diderek (detik). */
   private repairTime = 0;
   private readonly tmpTow = new THREE.Vector3();
@@ -220,16 +223,24 @@ export class RaceControl {
     } else if (this.scPhase === 'leading') {
       if (this.canReturn(cars) && this.yellowTime > this.options.minSafetyTime) {
         this.scPhase = 'returning';
-        this.setup.safety?.driveRoute([this.setup.scPark], 'park', 0.5);
+        // Kembali lewat trek dulu sampai mulut pit, baru belok ke kotaknya:
+        // menyetir lurus dari tengah trek berarti menembus kerb & dinding pit.
+        const safety = this.setup.safety;
+        this.scLeg = this.setup.pitEntry && safety?.intercept ? 'line' : 'box';
+        if (this.scLeg === 'line') safety!.intercept!(this.setup.pitEntry!, 0.9);
+        else safety?.driveRoute([this.setup.scPark], 'park', 0.6);
       }
     } else if (this.scPhase === 'returning') {
       const safety = this.setup.safety;
-      if (!safety || safety.reachedRoute) {
-        safety?.parkNow();
-        this.scPhase = 'off';
-        this.flag = 'green';
-        this.incident = null;
-        this.events.push({ kind: 'green', text: 'HIJAU · BALAPAN LANJUT' });
+      if (!safety) {
+        this.finishIncident();
+      } else if (this.scLeg === 'line' && safety.reachedRoute) {
+        // Sudah di mulut pit: masuk ke kotak parkirnya.
+        this.scLeg = 'box';
+        safety.driveRoute([this.setup.scPark], 'park', 0.6);
+      } else if (safety.reachedRoute) {
+        safety.parkNow();
+        this.finishIncident();
       }
     }
 
@@ -263,7 +274,7 @@ export class RaceControl {
         this.towLeg = this.setup.pitEntry && ambulance?.intercept ? 'line' : 'box';
         if (this.setup.pitEntry && ambulance?.intercept) {
           // Menarik derek: susuri trek dulu sampai pintu masuk pit.
-          ambulance.intercept(this.setup.pitEntry.clone(), 0.7);
+          ambulance.intercept(this.setup.pitEntry.clone(), 0.9);
         } else {
           const dest = this.towTarget!;
           ambulance?.driveRoute([dest.position.clone()], 'park', 0.6);
@@ -309,7 +320,7 @@ export class RaceControl {
         incident.resolved = true;
         this.ambPhase = 'returning';
         this.towTarget = null;
-        this.setup.ambulance?.driveRoute([this.setup.ambPark], 'park', 0.8);
+        this.sendHome();
         this.events.push({ kind: 'repaired', text: 'SERVIS PIT SELESAI' });
       }
     } else if (this.ambPhase === 'attending') {
@@ -319,12 +330,17 @@ export class RaceControl {
         incident.target.damage.reset();
         incident.resolved = true;
         this.ambPhase = 'returning';
-        this.setup.ambulance?.driveRoute([this.setup.ambPark], 'park', 0.8);
+        this.sendHome();
         this.events.push({ kind: 'repaired', text: 'MOBIL DIPERBAIKI DI TEMPAT' });
       }
     } else if (this.ambPhase === 'returning') {
-      if (!ambulance || ambulance.reachedRoute) {
-        ambulance?.parkNow();
+      if (!ambulance) {
+        this.ambPhase = 'off';
+      } else if (this.ambLeg === 'line' && ambulance.reachedRoute) {
+        this.ambLeg = 'box';
+        ambulance.driveRoute([this.setup.ambPark], 'park', 0.6);
+      } else if (ambulance.reachedRoute) {
+        ambulance.parkNow();
         this.ambPhase = 'off';
       }
     }
@@ -360,32 +376,52 @@ export class RaceControl {
     return false;
   }
 
-  /** Cari mobil yang butuh bantuan. */
+  /** Pulangkan ambulans ke parkirnya: susuri trek dulu sampai mulut pit. */
+  private sendHome() {
+    const ambulance = this.setup.ambulance;
+    if (!ambulance) return;
+    this.ambLeg = this.setup.pitEntry && ambulance.intercept ? 'line' : 'box';
+    if (this.ambLeg === 'line') ambulance.intercept!(this.setup.pitEntry!, 0.9);
+    else ambulance.driveRoute([this.setup.ambPark], 'park', 0.8);
+  }
+
+  /** Insiden benar-benar selesai: hijau lagi. */
+  private finishIncident() {
+    this.scPhase = 'off';
+    this.flag = 'green';
+    this.incident = null;
+    this.events.push({ kind: 'green', text: 'HIJAU · BALAPAN LANJUT' });
+  }
+
+  /**
+   * Cari mobil yang butuh bantuan.
+   *
+   * Aturannya:
+   *  - **Tidak bisa jalan** (mesin mati, roda tinggal dua, atau terbalik) →
+   *    ambulans datang, mengait, dan mendereknya ke kotak servis.
+   *  - **Berhenti lama setelah rusak** (nyangkut di gravel/pagar) → sama:
+   *    diderek keluar, karena tidak bisa menyelamatkan diri.
+   *  - **Masih bisa jalan** → tidak ada insiden sama sekali. Mobil itu yang
+   *    masuk pit sendiri (AI minta pit otomatis, pemain menyetir ke kotaknya)
+   *    supaya perbaikannya tetap memakan waktu seperti pit stop.
+   */
   private watch(dt: number, cars: readonly RaceCar[]) {
     for (const entry of cars) {
-      const car = entry.car;
-      const damage = car.damage;
-      // Terbalik = tidak bisa jalan sendiri, walau mesinnya masih hidup.
-      const flipped = (car.upright ?? 1) < 0.25;
-      const wrecked =
-        damage.engineDead ||
-        damage.immobile ||
-        damage.lostCount >= 2 ||
-        damage.bodyHealth < 0.25 ||
-        flipped;
+      const damage = entry.car.damage;
+      const flipped = (entry.car.upright ?? 1) < 0.25;
+      const cannotDrive =
+        damage.engineDead || damage.immobile || damage.lostCount >= 2 || flipped;
 
-      const slow = Math.abs(car.speed) < this.options.stoppedSpeed;
+      const slow = Math.abs(entry.car.speed) < this.options.stoppedSpeed;
       const stuckFor = slow ? (this.stopped.get(entry.name) ?? 0) + dt : 0;
       this.stopped.set(entry.name, stuckFor);
 
-      // Berhenti lama TANPA rusak berat = mungkin nyangkut; tetap dikirim
-      // marshal supaya balapan tidak macet, tapi tanpa ambulans.
-      const blocked = stuckFor > this.options.stuckTime && (damage.bodyHealth < 0.95 || flipped);
+      // Nyangkut = berhenti lama **dan** sudah rusak (bukan pemain yang sedang
+      // diam saja dengan mobil utuh).
+      const wedged = stuckFor > this.options.stuckTime && damage.bodyHealth < 0.95;
 
-      if (wrecked || blocked) {
-        // Ambulans selalu dikirim untuk mobil yang rusak berat; yang ringan
-        // cukup ditangani marshal (safety car saja).
-        this.startIncident(entry, wrecked);
+      if (cannotDrive || wedged) {
+        this.startIncident(entry, true);
         return;
       }
     }
@@ -405,15 +441,8 @@ export class RaceControl {
     this.scPhase = 'deploying';
     this.yellowTime = 0;
     this.stopped.set(entry.name, 0);
-    // Mobil yang **tidak bisa jalan** diderek ke kotak servisnya (kalau ada):
-    // mesin mati, roda tinggal dua, atau terbalik.
-    const damage = entry.car.damage;
-    const canDrive =
-      !damage.engineDead &&
-      !damage.immobile &&
-      damage.lostCount < 2 &&
-      (entry.car.upright ?? 1) >= 0.25;
-    this.towTarget = medical && !canDrive ? (this.setup.towTo?.(entry.name) ?? null) : null;
+    // Diderek ke kotak servisnya sendiri (kalau ada kotaknya).
+    this.towTarget = medical ? (this.setup.towTo?.(entry.name) ?? null) : null;
     this.repairTime = 0;
 
     this.setup.safety?.driveRoute([this.setup.scJoin], 'line', 0.7);
@@ -425,7 +454,8 @@ export class RaceControl {
       scene.y = Math.max(0.95, position.y);
       // Susuri trek dulu, baru belok ke lokasi — ambulance tidak bisa
       // menyetir lurus menembus kerb dan tanggul.
-      if (this.setup.ambulance.intercept) this.setup.ambulance.intercept(scene, 0.85);
+      // Mobil darurat: ngebut searah balap (tidak pernah lawan arah).
+      if (this.setup.ambulance.intercept) this.setup.ambulance.intercept(scene, 1);
       else this.setup.ambulance.driveRoute([scene], 'park', 0.9);
       this.events.push({ kind: 'yellow', text: 'AMBULANS DIBERANGKATKAN' });
     }

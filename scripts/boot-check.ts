@@ -424,18 +424,50 @@ if (rc) {
   // rusak: mobil AI berhenti dengan mesin mati, tapi ambulans diam di parkirnya
   // karena tidak bisa keluar dari rumput.
   {
+    rc.cameraRig.setMode('chase');
+    // Uji ini tidak perlu menunggu safety car memimpin lama-lama.
+    (rc.raceControl as any).options.minSafetyTime = 4;
     const amb = rc.ambulance as any;
     const ambStart = amb.car.position.clone() as THREE.Vector3;
     const victims = (rc.rivals as any[]).slice(0, 1);
     for (const rival of victims) {
+      // Taruh di depan ambulans (ia parkir di km 120), lalu rusakkan —
+      // urutannya penting: `placeAt` memperbaiki mobil (damage.reset).
+      const spot = TRACK.at(TRACK.start + 180);
+      rival.car.placeAt(new THREE.Vector3(spot.pos.x, spot.pos.y + 0.6, spot.pos.z), spot.yaw);
       rival.car.damage.engineHealth = 0;
       rival.car.damage.engineDead = true;
       rival.car.damage.bodyHealth = 0.4;
-      // Jangan `placeAt`: teleport otomatis memperbaiki mobil (damage.reset).
     }
     const t0 = Date.now();
     await new Promise((r) => setTimeout(r, 9000));
     const phase1 = (rc.raceControl as any).ambPhase as string;
+
+    // Selama bendera kuning: siaran naik ke helikopter dan membidik mobilnya.
+    const crashCar = (rc.raceControl as any).incident?.target.position as THREE.Vector3 | undefined;
+    const camNow = rc.cameraRig.camera as THREE.PerspectiveCamera;
+    camNow.updateMatrixWorld(true);
+    const eye = camNow.position as THREE.Vector3;
+    const view = new THREE.Vector3();
+    camNow.getWorldDirection(view);
+    console.log(
+      `      heli: eye ${eye.toArray().map((v) => v.toFixed(0)).join(',')} ` +
+        `crash ${crashCar ? crashCar.toArray().map((v) => v.toFixed(0)).join(',') : '-'} ` +
+        `view ${view.toArray().map((v) => v.toFixed(2)).join(',')}`,
+    );
+    const toCrash = crashCar ? crashCar.clone().sub(eye) : new THREE.Vector3(0, 0, 1);
+    const crashDist = toCrash.length();
+    const crashAim = THREE.MathUtils.radToDeg(view.angleTo(toCrash.normalize()));
+    check(
+      rc.cameraRig.modeName === 'tv' && rc.cameraRig.aerialForced && rc.cameraRig.aerialActive,
+      'bendera kuning: siaran naik ke kamera helikopter',
+      rc.cameraRig.broadcastName ?? rc.cameraRig.modeName,
+    );
+    check(
+      Boolean(crashCar) && eye.y > 12 && crashDist < 90 && crashAim < 25,
+      'helikopter membidik mobil yang kecelakaan',
+      `y ${eye.y.toFixed(0)} m · jarak ${crashDist.toFixed(0)} m · meleset ${crashAim.toFixed(0)}°`,
+    );
     const moved1 = amb.car.position.distanceTo(ambStart) as number;
     console.log(`    derek: fase=${phase1} ambulans bergerak ${moved1.toFixed(1)} m (${((Date.now() - t0) / 1000).toFixed(1)} s)`);
     check(
@@ -445,7 +477,7 @@ if (rc) {
     );
     check(phase1 !== 'off', 'ambulans dikirim ke lokasi (tidak diam di parkir)', phase1);
     check(moved1 > 15, 'ambulans benar-benar bergerak keluar', `${moved1.toFixed(1)} m`);
-    await new Promise((r) => setTimeout(r, 8000));
+    await new Promise((r) => setTimeout(r, 14000));
     const phase2 = (rc.raceControl as any).ambPhase as string;
     const towed = victims.some((v) => v.car.isTowed) || phase2 === 'towing' || phase2 === 'repairing';
     console.log(`    derek: fase=${phase2} jarak ke korban ${amb.car.position.distanceTo(victims[0].car.position).toFixed(1)} m`);
@@ -459,13 +491,26 @@ if (rc) {
     while (control.ambPhase !== 'off' && Date.now() - waitStart < 45000) {
       await new Promise((r) => setTimeout(r, 250));
     }
+    const tGreen = Date.now();
+    while (control.flag !== 'green' && Date.now() - tGreen < 70000) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    // Beri satu-dua frame supaya blok kamera sempat memulihkan mode.
+    await new Promise((r) => setTimeout(r, 600));
+    check(
+      rc.cameraRig.modeName === 'chase' && !rc.cameraRig.aerialForced,
+      'hijau lagi: kamera kembali normal (bukan helikopter)',
+      `${rc.cameraRig.modeName}${rc.cameraRig.aerialForced ? ' · heli dipaksa' : ''}`,
+    );
     const playerCar = rc.car as any;
+    const playerSpot = TRACK.at(TRACK.start + 160);
+    playerCar.placeAt(new THREE.Vector3(playerSpot.pos.x, playerSpot.pos.y + 0.6, playerSpot.pos.z), playerSpot.yaw);
     playerCar.damage.engineHealth = 0;
     playerCar.damage.engineDead = true;
     playerCar.damage.bodyHealth = 0.5;
     let playerTowed = false;
     const t1 = Date.now();
-    while (Date.now() - t1 < 45000) {
+    while (Date.now() - t1 < 60000) {
       await new Promise((r) => setTimeout(r, 250));
       if (playerCar.isTowed) {
         playerTowed = true;

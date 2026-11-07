@@ -40,6 +40,8 @@ export class CameraRig {
   private readonly prevFocus = new THREE.Vector3();
   private hasFocus = false;
   private readonly aerial = { active: false, wait: 11, held: 0, limit: 5, cut: false };
+  /** Gambar udara dipaksa terus (mis. selama bendera kuning). */
+  private forcedAerial = false;
 
   constructor(aspect: number, spots: BroadcastSpot[] = []) {
     this.camera = new THREE.PerspectiveCamera(this.fovBase, aspect, 0.1, 400);
@@ -80,6 +82,25 @@ export class CameraRig {
     } else {
       this.hasAerial = false;
     }
+  }
+
+  /**
+   * Paksa gambar helikopter terus-menerus, atau lepas. Dipakai saat bendera
+   * kuning: penonton dibawa ke udara untuk melihat mobil yang kecelakaan,
+   * lalu kembali ke kamera biasa begitu hijau.
+   */
+  setForcedAerial(on: boolean) {
+    if (this.forcedAerial === on) return;
+    this.forcedAerial = on;
+    this.aerial.active = on;
+    this.aerial.held = 0;
+    this.aerial.wait = AERIAL_EVERY[0];
+    this.hasFocus = false;
+  }
+
+  /** Gambar helikopter sedang dipaksa (bendera kuning)? */
+  get aerialForced(): boolean {
+    return this.forcedAerial;
   }
 
   /** Sedang memakai gambar helikopter? (dipakai untuk menyembunyikan modelnya) */
@@ -209,6 +230,7 @@ export class CameraRig {
     }
     if (a.active) {
       a.held += dt;
+      if (this.forcedAerial) return true;
       if (a.held < a.limit) return true;
       a.active = false;
       a.held = 0;

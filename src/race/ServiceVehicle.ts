@@ -4,7 +4,7 @@ import { AutoPilot, type TrafficCar } from '../ai/AutoPilot';
 import { CarVisual } from '../vehicle/CarVisual';
 import { defaultConfig, VehiclePhysics, type VehicleInput } from '../vehicle/VehiclePhysics';
 import { toon } from '../world/style';
-import { nearestSample, type PathSample } from '../world/circuit';
+import type { PathSample } from '../world/circuit';
 import type { CarLightState } from '../vehicle/CarLights';
 
 export type ServiceKind = 'safety' | 'ambulance';
@@ -56,13 +56,8 @@ export class ServiceVehicle {
 
   private readonly park: THREE.Vector3;
   private readonly yaw: number;
-  /** Garis balap utama: dipakai menyusun rute `intercept()`. */
-  private readonly main: PathSample[];
   /** Titik yang dikejar `intercept()` — cukup dekat, tidak harus tepat. */
   private chase: THREE.Vector3 | null = null;
-  /** Pilot kedua: menyusuri garis balap **terbalik** (mobil darurat menyelamatkan). */
-  private readonly reversePilot: AutoPilot;
-  private reverse = false;
   private readonly barMat: THREE.MeshToonMaterial;
   private readonly lights: CarLightState = {
     brake: 0,
@@ -77,11 +72,6 @@ export class ServiceVehicle {
   constructor(setup: ServiceSetup) {
     this.kind = setup.kind;
     this.park = setup.park.clone();
-    this.main = setup.main;
-    // Garis balap dibalik: tangent, side, dan kelengkungan dihitung ulang oleh
-    // AutoPilot, jadi mobil bisa menyusuri trek ke arah sebaliknya dengan mulus
-    // (bukan menyetir dari waypoint ke waypoint yang bikin berputar-putar).
-    this.reversePilot = new AutoPilot([...setup.main].reverse(), [], { useJoker: false });
     this.yaw = setup.yaw;
     this.car = new VehiclePhysics(setup.world, defaultConfig, this.park, this.yaw);
     this.pilot = new AutoPilot(setup.main, setup.joker, {
@@ -122,7 +112,6 @@ export class ServiceVehicle {
     this.mode = 'parked';
     this.route = [];
     this.chase = null;
-    this.reverse = false;
     this.arrived = false;
     this.car.placeAt(this.park, this.yaw);
     this.pilot.reset(this.car.position);
@@ -141,7 +130,6 @@ export class ServiceVehicle {
     this.mode = 'line';
     this.route = [];
     this.chase = null;
-    this.reverse = false;
     this.pilot.options.pace = pace;
     this.pilot.reset(this.car.position);
   }
@@ -153,7 +141,6 @@ export class ServiceVehicle {
   driveRoute(points: THREE.Vector3[], after: 'park' | 'line', pace = 0.8) {
     this.mode = 'route';
     this.chase = null;
-    this.reverse = false;
     this.route = points.map((p) => p.clone());
     this.routeIndex = 0;
     this.arrived = false;
@@ -178,25 +165,10 @@ export class ServiceVehicle {
    * hampir satu putaran penuh kalau kecelakaannya ada di belakang.
    */
   intercept(target: THREE.Vector3, pace = 0.85) {
-    const line = this.main;
-    const n = line.length;
-    const from = nearestSample(line, this.car.position);
-    const to = nearestSample(line, target);
-    const forward = (to - from + n) % n;
-    const back = (from - to + n) % n;
-
-    if (forward <= back) {
-      // Di depan: cukup ikuti garis balap (halus & cepat), lalu merapat.
-      this.followLine(pace);
-    } else {
-      // Di belakang: susuri garis balap ke arah sebaliknya (bukan mengelilingi
-      // satu putaran penuh, dan bukan menyetir lurus menembus tanggul).
-      this.mode = 'line';
-      this.route = [];
-      this.reverse = true;
-      this.reversePilot.options.pace = pace;
-      this.reversePilot.reset(this.car.position);
-    }
+    // Selalu menyusuri garis balap **searah balap** (tidak pernah lawan arah):
+    // kalau lokasinya di belakang pun, ambulans memutar satu putaran. Lalu
+    // merapat ke titiknya saat sudah dekat.
+    this.followLine(pace);
     // Cukup berhenti **di dekat** titiknya: kalau harus tepat, mobil darurat
     // akan mendorong mobil yang mogok.
     this.chase = target.clone();
@@ -227,7 +199,7 @@ export class ServiceVehicle {
           return command;
         }
       }
-      command = (this.reverse ? this.reversePilot : this.pilot).update(dt, this.car, others);
+      command = this.pilot.update(dt, this.car, others);
     } else if (this.mode === 'route') {
       // Sudah cukup dekat dengan titik yang dikejar? Berhenti di sisinya.
       if (this.chase && this.chase.distanceTo(this.car.position) < this.chaseRadius) {
