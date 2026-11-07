@@ -25,6 +25,12 @@ export interface VehicleConfig {
   suspensionRest: number;
   springK: number;
   damperC: number;
+  /** Kecepatan piston (m/s) tempat damper mulai "blow-off" (digressive). */
+  damperBlowoff: number;
+  /** Sisa kekuatan damper di atas blow-off, 0..1. 1 = damper linear. */
+  damperHighScale: number;
+  /** Batas gaya per roda (N), supaya pendaratan tidak memantulkan mobil. */
+  springForceMax: number;
   antiRollFront: number;
   antiRollRear: number;
   /* steering */
@@ -68,9 +74,12 @@ export const defaultConfig: VehicleConfig = {
   trackHalf: 0.86,
   anchorY: -0.32,
 
-  suspensionRest: 0.34,
+  suspensionRest: 0.4,
   springK: 30000,
   damperC: 2600,
+  damperBlowoff: 1.4,
+  damperHighScale: 0.35,
+  springForceMax: 16000,
   antiRollFront: 9000,
   antiRollRear: 6000,
 
@@ -199,9 +208,19 @@ export class VehiclePhysics {
     // Mass / inertia live on the collider (set below) so the center of mass can
     // sit well below the geometric center -> much harder to roll over.
     this.collider = world.createCollider(
-      RAPIER.ColliderDesc.cuboid(cfg.halfWidth, cfg.halfHeight, cfg.halfLength)
-        .setFriction(0.35)
-        .setRestitution(0.05),
+      // Rounded box: the wheels carry the car, this shape is only here for
+      // walls and rollovers. Square corners caught the crease of every jump
+      // lip and landing and stopped the car dead ("kena track"), so the edges
+      // are rounded and the box sits a little higher and slides (low friction).
+      RAPIER.ColliderDesc.roundCuboid(
+        cfg.halfWidth - 0.18,
+        cfg.halfHeight - 0.18,
+        cfg.halfLength - 0.18,
+        0.18,
+      )
+        .setTranslation(0, 0.05, 0)
+        .setFriction(0.12)
+        .setRestitution(0),
       this.body,
     );
 
@@ -397,7 +416,12 @@ export class VehiclePhysics {
   private updateSuspension(up: THREE.Vector3) {
     const cfg = this.cfg;
     const down = this.sDown.copy(up).negate();
-    const maxToi = cfg.suspensionRest + cfg.wheelRadius;
+    // The ray starts a bit ABOVE the suspension anchor. If it started at the
+    // anchor, a hard landing that sinks the body below the track would put the
+    // ray origin under the surface: no hit, no spring force, and the car stays
+    // stuck on its floor pan forever.
+    const rayLift = 0.7;
+    const maxToi = rayLift + cfg.suspensionRest + cfg.wheelRadius;
 
     for (const w of this.wheels) {
       w.anchor.copy(w.localAnchor).applyQuaternion(this.quaternion).add(this.position);
@@ -408,9 +432,9 @@ export class VehiclePhysics {
       w.vLong = 0;
       w.vLat = 0;
 
-      this.ray.origin.x = w.anchor.x;
-      this.ray.origin.y = w.anchor.y;
-      this.ray.origin.z = w.anchor.z;
+      this.ray.origin.x = w.anchor.x + up.x * rayLift;
+      this.ray.origin.y = w.anchor.y + up.y * rayLift;
+      this.ray.origin.z = w.anchor.z + up.z * rayLift;
       this.ray.dir.x = down.x;
       this.ray.dir.y = down.y;
       this.ray.dir.z = down.z;
@@ -440,7 +464,12 @@ export class VehiclePhysics {
         continue;
       }
 
-      const toi = hit.timeOfImpact;
+      const toi = hit.timeOfImpact - rayLift;
+      if (toi > cfg.suspensionRest + cfg.wheelRadius) {
+        // Only the lifted part of the ray hit: the wheel is in the air.
+        w.center.copy(w.anchor).addScaledVector(down, cfg.suspensionRest);
+        continue;
+      }
       w.contact = true;
       w.suspLength = clamp(toi - cfg.wheelRadius, 0, cfg.suspensionRest);
       w.compression = cfg.suspensionRest - w.suspLength;
@@ -452,7 +481,15 @@ export class VehiclePhysics {
       // vDown > 0 while the suspension compresses. A damper opposes the
       // suspension velocity, so it ADDS to the spring force in compression.
       const vDown = vAnchor.dot(down);
-      w.springForce = Math.max(cfg.springK * w.compression + cfg.damperC * vDown, 0);
+      // Damper digressive: di atas kecepatan blow-off gayanya tidak lagi naik
+      // linear. Tanpa ini, mendarat dari lompatan menghasilkan gaya 5-8x berat
+      // mobil, dan mobil terpental naik lagi (kelihatan seperti "nabrak track").
+      const blow = Math.max(cfg.damperBlowoff, 0.05);
+      const scaledDown = vDown <= blow
+        ? vDown
+        : blow + (vDown - blow) * clamp(cfg.damperHighScale, 0, 1);
+      const raw = cfg.springK * w.compression + cfg.damperC * scaledDown;
+      w.springForce = clamp(raw, 0, cfg.springForceMax);
       w.center.copy(w.anchor).addScaledVector(down, w.suspLength);
     }
   }

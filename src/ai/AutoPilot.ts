@@ -53,13 +53,20 @@ export interface AutoPilotOptions {
   /** Geser garis balap ke samping, meter (dipakai supaya dua mobil tidak
    *  berebut ruang yang sama). Positif = ke sisi `+side`. */
   laneOffset: number;
+  /** Seberapa cepat setir bisa diputar penuh ke penuh, 1/detik. Tanpa batas ini
+   *  roda langsung lompat dari lock kiri ke kanan dan mobil terlihat kaku. */
+  steerRate: number;
+  /** Konstanta pelemas pedal gas/rem, 1/detik. */
+  pedalRate: number;
+  /** Seberapa banyak AI memotong apex, 0..1 dari lebar trek. */
+  lineCut: number;
   /** Ambil joker lap? */
   useJoker: boolean;
 }
 
 export const defaultPilotOptions: AutoPilotOptions = {
-  gripTarmac: 8.0,
-  gripGravel: 5.2,
+  gripTarmac: 8.4,
+  gripGravel: 5.4,
   brakeTarmac: 7.0,
   brakeGravel: 4.6,
   horizon: 110,
@@ -72,6 +79,9 @@ export const defaultPilotOptions: AutoPilotOptions = {
   jumpSpeed: 19,
   pace: 1,
   laneOffset: 0,
+  steerRate: 4.5,
+  pedalRate: 9,
+  lineCut: 0.1,
   useJoker: true,
 };
 
@@ -124,6 +134,15 @@ export class AutoPilot {
   private flipTime = 0;
   private maneuverTime = 0;
   private lastSteer = 0;
+  /** Setir yang benar-benar dikirim, sudah melewati batas kecepatan putar. */
+  private steerCmd = 0;
+  /** Pedal yang benar-benar dikirim, sudah dilembutkan. */
+  private throttleCmd = 0;
+  private brakeCmd = 0;
+  /** `lateral` yang sudah difilter; mencegah tarikan garis jitter antar-sample. */
+  private lateralSmooth = 0;
+  /** Potongan apex yang sudah dilembutkan, meter. */
+  private cutSmooth = 0;
 
   constructor(main: PathSample[], joker: PathSample[], options: Partial<AutoPilotOptions> = {}) {
     this.options = { ...defaultPilotOptions, ...options };
@@ -185,7 +204,7 @@ export class AutoPilot {
       this.stuckTime = 0;
     }
 
-    return this.drive(car, s, yaw, speed, others);
+    return this.drive(dt, car, s, yaw, speed, others);
   }
 
   /** Lupakan status balap (dipakai setelah mobil di-reset). */
@@ -196,6 +215,10 @@ export class AutoPilot {
     this.maneuverTime = 0;
     this.needsReset = false;
     this.lapTime = 0;
+    this.steerCmd = 0;
+    this.throttleCmd = 0;
+    this.brakeCmd = 0;
+    this.lateralSmooth = 0;
     this.index = this.nearest(this.path, at ?? new THREE.Vector3(0, 0, 0), this.index);
     this.prevIndex = this.index;
     this.rebuildSteps();
@@ -215,6 +238,7 @@ export class AutoPilot {
   /* ------------------------------------------------------------------ */
 
   private drive(
+    dt: number,
     car: PilotCar,
     s: PathSample,
     yaw: number,
@@ -223,10 +247,13 @@ export class AutoPilot {
   ): VehicleInput {
     const o = this.options;
     let target = this.speedTarget(this.index, speed);
-    // Sudah melebar? Batasi kecepatan supaya sempat kembali ke garis.
+    // Sudah melebar? Angkat gas sedikit supaya setir sempat menarik kembali —
+    // tapi jangan mengerem keras: rem di tengah tikungan justru melewatkan
+    // mobil makin jauh ke luar dan bikin gerakannya patah-patah.
     const wide = Math.abs(this.lateral) / Math.max(s.halfWidth, 1);
-    if (wide > 0.9) target = Math.min(target, 11);
-    else if (wide > 0.55) target = Math.min(target, 18);
+    const off = wide > 1;
+    if (off) target = Math.min(target, 9);
+    else if (wide > 0.6) target = Math.min(target, 20);
     // Mobil di depan: jangan sampai menabrak bagian belakangnya. Jarak ~6 m
     // dipakai sebagai "ikuti dia", makin jauh batasnya makin longgar.
     const fx = Math.sin(yaw);
@@ -245,40 +272,121 @@ export class AutoPilot {
     // Menghitung lengkung yang dibutuhkan lalu menerjemahkannya ke sudut roda
     // membuat perilakunya sama di kecepatan rendah dan tinggi; gain P biasa
     // membuat mobil mengayun di gravel.
-    const look = clamp(6 + speed * 0.8, 7, 30);
+    this.lateralSmooth += (this.lateral - this.lateralSmooth) * clamp(dt * 7, 0, 1);
+    const look0 = clamp(6 + speed * 0.8, 7, 30);
+    // Depan mata dipendekkan kalau di depan ada tikungan tajam. Dengan titik
+    // pandang jauh, garis lurus ke titik itu memotong tikungan: mobil masuk
+    // terlalu lebar lalu panik mengoreksi. Ini yang membuat gerakannya kaku.
+    let maxCurv = 0;
+    {
+      const n = this.path.length;
+      let k = this.index;
+      let dist = 0;
+      for (let c = 0; c < 60 && dist < look0 + 8; c++) {
+        dist += this.steps[k];
+        k = (k + 1) % n;
+        const curv = Math.abs(this.path[k].curvature);
+        if (curv > maxCurv) maxCurv = curv;
+      }
+    }
+    const tight = clamp(1 - maxCurv / 0.05, 0, 1);
+    // Di luar trek: jangan mengejar titik jauh ke depan. Titik jauh membuat
+    // sudutnya kecil, jadi mobil justru jalan lurus makin jauh. Tuju titik
+    // dekat di garis supaya sudutnya besar dan mobil benar-benar kembali.
+    const look = off ? clamp(4 + speed * 0.3, 5, 11) : look0 * (0.45 + 0.55 * tight);
     const aimIndex = this.indexAt(this.index, look);
     const aim = this.path[aimIndex];
-    // Aim a bit toward where the car actually is, so a big correction stays
-    // smooth instead of flicking the wheel the other way.
-    const pull = clamp(this.lateral, -8, 8) * 0.15;
-    const dx = aim.pos.x + aim.side.x * pull - car.position.x;
-    const dz = aim.pos.z + aim.side.z * pull - car.position.z;
+    // Garis balap: potong sedikit ke sisi dalam tikungan supaya jalurnya
+    // terlihat seperti pembalap yang mencari apex, bukan garis tengah. Hanya
+    // di tikungan yang benar-benar tikungan (di lintasan lurus angkanya nol,
+    // kalau tidak titik tujuan melompat kiri-kanan dan mobil mengayun).
+    const cutAmt = clamp((Math.abs(aim.curvature) - 0.005) / 0.02, 0, 1);
+    const cutWanted = -Math.sign(aim.curvature) * cutAmt * s.halfWidth * o.lineCut;
+    this.cutSmooth += (cutWanted - this.cutSmooth) * clamp(dt * 3, 0, 1);
+    // Lajur yang sudah digeser (mobil rival) tidak ikut memotong apex: dua
+    // geseran sekaligus mendorong garisnya keluar trek di tikungan sempit.
+    const cut = off || Math.abs(o.laneOffset) > 0.01 ? 0 : this.cutSmooth;
+    // Tarik titik tujuan sedikit ke arah posisi mobil sekarang (filter dulu
+    // supaya tidak bergetar saat sample terdekat berpindah) agar koreksi besar
+    // tetap mulus, tidak menyentak setir ke arah sebaliknya. Saat di luar trek
+    // tarikan ini dimatikan: yang dibutuhkan justru belok penuh ke garis.
+    const pull = off ? 0 : clamp(this.lateralSmooth, -8, 8) * 0.15;
+    const off2 = pull + cut;
+    const dx = aim.pos.x + aim.side.x * off2 - car.position.x;
+    const dz = aim.pos.z + aim.side.z * off2 - car.position.z;
     const reach = Math.hypot(dx, dz);
     const alpha = wrapAngle(Math.atan2(dx, dz) - yaw);
-    const curvature = reach > 0.8 ? (2 * Math.sin(alpha) * o.steerGain) / reach : 0;
+    let curvature = reach > 0.8 ? (2 * Math.sin(alpha) * o.steerGain) / reach : 0;
+    // Titik tujuan di belakang mobil (mobil menghadap menjauh dari garis):
+    // sin(alpha) mendekati nol, jadi rumus pure pursuit justru menyuruh lurus
+    // dan mobil melesat makin jauh dari trek. Belok penuh ke arah titik itu.
+    if (Math.abs(alpha) > Math.PI * 0.5) {
+      curvature = Math.sign(alpha) * Math.max(Math.abs(curvature), 1.2);
+    }
     const maxSteerRad = THREE.MathUtils.degToRad(o.maxSteerDeg);
     const steerRoom = maxSteerRad * Math.max(0.3, 1 - o.steerFalloff * Math.min(1, speed / o.topSpeed));
     const yawRate = car.angularVelocity.y;
-    const steer = clamp(
+    const wanted = clamp(
       -Math.atan(curvature * o.wheelbase) / steerRoom + yawRate * o.steerDamping,
       -1,
       1,
     );
+    // Setir diputar bertahap, seperti tangan pengemudi: tidak ada lompatan
+    // lock-ke-lock, dan goyangan setir di gravel ikut mereda.
+    const step = Math.max(o.steerRate, 0.5) * dt;
+    this.steerCmd = clamp(wanted, this.steerCmd - step, this.steerCmd + step);
+    let steer = this.steerCmd;
+    // Mobil mulai melintir (hidung tidak searah jalan). Menjejalkan setir ke
+    // titik tujuan justru mempercepat putaran; yang benar adalah menangkap
+    // selip: arahkan roda ke arah mobil benar-benar meluncur, dan angkat gas.
+    let catchWeight = 0;
+    if (speed > 2.5) {
+      const velYaw = Math.atan2(car.velocity.x, car.velocity.z);
+      const slip = wrapAngle(yaw - velYaw);
+      catchWeight = clamp((Math.abs(slip) - 0.3) / 0.45, 0, 1);
+      if (catchWeight > 0) {
+        const catchSteer = clamp(slip * 1.7, -1, 1);
+        steer = steer * (1 - catchWeight) + catchSteer * catchWeight;
+      }
+    }
     this.lastSteer = steer;
 
     // --- gas / rem ---
     let throttle = 0;
     let brake = 0;
+    // Di udara roda tidak menyentuh tanah: gas hanya memutar roda tanpa traksi,
+    // lalu begitu mendarat tenaganya menyentak dan mobil terpelintir. Lepas
+    // pedal selama melayang supaya mendarat lurus.
+    const airborne = car.wheels.length > 0 && car.wheels.every((w) => !w.contact);
+    if (airborne) {
+      this.throttleCmd = 0;
+      this.brakeCmd = 0;
+      return { throttle: 0, brake: 0, steer, handbrake: false, gear: 1 };
+    }
     const onGravel = s.surface === 'gravel';
     const headroom = onGravel ? 0.6 : 0.9;
     if (speed < target - headroom) {
-      throttle = clamp((target - speed) / 3 + 0.35, 0.3, 1);
+      // Gas proporsional: makin jauh dari target makin dalam, jadi AI tidak
+      // hanya tahu "gas penuh" dan "nganggur".
+      throttle = clamp((target - speed) / 6 + 0.4, 0.25, 1);
     } else if (speed > target + headroom * 1.4) {
       brake = clamp((speed - target) / 4, 0.15, 1);
+      // Di luar trek: rem secukupnya saja, sisanya biar setir yang bekerja.
+      if (off) brake = Math.min(brake, 0.45);
       throttle = 0;
     } else {
-      throttle = clamp((target - speed) / 3 + 0.2, 0, 0.4);
+      throttle = clamp((target - speed) / 3 + 0.25, 0.05, 0.5);
     }
+    // Sedang menangkap selip: kurangi tenaga supaya ban belakang tidak
+    // berputar dan mobil berhenti berputar.
+    throttle *= 1 - catchWeight * 0.85;
+    // Pedal dilembutkan supaya tidak berkedip gas-rem tiap frame.
+    const blend = clamp(dt * Math.max(o.pedalRate, 1), 0, 1);
+    this.throttleCmd += (throttle - this.throttleCmd) * blend;
+    this.brakeCmd += (brake - this.brakeCmd) * blend;
+    throttle = this.throttleCmd < 0.04 ? 0 : this.throttleCmd;
+    brake = this.brakeCmd < 0.04 ? 0 : this.brakeCmd;
+    if (brake > 0.05) throttle = 0;
 
     // Jangan menyalakan handbrake; AI mengandalkan grip penuh.
     return { throttle, brake, steer, handbrake: false, gear: 1 };

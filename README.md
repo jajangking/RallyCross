@@ -107,16 +107,24 @@ Fisika dapat berhenti di tanjakan: rem parkir (`applyParkingHold`) menahan mobil
 ## Model fisika
 
 **Chassis**
-- Rigid body dinamis, box `1.84 × 0.68 × 4.1 m`, massa **1250 kg**.
+- Rigid body dinamis, **rounded box** ±0,74 × ±0,16 × ±1,87 m (sudut radius 0,18 m), massa **1250 kg**. Bentuknya sengaja dibuat bulat dan licin (friction 0,12): bodi hanya dipakai untuk menabrak pagar dan kalau mobil terbalik — roda yang menopang mobil. Dengan kotak bersudut tajam, bibir lompatan dan crease pendaratan menyangkut di sudut bodi dan mobil langsung berhenti seperti "nabrak trek".
 - Massa & inersia di-set eksplisit di collider (`setMassProperties`), center of mass **0.30 m di bawah** titik geometris → susah kebalik.
 - CCD aktif (kecepatan tinggi), `canSleep = false`.
 
 **Suspensi (per roda, raycast)**
-- Ray dari anchor roda ke bawah sepanjang `rest + radius`.
+- Ray dari titik **0,7 m di atas anchor** roda, ke bawah sepanjang `lift + rest + radius`.
+  Ray sengaja dimulai lebih tinggi: kalau dimulai tepat di anchor, pendaratan
+  keras yang menenggelamkan bodi membuat pangkal ray ada di *bawah* permukaan →
+  tidak ada hit, tidak ada gaya pegas, dan mobil tertinggal menempel di perutnya.
 - `F_spring = k · compression + c · v_down` — damper **menambah** gaya saat kompresi (tanda ini pernah jadi bug anti-damping, sudah diperbaiki dan dijaga oleh smoke test).
+- Damper **digressive**: di atas `damperBlowoff` (1,4 m/s) gaya damper hanya naik
+  sepertiga (`damperHighScale` 0,35), dan totalnya dibatasi `springForceMax`
+  (16 kN per roda). Linear tanpa batas membuat pendaratan 7 m/s menghasilkan
+  5–8× berat mobil → mobil terpental naik lagi.
 - Gaya suspensi didorong searah **normal kontak**, bukan sumbu atas bodi, jadi ramp dan permukaan miring menopang mobil dengan benar.
 - Anti-roll bar depan/belakang: transfer beban berdasarkan selisih kompresi kiri/kanan.
-- Default: `k = 30 kN/m`, `c = 2.6 kN·s/m`, rest 0.34 m.
+- Default: `k = 30 kN/m`, `c = 2.6 kN·s/m`, rest 0,40 m (langkah pegas lebih panjang
+  = pendaratan lompatan ditelan suspensi, bukan diteruskan ke bodi).
 
 **Ban**
 - Slip angle `α = atan2(v_lat, |v_long| + 0.9)`.
@@ -181,6 +189,8 @@ gigi R, dan repeater ◀ ▶ ◐ di HUD ikut berkedip.
 | Parameter | Efek |
 |---|---|
 | `springK` / `damperC` | keras/lembut & redaman. Damper terlalu kecil → mobil memantul. |
+| `damperBlowoff` / `damperHighScale` | damper digressive: di atas kecepatan ini gaya tidak naik linear lagi. Kecil = pendaratan lembut, tapi suspensi lebih mudah habis langkahnya. |
+| `springForceMax` | batas gaya satu roda (N). Terlalu besar → mobil memantul setelah mendarat; terlalu kecil → bodi menyentuh tanah. |
 | `antiRollFront/Rear` | kurangi body roll; belakang lebih kaku → cenderung oversteer. |
 | `muFront` / `muRear` | `muRear < muFront` → oversteer/drift; sebaliknya understeer. |
 | `peakSlipDeg` | titik puncak grip. Kecil = ban "licin", besar = forgif. |
@@ -201,12 +211,18 @@ Cara kerjanya (`src/ai/AutoPilot.ts`, murni matematika, tanpa DOM):
 
 - **Garis balap** — AI memakai sample sirkuit yang sama dengan pembangun trek. `lapPath()` menyambung garis utama + joker jadi satu lintasan dengan jarak yang tetap menaik, jadi AI cukup punya satu "lap" untuk dua rute.
 - **Setir** — *pure pursuit*: cari titik 6 + 0,8·v meter di depan, hitung lengkung yang dibutuhkan (`κ = 2·sin α / L`), lalu terjemahkan ke sudut roda memakai geometri setir mobil (basis roda 2,64 m, batas 34°, `steerFalloff`). Ini skala otomatis: sama stabilnya di 10 km/h dan 100 km/h, dan gain lengkung 1,5 dipakai untuk menutup *understeer* di gravel.
-- **Kecepatan** — per sample di depan (horizon sampai 110 m) dihitung batas `√(grip / κ)` menurut permukaan (aspal 8,0 m/s², gravel 5,2 m/s²), lalu tiap batas dikonversi jadi "kecepatan sekarang yang masih bisa berhenti di sana" (`√(v² + 2·a·s)`). Nilai terkecil yang dipakai. Tanjakan > 9 % dianggap lompatan dan dibatasi `jumpSpeed` (19 m/s).
-- **Melebar** — kalau mobil keluar > 55 % lebar trek, target kecepatan dipotong supaya sempat kembali ke garis.
+- **Jarak pandang menyesuaikan tikungan** — kalau 30-an meter ke depan ada tikungan tajam, titik tujuan didekatkan (sampai 45 %). Titik pandang yang jauh pada tikungan sempit membuat garis lurus memotong tikungan: mobil masuk terlalu lebar, lalu panik mengoreksi — inilah yang dulu terasa kaku.
+- **Setir diputar bertahap** — perintah setir dibatasi `steerRate` (4,5 putaran penuh per detik), jadi roda tidak melompat dari lock kiri ke kanan.
+- **Menangkap selip** — kalau hidung mobil sudah menyimpang > 30° dari arah jalannya, AI berhenti menjejalkan setir ke titik tujuan (itu justru mempercepat putaran) dan mengarahkan roda ke arah mobil benar-benar meluncur, sambil mengangkat gas. Tanpa ini AI berputar-donat lalu melesat keluar trek.
+- **Kecepatan** — per sample di depan (horizon sampai 110 m) dihitung batas `√(grip / κ)` menurut permukaan (aspal 8,4 m/s², gravel 5,4 m/s²), lalu tiap batas dikonversi jadi "kecepatan sekarang yang masih bisa berhenti di sana" (`√(v² + 2·a·s)`). Nilai terkecil yang dipakai. Tanjakan > 9 % dianggap lompatan dan dibatasi `jumpSpeed` (19 m/s).
+- **Gas & rem proporsional** — gas mengikuti selisih ke target (bukan on/off), pedalnya dilembutkan (`pedalRate`), dan rem tidak pernah dipijak penuh saat mobil sudah di luar trek.
+- **Di udara** — roda tidak menyentuh tanah, jadi AI melepas gas: roda yang berputar di udara menyentak saat mendarat dan memelintir mobil.
+- **Garis balap** — di tikungan, titik tujuan digeser sedikit ke sisi dalam (`lineCut`, 10 % lebar trek) supaya jalurnya terlihat seperti pembalap yang mencari apex. Mobil lawan tidak ikut memotong karena lajurnya sudah digeser `laneOffset`.
+- **Melebar** — di luar > 60 % lebar trek target kecepatan dipotong; kalau sudah keluar trek, titik tujuan justru didekatkan dan tarikan garis dimatikan supaya mobil benar-benar berbelok kembali ke garis (titik jauh membuat sudutnya kecil dan mobil malah jalan lurus makin jauh).
 - **Macet / terbalik** — diam < 1,2 m/s selama 1,6 s → mundur sebentar lalu maju lagi; terbalik (up < 0,35) selama 2,5 s → minta reset.
 - **Joker** — pilihan joker dievaluasi ulang tiap putaran (checkbox *joker lap*), dan HUD menampilkan status AI + lap + waktu lap/best.
 
-Hasil uji headless dengan fisika asli: **satu putaran 29,2 s**, tidak pernah keluar tepi trek, 0 reset, dan stabil di 6 putaran berturut-turut (aspal & gravel, dengan/tanpa joker).
+Hasil uji headless dengan fisika asli: **satu putaran 29,9 s**, tidak pernah keluar tepi trek, 0 reset, dan stabil di 6 putaran berturut-turut (aspal & gravel, dengan/tanpa joker). Diuji juga dari 30 titik start berbeda (offset ±3 m): semuanya menyelesaikan putaran.
 
 ## Kamera TV (broadcast)
 
@@ -254,7 +270,7 @@ Agar AI bisa secepat itu, tepi trek juga diperbaiki: bahu jalan sekarang punya *
 - determinisme: dua run identik → state akhir identik
 - `buildTrackColliders()` jalan tanpa DOM, ramp melontarkan mobil lalu mendarat tegak
 - jalur lap (utama + joker) punya jarak yang monoton dan joker memang lebih pendek
-- **AI menyelesaikan satu putaran sendiri** (29 s), tidak keluar tepi trek, tanpa reset
+- **AI menyelesaikan satu putaran sendiri** (30 s), tidak keluar tepi trek, tanpa reset
 - penghitung lap menambah tepat satu lap per putaran, odometer cocok dengan panjang trek
 - **lawan AI menyelesaikan putaran** (33 s), tetap di trek, dan dua mobil tidak saling menembus
 - 9 kamera TV berdiri di luar trek, sutradara memakai ≥5 kamera berbeda, tidak ada shot < 1,6 s, dan mobil yang dibidik tidak pernah lebih dari 220 m
