@@ -7,10 +7,12 @@
     "dev": "vite --host",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
-    "check": "tsc --noEmit",
-    "smoke": "tsx scripts/smoke.ts",
+    "check": "node scripts/order-check.mjs && tsc --noEmit",
+    "smoke": "node scripts/order-check.mjs && tsx scripts/boot-check.ts && tsx scripts/smoke.ts",
     "shot": "tsx scripts/preview.ts",
-    "check:browser": "node scripts/browser-check.mjs"
+    "check:browser": "node scripts/browser-check.mjs",
+    "check:order": "node scripts/order-check.mjs",
+    "check:boot": "tsx scripts/boot-check.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",

@@ -695,15 +695,24 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
 
   /* ---------------- pit / service area ---------------- */
   {
-    const apronMat = toon({ color: 0x565e68, side: THREE.DoubleSide });
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(PIT.apron.positions, 3));
-    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(PIT.apron.uvs, 2));
-    geometry.setIndex(PIT.apron.indices);
-    geometry.computeVertexNormals();
-    const apron = new THREE.Mesh(geometry, apronMat);
+    const apronMat = toon({ color: 0x626b76, side: THREE.DoubleSide });
+    // Lewat `ribbonGeometry` supaya winding-nya dibetulkan: tanpa itu normalnya
+    // menghadap ke bawah dan apron tampak hitam (terbaca seperti rumput).
+    const apron = new THREE.Mesh(ribbonGeometry(PIT.apron), apronMat);
     apron.receiveShadow = detail;
     scene.add(apron);
+
+    // Marka: garis tepi apron + pita masuk/keluar, biar jalur pit kebaca dari
+    // jauh (dan pemain tahu di mana harus berhenti tanpa lihat HUD).
+    const paintMat = toon({ color: PALETTE.kerbWhite, side: THREE.DoubleSide });
+    const markings: Array<{ positions: number[]; uvs: number[]; distances: number[]; indices: number[] }> = [
+      paintStrip(PIT.from + 1, PIT.to - 1, PIT_INNER, PIT_INNER + 0.16, PIT.y + 0.004),
+      paintStrip(PIT.from + 1.6, PIT.from + 2.2, PIT_INNER, PIT_OUTER, PIT.y + 0.004, 1),
+      paintStrip(PIT.to - 2.2, PIT.to - 1.6, PIT_INNER, PIT_OUTER, PIT.y + 0.004, 1),
+    ];
+    for (const marking of markings) {
+      scene.add(new THREE.Mesh(ribbonGeometry(marking), paintMat));
+    }
 
     // Garis kotak servis: satu LineSegments untuk keenam kotak (murah).
     const linePoints: number[] = [];
@@ -1506,6 +1515,52 @@ function apronRibbon(from: number, to: number, inner: number, outer: number, y: 
     indices.push(i, i + 1, i + 3, i, i + 3, i + 2);
   }
   return { positions, uvs, distances, indices };
+}
+
+/**
+ * Pita aspal kecil antara dua jarak (bukan deretan sampel): dipakai untuk
+ * marka tipis — garis tepi, pita masuk/keluar — yang kalau diambil dari
+ * `MAIN` bisa jatuh di antara dua sampel dan jadi tak terlihat.
+ */
+function paintBand(from: number, to: number, inner: number, outer: number, y: number) {
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const distances: number[] = [];
+  const indices: number[] = [];
+  for (const distance of [from, to]) {
+    const s = pointAt(MAIN, distance);
+    for (const off of [inner, outer]) {
+      const p = s.pos.clone().addScaledVector(s.side, s.halfWidth + off);
+      positions.push(p.x, y, p.z);
+      uvs.push(distance * 0.12, off * 0.15);
+      distances.push(distance);
+    }
+  }
+  indices.push(0, 1, 3, 0, 3, 2);
+  return { positions, uvs, distances, indices };
+}
+
+/** Pita marka yang dipecah jadi beberapa potong supaya mengikuti tikungan. */
+function paintStrip(from: number, to: number, inner: number, outer: number, y: number, pieces = 6) {
+  const ribbon: { positions: number[]; uvs: number[]; distances: number[]; indices: number[] } = {
+    positions: [],
+    uvs: [],
+    distances: [],
+    indices: [],
+  };
+  for (let i = 0; i < pieces; i++) {
+    const a = from + ((to - from) * i) / pieces;
+    const b = from + ((to - from) * (i + 1)) / pieces;
+    const band = paintBand(a, b, inner, outer, y);
+    const base = ribbon.positions.length / 3;
+    for (let k = 0; k < band.positions.length; k += 3) {
+      ribbon.positions.push(band.positions[k], band.positions[k + 1], band.positions[k + 2]);
+      ribbon.uvs.push(band.uvs[(k / 3) * 2], band.uvs[(k / 3) * 2 + 1]);
+      ribbon.distances.push(band.distances[k / 3]);
+    }
+    for (const index of band.indices) ribbon.indices.push(base + index);
+  }
+  return ribbon;
 }
 
 /**

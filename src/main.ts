@@ -167,6 +167,15 @@ async function boot() {
     carVisual = model;
   });
 
+  /**
+   * "Nalar" lawan: kemampuan tiap pembalap AI yang **naik tiap balapan**
+   * (disimpan di localStorage). Karena setelan pilot diturunkan dari angka ini,
+   * papan rekor ikut turun seiring waktu — tiap sesi AI-nya lebih cepat.
+   */
+  const skills = new AiSkills(
+    undefined,
+    Object.fromEntries(RIVAL_PLANS.map((plan) => [plan.name, skillForPace(plan.pace)])),
+  );
   /* ---------------- lima lawan AI (grid 6 mobil) ---------------- */
   // Fisika, ban, dan lompatannya sama persis dengan mobil pemain; lawan hanya
   // tahu garis balap lebih baik. Tiap mobil punya lajur, kecepatan, dan warna
@@ -292,15 +301,6 @@ async function boot() {
   };
   /** Papan rekor lap (antarmobil, disimpan di localStorage kalau ada). */
   const records = new LapRecords();
-  /**
-   * "Nalar" lawan: kemampuan tiap pembalap AI yang **naik tiap balapan**
-   * (disimpan di localStorage). Karena setelan pilot diturunkan dari angka ini,
-   * papan rekor ikut turun seiring waktu — tiap sesi AI-nya lebih cepat.
-   */
-  const skills = new AiSkills(
-    undefined,
-    Object.fromEntries(RIVAL_PLANS.map((plan) => [plan.name, skillForPace(plan.pace)])),
-  );
   /** Terapkan nalar AI + pengali kecepatan dari panel ke semua lawan. */
   const applyRivalSkills = () => {
     for (const r of rivals) {

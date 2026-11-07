@@ -1,0 +1,398 @@
+/**
+ * Uji "bisa hidup": jalankan `src/main.ts` tanpa browser sama sekali.
+ *
+ * `tsc` tidak bisa menangkap semua kesalahan saat start (mis. variabel yang
+ * dipakai sebelum dideklarasikan di dalam callback `.map()`), dan di sandbox
+ * ini tidak ada Chromium. Jadi DOM/WebGL dipalsukan secukupnya, lalu loop
+ * permainan benar-benar dijalankan beberapa ratus frame: fisika (Rapier),
+ * AI, kamera, dan HUD ikut jalan.
+ *
+ *   npm run check:boot
+ */
+import * as THREE from 'three';
+
+const noop = () => {};
+
+/* ---------------- palsu: WebGL + canvas 2D ---------------- */
+function makeGl(): any {
+  const consts: Record<string, number> = {};
+  let next = 0x1000;
+  const target: any = {};
+  return new Proxy(target, {
+    get(_t, prop: string) {
+      if (prop in target) return target[prop];
+      if (/^[A-Z0-9_]+$/.test(prop)) {
+        if (!(prop in consts)) consts[prop] = next++;
+        return consts[prop];
+      }
+      switch (prop) {
+        case 'getParameter':
+          return (p: number) => {
+            if (p === consts['VERSION'] || p === consts['SHADING_LANGUAGE_VERSION']) return 'WebGL 2.0';
+            if (p === consts['VENDOR'] || p === consts['RENDERER']) return 'stub';
+            return 4096;
+          };
+        case 'getExtension':
+          return () => null;
+        case 'getShaderPrecisionFormat':
+          return () => ({ rangeMin: 127, rangeMax: 127, precision: 23 });
+        case 'getProgramParameter':
+          // three membaca jumlah uniform/atribut dari sini; harus angka.
+          return (_p: number, what: number) => {
+            const name = Object.keys(consts).find((k) => consts[k] === what) ?? '';
+            if (/ACTIVE_(UNIFORM|ATTRIB|UNIFORM_BLOCK)/.test(name)) return 0;
+            return true;
+          };
+        case 'getShaderParameter':
+          return () => true;
+        case 'getActiveUniform':
+        case 'getActiveAttrib':
+        case 'getUniformLocation':
+        case 'getAttribLocation':
+          return () => null;
+        case 'getProgramInfoLog':
+        case 'getShaderInfoLog':
+          return () => '';
+        case 'getContextAttributes':
+          return () => ({ alpha: false, antialias: true, depth: true, stencil: true });
+        case 'getSupportedExtensions':
+          return () => [];
+        case 'createShader':
+        case 'createProgram':
+        case 'createBuffer':
+        case 'createTexture':
+        case 'createFramebuffer':
+        case 'createRenderbuffer':
+        case 'createVertexArray':
+          return () => ({});
+        case 'checkFramebufferStatus':
+          return () => consts['FRAMEBUFFER_COMPLETE'] ?? 1;
+        case 'isContextLost':
+          return () => false;
+        case 'canvas':
+          return { width: 1280, height: 720, addEventListener: noop, removeEventListener: noop, style: makeStyle() };
+        default:
+          return () => undefined;
+      }
+    },
+  });
+}
+
+/** Konteks canvas 2D secukupnya: gradien, teks, dan gambar. */
+function make2d(): any {
+  const gradient = { addColorStop: noop };
+  const ctx: any = {
+    canvas: { width: 1024, height: 512 },
+    fillStyle: '#000',
+    strokeStyle: '#000',
+    lineWidth: 1,
+    font: '10px sans-serif',
+    textAlign: 'left',
+    textBaseline: 'top',
+    globalAlpha: 1,
+    createLinearGradient: () => gradient,
+    createRadialGradient: () => gradient,
+    createPattern: () => null,
+    measureText: () => ({ width: 10 }),
+    getImageData: (_x: number, _y: number, w = 1, h = 1) => ({
+      data: new Uint8ClampedArray(Math.max(1, w * h * 4)),
+      width: w,
+      height: h,
+    }),
+    createImageData: (w = 1, h = 1) => ({
+      data: new Uint8ClampedArray(Math.max(1, w * h * 4)),
+      width: w,
+      height: h,
+    }),
+    putImageData: noop,
+    drawImage: noop,
+    getContextAttributes: () => ({ alpha: true }),
+  };
+  return new Proxy(ctx, {
+    get(t: any, prop: string) {
+      if (prop in t) return t[prop];
+      if (typeof prop === 'symbol') return undefined;
+      return () => undefined;
+    },
+    set(t: any, prop: string, value) {
+      t[prop] = value;
+      return true;
+    },
+  });
+}
+
+const numeric = new Set(['width', 'height', 'clientWidth', 'clientHeight', 'offsetWidth', 'offsetHeight']);
+
+/** `element.style` yang bisa dipakai: properti apa pun + setProperty(). */
+function makeStyle(): any {
+  return new Proxy(
+    { setProperty: noop, removeProperty: noop, getPropertyValue: () => '' } as any,
+    {
+      get(t: any, prop: string) {
+        if (prop in t) return t[prop];
+        if (typeof prop === 'symbol') return undefined;
+        return '';
+      },
+      set(t: any, prop: string, value) {
+        t[prop] = value;
+        return true;
+      },
+    },
+  );
+}
+
+function makeElement(tag = 'div'): any {
+  const gl = makeGl();
+  const ctx2d = make2d();
+  const element: any = {
+    tagName: tag.toUpperCase(),
+    style: makeStyle(),
+    dataset: {},
+    classList: { add: noop, remove: noop, toggle: noop, contains: () => false, replace: noop },
+    children: [] as any[],
+    appendChild(child: any) {
+      element.children.push(child);
+      return child;
+    },
+    removeChild: noop,
+    insertBefore: noop,
+    remove: noop,
+    setAttribute: noop,
+    removeAttribute: noop,
+    getAttribute: () => null,
+    hasAttribute: () => false,
+    addEventListener: noop,
+    removeEventListener: noop,
+    dispatchEvent: () => true,
+    getBoundingClientRect: () => ({ x: 0, y: 0, width: 1280, height: 720, top: 0, left: 0, right: 1280, bottom: 720 }),
+    getContext: (type?: string) => (type && !type.startsWith('webgl') ? ctx2d : gl),
+    toDataURL: () => 'data:image/png;base64,',
+    querySelector: () => makeElement(),
+    querySelectorAll: () => [],
+    focus: noop,
+    blur: noop,
+    setPointerCapture: noop,
+    releasePointerCapture: noop,
+    textContent: '',
+    innerHTML: '',
+    value: '',
+    width: 1280,
+    height: 720,
+    clientWidth: 1280,
+    clientHeight: 720,
+    offsetWidth: 1280,
+    offsetHeight: 720,
+  };
+  return new Proxy(element, {
+    get(t: any, prop: string) {
+      if (prop in t) return t[prop];
+      if (numeric.has(prop)) return 0;
+      if (typeof prop === 'symbol') return undefined;
+      return () => undefined;
+    },
+    set(t: any, prop: string, value) {
+      t[prop] = value;
+      return true;
+    },
+  });
+}
+
+const documentStub: any = {
+  documentElement: makeElement('html'),
+  body: makeElement('body'),
+  head: makeElement('head'),
+  baseURI: 'http://localhost/',
+  createElement: (tag: string) => makeElement(tag),
+  createElementNS: (_ns: string, tag: string) => makeElement(tag),
+  getElementById: () => makeElement(),
+  querySelector: () => makeElement(),
+  querySelectorAll: () => [],
+  addEventListener: noop,
+  removeEventListener: noop,
+  hidden: false,
+  visibilityState: 'visible',
+  pointerLockElement: null,
+  fonts: { ready: Promise.resolve() },
+};
+
+const windowStub: any = {
+  document: documentStub,
+  innerWidth: 1280,
+  innerHeight: 720,
+  devicePixelRatio: 1,
+  addEventListener: noop,
+  removeEventListener: noop,
+  matchMedia: () => ({ matches: false, addEventListener: noop, removeEventListener: noop, addListener: noop }),
+  requestAnimationFrame: (cb: (t: number) => void) => {
+    queue.push(() => cb(performance.now()));
+    return queue.length;
+  },
+  cancelAnimationFrame: noop,
+  getComputedStyle: () => ({ getPropertyValue: () => '' }),
+  localStorage: {
+    store: new Map<string, string>(),
+    getItem(k: string) {
+      return this.store.has(k) ? this.store.get(k)! : null;
+    },
+    setItem(k: string, v: string) {
+      this.store.set(k, String(v));
+    },
+    removeItem(k: string) {
+      this.store.delete(k);
+    },
+    clear() {
+      this.store.clear();
+    },
+    key: () => null,
+    length: 0,
+  },
+  location: { search: '', href: 'http://localhost/', protocol: 'http:', pathname: '/' },
+  navigator: { userAgent: 'node', maxTouchPoints: 0, language: 'id' },
+  performance,
+  history: { replaceState: noop, pushState: noop },
+  WebGL2RenderingContext: class {},
+  ResizeObserver: class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  },
+  IntersectionObserver: class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  },
+  PointerEvent: class {},
+  CustomEvent: class {
+    constructor(public type: string) {}
+  },
+  KeyboardEvent: class {},
+  Event: class {},
+  Image: class {
+    set src(_v: string) {}
+  },
+  setTimeout,
+  clearTimeout,
+  setInterval,
+  clearInterval,
+  URL,
+  screen: { width: 1280, height: 720 },
+};
+
+const define = (name: string, value: unknown) => {
+  Object.defineProperty(globalThis, name, { value, writable: true, configurable: true });
+};
+define('window', windowStub);
+define('document', documentStub);
+define('navigator', windowStub.navigator);
+define('location', windowStub.location);
+define('localStorage', windowStub.localStorage);
+define('requestAnimationFrame', windowStub.requestAnimationFrame);
+define('cancelAnimationFrame', noop);
+define('matchMedia', windowStub.matchMedia);
+define('innerWidth', 1280);
+define('innerHeight', 720);
+define('devicePixelRatio', 1);
+define('WebGL2RenderingContext', windowStub.WebGL2RenderingContext);
+define('ResizeObserver', windowStub.ResizeObserver);
+define('getComputedStyle', windowStub.getComputedStyle);
+define('self', globalThis);
+// Tidak ada server di Node: jangan biarkan GLB menunggu koneksi gagal.
+define('fetch', () => Promise.reject(new Error('offline (boot check)')));
+
+/* ---------------- jalankan permainannya ---------------- */
+const failures: string[] = [];
+const logs: string[] = [];
+const queue: Array<() => void> = [];
+
+// `requestAnimationFrame` yang dipalsukan hanya mengantre: jalankan antreannya
+// supaya kalau `boot()` menunggu satu frame, permainannya tetap lanjut.
+let framesRun = 0;
+const drain = setInterval(() => {
+  for (const cb of queue.splice(0)) {
+    try {
+      framesRun++;
+      cb();
+    } catch (err) {
+      realError((err as Error)?.stack ?? err);
+    }
+  }
+}, 16);
+
+const realError = console.error.bind(console);
+console.error = (...args: unknown[]) => {
+  const text = args.map((a) => (a instanceof Error ? `${a.name}: ${a.message}` : String(a))).join(' ');
+  // Model GLB diambil lewat fetch; di Node tidak ada server — bukan bug.
+  if (text.includes('could not load the car model')) return;
+  logs.push(text);
+  realError(...args);
+};
+
+const check = (ok: boolean, label: string, detail = '') => {
+  console.log(`  [${ok ? 'PASS' : 'FAIL'}] ${label}${detail ? ` — ${detail}` : ''}`);
+  if (!ok) failures.push(label);
+};
+
+const waitFor = async (predicate: () => boolean, timeoutMs = 12000) => {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return true;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  return false;
+};
+
+await import('../src/main.ts');
+
+console.log('\n— permainan benar-benar bisa start (tanpa browser) —');
+// `main.ts` menaruh handle debug di `window.rc` — di sini `window` adalah stub.
+await waitFor(() => Boolean(windowStub.rc) || logs.length > 0);
+const rc: any = windowStub.rc;
+check(Boolean(rc), 'main() selesai booting', logs[0] ?? '');
+check(logs.length === 0, 'tidak ada error saat booting', logs[0] ?? '');
+
+if (rc) {
+  // Biarkan loop permainan berjalan ~3 detik (rAF dipalsukan tapi tetap
+  // ditepati): fisika, AI, kamera, dan HUD semuanya ikut dieksekusi.
+  const playerOdoBefore = rc.playerLaps.odometer as number;
+  await new Promise((r) => setTimeout(r, 3000));
+  check(framesRun > 60, 'loop permainan benar-benar berjalan', `${framesRun} frame`);
+  check(logs.length === 0, 'tidak ada error yang tercatat saat jalan', logs[0] ?? '');
+
+  const rivals = rc.rivals as Array<{ odometer: number; car: { position: THREE.Vector3 } }>;
+  const leader = Math.max(...rivals.map((r) => r.odometer));
+  check(leader > 5, 'mobil AI benar-benar bergerak di lintasan', `odometer ${leader.toFixed(1)} m`);
+
+  const player = rc.car.position as THREE.Vector3;
+  check(
+    Number.isFinite(player.x) && Number.isFinite(player.z) && player.y > -5 && player.y < 40,
+    'mobil pemain ada di dunia (tidak jatuh menembus tanah)',
+    `y ${player.y.toFixed(2)}`,
+  );
+  check(
+    (rc.playerLaps.odometer as number) > playerOdoBefore,
+    'penghitung lap pemain maju',
+    `${playerOdoBefore.toFixed(1)} → ${(rc.playerLaps.odometer as number).toFixed(1)} m`,
+  );
+
+  const cam = rc.cameraRig.camera.position as THREE.Vector3;
+  check(
+    Number.isFinite(cam.x) && Number.isFinite(cam.y) && Number.isFinite(cam.z),
+    'kamera punya posisi yang masuk akal',
+    `${cam.x.toFixed(0)}, ${cam.y.toFixed(0)}, ${cam.z.toFixed(0)}`,
+  );
+
+  const focus = rc.cameraRig.director?.current?.name ?? 'chase';
+  console.log(`    (kamera siaran: ${focus})`);
+}
+
+clearInterval(drain);
+if (logs.length) {
+  console.error('\n❌ ada error saat start:');
+  for (const log of logs) console.error('  ' + log);
+}
+console.log(
+  failures.length
+    ? `\n❌ ${failures.length} pemeriksaan boot gagal`
+    : '\n✅ boot check lulus',
+);
+process.exit(failures.length || logs.length ? 1 : 0);
