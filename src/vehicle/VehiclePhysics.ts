@@ -309,6 +309,12 @@ export class VehiclePhysics {
     this.syncTransform();
   }
 
+  /** Arah hadap mobil dalam radian (0 = +Z), sama seperti `yaw` di trek. */
+  get yaw(): number {
+    const f = this.sFwd.set(0, 0, 1).applyQuaternion(this.quaternion);
+    return Math.atan2(f.x, f.z);
+  }
+
   /** Angle between the chassis heading and the travel direction (radians). */
   get driftAngle() {
     if (this.speed < 3) return 0;
@@ -347,6 +353,67 @@ export class VehiclePhysics {
 
   reset() {
     this.placeAt(this.spawn, this.spawnYaw);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* derek (recovery): mobil diangkut, fisika dimatikan sementara        */
+  /* ------------------------------------------------------------------ */
+
+  private towed = false;
+
+  /** Sedang diangkut kendaraan derek? */
+  get isTowed(): boolean {
+    return this.towed;
+  }
+
+  /**
+   * Naikkan/turunkan mobil dari kendaraan derek.
+   *
+   * Selama diangkut, bodinya jadi **kinematik**: tidak jatuh, tidak menabrak,
+   * dan tidak bisa disetir — persis mobil yang diikat di belakang truk derek.
+   */
+  setTowed(on: boolean) {
+    if (this.towed === on) return;
+    this.towed = on;
+    this.body.setBodyType(
+      on ? RAPIER.RigidBodyType.KinematicPositionBased : RAPIER.RigidBodyType.Dynamic,
+      true,
+    );
+    if (!on) {
+      this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      this.speed = 0;
+      this.velocity.set(0, 0, 0);
+      this.angularVelocity.set(0, 0, 0);
+      // Jangan anggap perpindahan ini sebagai tabrakan.
+      this.hasPrevVelocity = false;
+      for (const w of this.wheels) w.contact = false;
+    }
+  }
+
+  /** Pindahkan mobil yang sedang diangkut ke pose tertentu (tiap langkah). */
+  carryTo(pos: THREE.Vector3, yaw: number) {
+    if (!this.towed) return;
+    this.body.setNextKinematicTranslation({ x: pos.x, y: pos.y, z: pos.z });
+    this.body.setNextKinematicRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) });
+  }
+
+  /**
+   * Lepas mobil derek di titik tertentu **tanpa** memperbaikinya (servis di pit
+   * tetap memakan waktu — tidak ada perbaikan diam-diam).
+   */
+  dropAt(pos: THREE.Vector3, yaw: number) {
+    this.body.setTranslation({ x: pos.x, y: pos.y, z: pos.z }, true);
+    this.body.setRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) }, true);
+    this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    this.steerAngle = 0;
+    this.speed = 0;
+    this.gear = 1;
+    this.velocity.set(0, 0, 0);
+    this.angularVelocity.set(0, 0, 0);
+    this.hasPrevVelocity = false;
+    this.syncTransform();
   }
 
   /**
@@ -388,6 +455,13 @@ export class VehiclePhysics {
   /** Advance the vehicle by a fixed physics step. Call BEFORE world.step(). */
   fixedStep(dt: number, input: VehicleInput) {
     this.syncTransform();
+    // Di atas truk derek: tidak ada mesin, ban, atau tabrakan.
+    if (this.towed) {
+      this.speed = 0;
+      this.velocity.set(0, 0, 0);
+      this.angularVelocity.set(0, 0, 0);
+      return;
+    }
     this.detectImpact();
 
     const lin = this.body.linvel();

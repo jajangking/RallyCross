@@ -44,6 +44,16 @@ export class LapCounter {
     this.prevDistance = this.path[this.index].distance;
   }
 
+  /**
+   * Pindahkan patokan ke posisi sekarang **tanpa** mengubah odometer.
+   * Dipakai kalau mobil dipindah bukan karena balapan (mis. diderek ke pit):
+   * jarak derek tidak boleh dihitung sebagai kemajuan.
+   */
+  rebase(pos: THREE.Vector3) {
+    this.index = this.nearest(this.path, pos, this.index);
+    this.prevDistance = this.path[this.index].distance;
+  }
+
   /** Panggil sekali per frame setelah posisi mobil diperbarui. */
   update(pos: THREE.Vector3) {
     const index = this.nearest(this.path, pos, this.index);

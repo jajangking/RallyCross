@@ -72,6 +72,8 @@ export class Rival {
   private rejoin: THREE.Vector3 | null = null;
   /** Detik sejak mulai menuju kotak pit (untuk batas waktu). */
   private pitTime = 0;
+  /** Baru saja diturunkan dari derek? (pilot perlu dipatok ulang) */
+  private wasTowed = false;
   /** Rute masuk pit: titik masuk apron, lalu kotaknya sendiri. */
   private pitRoute: THREE.Vector3[] = [];
   private pitRouteIndex = 0;
@@ -167,6 +169,16 @@ export class Rival {
    */
   step(dt: number, others: ReadonlyArray<TrafficCar> = []): VehicleInput | null {
     if (this.parked) return null;
+    // Di atas derek: tidak ada yang bisa disetir. Setelah diturunkan, pilot
+    // dipatok ulang ke posisi baru (kotak servis) supaya tidak menyetir balik.
+    if (this.car.isTowed) {
+      this.wasTowed = true;
+      return null;
+    }
+    if (this.wasTowed) {
+      this.wasTowed = false;
+      this.pilot.reset(this.car.position);
+    }
     // Mobil yang terbalik atau menabrak **tidak** diteleportasi: biar apa
     // adanya. Yang jatuh jauh di bawah dunia (keluar peta) tetap dikembalikan
     // ke garis, karena itu bukan kecelakaan melainkan bug fisika.
@@ -235,7 +247,10 @@ export class Rival {
   sync() {
     if (this.parked) return;
     this.car.sync();
-    this.counter.update(this.car.position);
+    // Selama diderek, odometer dibekukan di posisi sekarang: jarak derek
+    // bukan kemajuan balapan.
+    if (this.car.isTowed) this.counter.rebase(this.car.position);
+    else this.counter.update(this.car.position);
   }
 
   /** Balapan diulang: kembali ke kotak start. */

@@ -288,6 +288,15 @@ async function boot() {
     scJoin: rejoinPoint,
     scPark: scPose.position,
     ambPark: ambPose.position,
+    // Mobil mogok diderek ke kotaknya sendiri: pemain kotak 0, lawan kotak 1..5
+    // (urutan yang sama dengan grid).
+    pitEntry: new THREE.Vector3(PIT.approach.pos.x, PIT.approach.pos.y, PIT.approach.pos.z),
+    towTo: (name) => {
+      if (name === 'KAMU') return { position: pitBoxes[0].position.clone(), yaw: pitBoxes[0].yaw };
+      const index = RIVAL_PLANS.findIndex((plan) => plan.name === name);
+      const box = index >= 0 ? pitBoxes[Math.min(index + 1, pitBoxes.length - 1)] : null;
+      return box ? { position: box.position.clone(), yaw: box.yaw } : null;
+    },
   });
 
   const playerLaps = new LapCounter(TRACK.main, TRACK.start, car.position);
@@ -706,7 +715,9 @@ async function boot() {
         r.lights.reverse = r.rival.car.gear === -1;
       }
     }
-    playerLaps.update(car.position);
+    // Selama diderek, jarak derek tidak dihitung sebagai kemajuan balapan.
+    if (car.isTowed) playerLaps.rebase(car.position);
+    else playerLaps.update(car.position);
     safetyCar.sync(raw);
     ambulance.sync(raw);
     traffic[traffic.length - 2].speed = safetyCar.car.speed;

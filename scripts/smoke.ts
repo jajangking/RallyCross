@@ -5,7 +5,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import { defaultConfig, VehiclePhysics, type VehicleInput } from '../src/vehicle/VehiclePhysics';
-import { BROADCAST_SPOTS, buildTrackColliders, PIT, TRACK } from '../src/world/track';
+import { BROADCAST_SPOTS, buildTrackColliders, PIT, pitPose, TRACK } from '../src/world/track';
 import { FocusDirector } from '../src/camera/FocusDirector';
 import { PitStop, serviceTimeFor } from '../src/race/PitStop';
 import { RaceControl, type ServiceHandle } from '../src/race/RaceControl';
@@ -125,6 +125,47 @@ async function run() {
   check(car.wheels.every((w) => w.contact), 'all 4 wheels grounded');
   const load = car.wheels.reduce((s, w) => s + w.springForce, 0);
   check(Math.abs(load - defaultConfig.mass * 9.81) < 400, 'static load ≈ weight', `${load.toFixed(0)} N`);
+
+  /* ---------------------------------------------------------------- */
+  console.log('\n— derek (recovery) —');
+  {
+    const towWorld = flatWorld();
+    const towCar = new VehiclePhysics(towWorld, defaultConfig, new THREE.Vector3(0, 0.95, 0));
+    drive(towCar, towWorld, 1, coast);
+    const ground = towCar.position.clone();
+
+    // Diikat ke derek: bodi jadi kinematik, mesin & gravitasi tidak berlaku.
+    towCar.setTowed(true);
+    check(towCar.isTowed, 'mobil bisa diikat ke derek');
+    drive(towCar, towWorld, 1, gas);
+    check(
+      towCar.position.distanceTo(ground) < 0.3 && Math.abs(towCar.speed) < 0.01,
+      'selama diikat: gas tidak berpengaruh, mobil tidak bergerak sendiri',
+      `geser ${towCar.position.distanceTo(ground).toFixed(2)} m`,
+    );
+
+    // Diangkut: ikut pose yang diberikan, tidak jatuh.
+    const carried = new THREE.Vector3(12, 2.1, 30);
+    for (let i = 0; i < 30; i++) {
+      towCar.carryTo(carried, 0.6);
+      towWorld.step();
+      towCar.sync();
+    }
+    check(
+      towCar.position.distanceTo(carried) < 0.4 && towCar.position.y > 1.5,
+      'mobil ikut terangkat di belakang derek (tidak jatuh)',
+      `${towCar.position.x.toFixed(1)}, ${towCar.position.y.toFixed(2)}, ${towCar.position.z.toFixed(1)}`,
+    );
+
+    // Diturunkan di pit: kembali jadi mobil biasa dan bisa jalan lagi.
+    const dropSpot = new THREE.Vector3(12, 1.05, 30);
+    towCar.dropAt(dropSpot, 0.6);
+    towCar.setTowed(false);
+    drive(towCar, towWorld, 1.2, coast);
+    check(!towCar.isTowed && towCar.wheels.some((w) => w.contact), 'setelah diturunkan: roda menyentuh tanah lagi');
+    drive(towCar, towWorld, 3, gas);
+    check(towCar.speed > 12, 'setelah diturunkan mobil bisa jalan lagi', `${towCar.speed.toFixed(1)} m/s`);
+  }
 
   /* ---------------------------------------------------------------- */
   console.log('\n— acceleration (4s) —');
@@ -1452,9 +1493,220 @@ async function run() {
       control.update(DT, cars);
       if (hurt.bodyHealth === 1) handled = true;
     }
-    check(handled, 'ambulans menangani di lokasi: mobil diperbaiki di tempat');
+    check(handled, 'tanpa kotak servis: marshal memperbaiki mobil di tempat');
     check(control.flag === 'green' && !control.scActive, 'setelah insiden selesai: safety car masuk, hijau lagi', control.scPhase);
     check(control.drainEvents().length >= 0, 'pengawas balapan punya antrean pesan untuk HUD');
+
+
+    // --- derek: mobil mogok diangkut ke kotak servisnya, lalu diservis ---
+    {
+      const towEvents: string[] = [];
+      const towBox = { position: PIT.boxes[4].position.clone(), yaw: PIT.boxes[4].yaw };
+      const towState = {
+        arrived: false,
+        hooked: false,
+        carried: 0,
+        dropped: null as THREE.Vector3 | null,
+      };
+      const wreck = new VehicleDamage();
+      wreck.impact(0, 0, -22);
+      wreck.impact(0, 0, -22);
+      const crashSpot = TRACK.at(TRACK.start + 150).pos;
+      const wreckCar = {
+        position: new THREE.Vector3(crashSpot.x, 1, crashSpot.z),
+        speed: 0,
+        damage: wreck,
+        setTowed: (on: boolean) => {
+          towState.hooked = on;
+          towEvents.push(on ? 'kait' : 'lepas');
+        },
+        carryTo: (pos: THREE.Vector3) => {
+          towState.carried++;
+          wreckCar.position.copy(pos);
+        },
+        dropAt: (pos: THREE.Vector3) => {
+          towState.dropped = pos.clone();
+          wreckCar.position.copy(pos);
+          towEvents.push('turun');
+        },
+      };
+      const ambCalls: string[] = [];
+      const amb = {
+        calls: ambCalls,
+        // `reachedRoute` dibaca pengawas tiap langkah; di uji ini dikendalikan
+        // manual supaya fase derek bisa diperiksa satu per satu.
+        get reachedRoute() {
+          return towState.arrived;
+        },
+        car: { position: new THREE.Vector3() },
+        followLine: () => void ambCalls.push('line'),
+        driveRoute: (points: THREE.Vector3[], after: string) =>
+          void ambCalls.push(`route:${points.length}:${after}`),
+        parkNow: () => void ambCalls.push('park'),
+      };
+      const towControl = new RaceControl(
+        {
+          safety: makeHandle(),
+          ambulance: amb,
+          scJoin: svJoin.clone(),
+          scPark: PIT.boxes[5].position.clone(),
+          ambPark: new THREE.Vector3(0, 0, 0),
+          pitEntry: new THREE.Vector3(PIT.approach.pos.x, PIT.approach.pos.y, PIT.approach.pos.z),
+          towTo: () => towBox,
+        },
+        { minSafetyTime: 4, hookTime: 0.5 },
+      );
+      const towCars = [
+        { name: 'KAMU', car: healthyCar, isPlayer: true },
+        { name: 'Krisna', car: wreckCar },
+      ];
+      towControl.update(DT, towCars);
+      check(
+        towControl.ambPhase === 'toScene',
+        'mobil mogok: ambulans meluncur ke lokasi',
+        towControl.ambPhase,
+      );
+
+      // Ambulans tiba di lokasi → kait mobilnya.
+      towState.arrived = true;
+      for (let i = 0; i < Math.round(1 / DT); i++) {
+        if (towControl.ambPhase === 'hooking') towState.arrived = false;
+        towControl.update(DT, towCars);
+      }
+      check(
+        towControl.ambPhase === 'towing' && towState.hooked,
+        'setelah tiba: mobil dikait ke derek',
+        `fase ${towControl.ambPhase}, ${towEvents.join('/') || 'tanpa kaitan'}`,
+      );
+
+      // Selama diangkut mobil ikut bergerak, belum diperbaiki, dan bukan
+      // perbaikan diam-diam.
+      amb.car.position.set(20, 0, 30);
+      for (let i = 0; i < Math.round(2 / DT); i++) towControl.update(DT, towCars);
+      check(
+        towState.carried > 10 && wreck.bodyHealth < 1,
+        'selama diderek mobil ikut bergerak & belum diperbaiki',
+        `${towState.carried}x angkut, bodi ${(wreck.bodyHealth * 100).toFixed(0)} %`,
+      );
+      check(
+        Math.abs(wreckCar.position.z - 30) < 8 && Math.abs(wreckCar.position.x - 20) < 8,
+        'posisi mobil mengikuti derek, bukan melayang sendiri',
+        `${wreckCar.position.x.toFixed(0)}, ${wreckCar.position.z.toFixed(0)}`,
+      );
+
+      // Sampai di kotak: turun di kotaknya, lalu servis (bukan instan).
+      towState.arrived = true;
+      for (let i = 0; i < 3; i++) towControl.update(DT, towCars);
+      const dropped = towState.dropped;
+      check(
+        dropped !== null && dropped.distanceTo(towBox.position) < 2.5 && !towState.hooked,
+        'derek menurunkan mobil di kotak servisnya',
+        dropped ? `${dropped.distanceTo(towBox.position).toFixed(1)} m dari kotak` : 'tidak turun',
+      );
+      check(
+        wreck.bodyHealth < 1,
+        'mobil belum diperbaiki saat baru turun dari derek',
+        `${(wreck.bodyHealth * 100).toFixed(0)} %`,
+      );
+      let repairedAt = -1;
+      let t = 0;
+      for (let i = 0; i < Math.round(25 / DT) && repairedAt < 0; i++) {
+        towControl.update(DT, towCars);
+        t += DT;
+        if (wreck.bodyHealth === 1) repairedAt = t;
+      }
+      check(
+        repairedAt > 3,
+        'servis di pit memakan waktu (bukan perbaikan instan)',
+        `${repairedAt.toFixed(1)} s`,
+      );
+      check(towState.hooked === false, 'mobil sudah lepas dari derek setelah servis');
+      check(
+        towControl.drainEvents().some((e) => e.kind === 'towing'),
+        'HUD dapat pesan "diderek ke pit"',
+      );
+      check(
+        ambCalls.some((c) => c.startsWith('route:1:park')),
+        'derek diarahkan ke kotak servisnya',
+        ambCalls.join(' '),
+      );
+    }
+
+    // --- integrasi: ambulans sungguhan menderek mobil sungguhan ke pit ---
+    {
+      const towWorld = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+      towWorld.timestep = DT;
+      buildTrackColliders(towWorld);
+      const crash = TRACK.at(TRACK.start + 170);
+      const wreckCar = new VehiclePhysics(
+        towWorld,
+        defaultConfig,
+        new THREE.Vector3(crash.pos.x, 1.0, crash.pos.z),
+        crash.yaw,
+      );
+      wreckCar.damage.impact(0, 0, -24);
+      wreckCar.damage.impact(0, 0, -24);
+      const ambPose = pitPose(PIT.from + 6, 7.4);
+      const towAmb = new ServiceVehicle({
+        kind: 'ambulance',
+        world: towWorld,
+        park: ambPose.position,
+        yaw: ambPose.yaw,
+        main: TRACK.main,
+        joker: TRACK.joker,
+        color: 0xf2f4f7,
+        detail: false,
+      });
+      const towSafety = new ServiceVehicle({
+        kind: 'safety',
+        world: towWorld,
+        park: pitPose(PIT.from + 2, 7.4).position,
+        yaw: ambPose.yaw,
+        main: TRACK.main,
+        joker: TRACK.joker,
+        color: 0xffffff,
+        detail: false,
+      });
+      const box = PIT.boxes[3];
+      const realControl = new RaceControl(
+        {
+          safety: towSafety,
+          ambulance: towAmb,
+          scJoin: new THREE.Vector3(PIT.rejoin.pos.x, PIT.rejoin.pos.y, PIT.rejoin.pos.z),
+          scPark: PIT.boxes[5].position.clone(),
+          ambPark: ambPose.position.clone(),
+          pitEntry: new THREE.Vector3(PIT.approach.pos.x, PIT.approach.pos.y, PIT.approach.pos.z),
+          towTo: () => ({ position: box.position.clone(), yaw: box.yaw }),
+        },
+        { minSafetyTime: 8, hookTime: 0.8 },
+      );
+      const cars = [{ name: 'Krisna', car: wreckCar }];
+      let rescuedAt = -1;
+      let towed = false;
+      let t = 0;
+      for (let i = 0; i < Math.round(90 / DT); i++) {
+        towAmb.step(DT);
+        towSafety.step(DT);
+        towWorld.step();
+        towAmb.sync(DT);
+        towSafety.sync(DT);
+        wreckCar.sync();
+        realControl.update(DT, cars);
+        if (wreckCar.isTowed) towed = true;
+        t += DT;
+        if (wreckCar.damage.bodyHealth === 1 && wreckCar.damage.engineHealth === 1) {
+          rescuedAt = t;
+          break;
+        }
+      }
+      const atBox = wreckCar.position.distanceTo(box.position);
+      check(towed, 'integrasi: mobil mogok benar-benar diangkut derek');
+      check(
+        rescuedAt > 0 && atBox < 8,
+        'integrasi: diderek ke pit, diservis, lalu mobil sehat di kotaknya',
+        `${rescuedAt.toFixed(1)} s · ${atBox.toFixed(1)} m dari kotak`,
+      );
+    }
 
     // 6. Tanpa kecelakaan: tidak ada kuning, tidak ada safety car.
     const calm = new RaceControl({
