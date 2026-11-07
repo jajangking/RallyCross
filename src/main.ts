@@ -266,9 +266,10 @@ async function boot() {
     color: 0xf5f7fa,
     detail: !lowQuality,
   });
-  // Ambulans menunggu di area servis (bukan di rumput seberang): dari sana ia
-  // bisa langsung masuk garis balap begitu dipanggil.
-  const ambPose = pitPose(PIT.from + 10, 7.4);
+  // Ambulans menunggu di ujung area servis (setelah kotak terakhir, lebih ke
+  // luar): dari sana ia bisa langsung meluncur ke trek begitu dipanggil, dan
+  // tidak menghalangi kotak servis siapa pun.
+  const ambPose = pitPose(PIT.from + 62, 9.4);
   const ambulance = new ServiceVehicle({
     kind: 'ambulance',
     world,
