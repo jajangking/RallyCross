@@ -419,6 +419,67 @@ if (rc) {
   check(worst < 25, 'kamera TV membidik mobil (bukan garis start)', `meleset maks ${worst.toFixed(0)}°`);
   check(worstGap < 160, 'sutradara memilih kamera di dekat mobil', `selisih maks ${worstGap.toFixed(0)} m`);
   console.log(`    (potongan kamera: ${[...spots].join(', ')})`);
+
+  // Ambulans & derek harus benar-benar keluar saat ada mobil mogok. Pernah
+  // rusak: mobil AI berhenti dengan mesin mati, tapi ambulans diam di parkirnya
+  // karena tidak bisa keluar dari rumput.
+  {
+    const amb = rc.ambulance as any;
+    const ambStart = amb.car.position.clone() as THREE.Vector3;
+    const victims = (rc.rivals as any[]).slice(0, 1);
+    for (const rival of victims) {
+      rival.car.damage.engineHealth = 0;
+      rival.car.damage.engineDead = true;
+      rival.car.damage.bodyHealth = 0.4;
+      // Jangan `placeAt`: teleport otomatis memperbaiki mobil (damage.reset).
+    }
+    const t0 = Date.now();
+    await new Promise((r) => setTimeout(r, 9000));
+    const phase1 = (rc.raceControl as any).ambPhase as string;
+    const moved1 = amb.car.position.distanceTo(ambStart) as number;
+    console.log(`    derek: fase=${phase1} ambulans bergerak ${moved1.toFixed(1)} m (${((Date.now() - t0) / 1000).toFixed(1)} s)`);
+    check(
+      (rc.raceControl as any).flag === 'yellow',
+      'mobil mogok memicu bendera kuning',
+      (rc.raceControl as any).flag,
+    );
+    check(phase1 !== 'off', 'ambulans dikirim ke lokasi (tidak diam di parkir)', phase1);
+    check(moved1 > 15, 'ambulans benar-benar bergerak keluar', `${moved1.toFixed(1)} m`);
+    await new Promise((r) => setTimeout(r, 8000));
+    const phase2 = (rc.raceControl as any).ambPhase as string;
+    const towed = victims.some((v) => v.car.isTowed) || phase2 === 'towing' || phase2 === 'repairing';
+    console.log(`    derek: fase=${phase2} jarak ke korban ${amb.car.position.distanceTo(victims[0].car.position).toFixed(1)} m`);
+    check(towed, 'ambulans sampai, mengait, lalu menderek mobilnya', phase2);
+
+    // Skenario pemain: mobil sendiri mogok → bendera kuning, ambulans datang,
+    // dan mobil pemain benar-benar diangkut (bukan cuma lawan yang dilayani).
+    const control = rc.raceControl as any;
+    // Tunggu insiden sebelumnya selesai supaya ambulansnya sudah di parkir.
+    const waitStart = Date.now();
+    while (control.ambPhase !== 'off' && Date.now() - waitStart < 45000) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    const playerCar = rc.car as any;
+    playerCar.damage.engineHealth = 0;
+    playerCar.damage.engineDead = true;
+    playerCar.damage.bodyHealth = 0.5;
+    let playerTowed = false;
+    const t1 = Date.now();
+    while (Date.now() - t1 < 45000) {
+      await new Promise((r) => setTimeout(r, 250));
+      if (playerCar.isTowed) {
+        playerTowed = true;
+        break;
+      }
+    }
+    check(control.incident?.name === 'KAMU' || playerTowed, 'mobil pemain yang mogok ditangani petugas', control.ambPhase);
+    check(
+      playerTowed,
+      'mobil pemain diangkut derek (bukan hanya diderek lawan)',
+      `${((Date.now() - t1) / 1000).toFixed(1)} s · ${control.ambPhase}`,
+    );
+  }
+
   rc.cameraRig.setMode('chase');
 }
 

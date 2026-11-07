@@ -1,6 +1,6 @@
 # RallyCross — Vehicle Physics Prototype
 
-Prototipe **mobil rally 3D di web** (three.js + Rapier) dengan gaya **kartun sinematik** (cel shading, bayangan matahari asli, langit berlapis, tribun penuh penonton): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **grid 6 mobil** (kamu + 5 lawan AI) yang balapan 3 lap, **jejak ban + asap/debu** dari ban yang benar-benar selip, papan klasemen langsung, **9 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI, dan **helikopter siaran** yang gambar udaranya ikut masuk ke siaran TV. Belum ada multiplayer.
+Prototipe **mobil rally 3D di web** (three.js + Rapier) dengan gaya **kartun sinematik** (cel shading, bayangan matahari asli, langit berlapis, tribun penuh penonton): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **grid 6 mobil** (kamu + 5 lawan AI) yang balapan 10 lap, **jejak ban + asap/debu** dari ban yang benar-benar selip, papan klasemen langsung, **9 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI, dan **helikopter siaran** yang gambar udaranya ikut masuk ke siaran TV. Belum ada multiplayer.
 
 ## Jalanin
 
@@ -298,7 +298,7 @@ Cara sutradaranya bekerja (`src/camera/BroadcastDirector.ts`):
 
 ## Grid 6 mobil (5 lawan AI)
 
-Di grid ada **enam mobil**: punyamu + **lima lawan AI** dengan nama dan warna sendiri (Krisna, Bagas, Sari, Damar, Nadia). Balapan **3 lap** (bisa diubah di panel → *Lawan*), dan semuanya memakai `VehiclePhysics` yang sama — ban, suspensi, lompatan, dan tabrakan diperlakukan sama seperti mobilmu, jadi tidak ada hax. Yang berbeda cuma pengetahuan garis balap: lajur (`laneOffset` ±0,6/±1,2 m), jarak di grid (18–32 m), dan `pace` 0,97–1,0.
+Di grid ada **enam mobil**: punyamu + **lima lawan AI** dengan nama dan warna sendiri (Krisna, Bagas, Sari, Damar, Nadia). Balapan **10 lap** (bisa diubah di panel → *Lawan*, 1–20), dan semuanya memakai `VehiclePhysics` yang sama — ban, suspensi, lompatan, dan tabrakan diperlakukan sama seperti mobilmu, jadi tidak ada hax. Yang berbeda cuma pengetahuan garis balap: lajur (`laneOffset` ±0,6/±1,2 m), jarak di grid (18–32 m), dan `pace` 0,97–1,0.
 
 - **Garis sendiri.** `AutoPilot` menggeser *seluruh* garis balap ke samping (`laneOffset`), bukan cuma titik tujuannya, jadi enam mobil tidak berebut potongan aspal yang sama. Garis yang sudah digeser dihitung ulang penuh (tangent, side, dan kelengkungan 7-tap) — tanpa itu, kecepatan tikungan dihitung dari radius garis lama.
 - **Saling melihat.** Semua mobil berbagi satu daftar `traffic` (referensi posisi, bukan salinan) yang diperbarui tiap frame. Mobil yang lebih lambat < 12 m di depan memotong target kecepatan (`kecepatan dia + (jarak − 6) × 1,6`), dan mobil sejajar di sisi tujuan menyalip membuat AI memilih sisi lain atau menunggu.
@@ -307,7 +307,7 @@ Di grid ada **enam mobil**: punyamu + **lima lawan AI** dengan nama dan warna se
 - **Rekor lap.** Setiap kali ada mobil (termasuk kamu) mencatat lap tercepat baru, angka itu masuk papan rekor, disimpan di `localStorage` (`rallycross.recordLap.v1`), dan baris **REKOR BARU 30,92s · Bagas** menyala emas selama ~3 detik. Jadi AI memang saling menciptakan rekor, bukan cuma kamu.
 - **Putaran dihitung di garis start**, bukan di ujung spline: `LapCounter` memakai odometer yang tidak pernah wrap.
 - **Terbalik / terlempar** → dibiarkan, tidak di-reset (lihat bagian AI di atas).
-- Selesai 3 lap → banner `FINISH · P1 KAMU` / `FINISH · P1 <nama>`; `R` mengulang dari grid.
+- Selesai 10 lap → banner `FINISH · P1 KAMU` / `FINISH · P1 <nama>`; `R` mengulang dari grid.
 
 Hasil uji headless 6 mobil di trek asli (`LAPS=3`, fisika penuh): **seluruh grid finis dalam 102 s**, jarak terdekat **1,84 m** (0 tabrakan, 0 rescue), lap terbaik 29,92–31,70 s — selisih pemimpin–pemburu cuma 1,8 s. Hasilnya deterministik (dua run identik).
 

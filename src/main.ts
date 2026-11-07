@@ -301,7 +301,7 @@ async function boot() {
 
   const playerLaps = new LapCounter(TRACK.main, TRACK.start, car.position);
   const race = {
-    laps: 3,
+    laps: 10,
     rivals: true,
     // Pengali kecepatan semua lawan (1 = sesuai rencana di `grid.ts`).
     pace: 1,
@@ -579,7 +579,7 @@ async function boot() {
       // Skala semua lawan, tapi urutannya tetap: yang paling cepat tetap di depan.
       applyRivalSkills();
     });
-  fRival.add(race, 'laps', 1, 9, 1).name('jumlah lap');
+  fRival.add(race, 'laps', 1, 20, 1).name('jumlah lap');
   fRival.add({ clear: () => skidMarks.clear() }, 'clear').name('hapus jejak ban');
 
   // Kerusakan: setelan ini berlaku untuk semua mobil (pemain & lawan), jadi
@@ -732,11 +732,17 @@ async function boot() {
     }
 
     // --- pit: pemain servis kalau berhenti di kotaknya ---
-    if (playerPit.update(raw, car)) bannerPit('SERVIS SELESAI · GAS!');
+    // Diderek = bukan pit stop: jangan mulai servis sendiri saat mobil diangkut
+    // atau saat ambulans yang menurunkan & menservisnya di kotak.
+    const pitSelfService = !car.isTowed && !raceControl.isRepairing('KAMU');
+    if (pitSelfService && playerPit.update(raw, car)) bannerPit('SERVIS SELESAI · GAS!');
+    const towService = raceControl.isRepairing('KAMU') ? raceControl.repairStatus : null;
     hud.setPit(
-      playerPit.busy
+      pitSelfService && playerPit.busy
         ? { label: `PIT · ${Math.max(0, playerPit.remaining).toFixed(1)} s`, progress: playerPit.progress }
-        : null,
+        : towService
+          ? { label: `DEREK · DISERVIS ${towService.remaining.toFixed(1)} s`, progress: towService.progress }
+          : null,
     );
 
     // --- pit AI: masuk kalau mobilnya sudah terlalu rusak ---
@@ -931,6 +937,9 @@ async function boot() {
     rivals: rivals.map((r) => r.rival),
     records,
     skills,
+    raceControl,
+    safetyCar,
+    ambulance,
     skidMarks,
     smoke,
     cameraRig,

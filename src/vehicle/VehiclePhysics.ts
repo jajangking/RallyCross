@@ -355,6 +355,16 @@ export class VehiclePhysics {
     this.placeAt(this.spawn, this.spawnYaw);
   }
 
+  /**
+   * Seberapa tegak mobilnya: 1 = roda di bawah, 0 = miring 90°, negatif =
+   * terbalik. Dipakai pengawas balapan untuk mengenali mobil terbalik (tidak
+   * bisa jalan sendiri → ambulans datang dan mendereknya).
+   */
+  get upright(): number {
+    const q = this.quaternion;
+    return 1 - 2 * (q.x * q.x + q.z * q.z);
+  }
+
   /* ------------------------------------------------------------------ */
   /* derek (recovery): mobil diangkut, fisika dimatikan sementara        */
   /* ------------------------------------------------------------------ */

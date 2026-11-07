@@ -1708,6 +1708,36 @@ async function run() {
       );
     }
 
+    // 6. Mobil terbalik (mesin & bodi masih utuh) = tidak bisa jalan → ambulans
+    //    datang dan mendereknya, bukan cuma didiamkan.
+    {
+      const flipped = new RaceControl(
+        {
+          safety: makeHandle(),
+          ambulance: makeHandle(),
+          scJoin: svJoin.clone(),
+          scPark: new THREE.Vector3(),
+          ambPark: new THREE.Vector3(),
+          towTo: () => ({ position: new THREE.Vector3(12, 1, 30), yaw: 0 }),
+        },
+        { minSafetyTime: 8 },
+      );
+      const upsideDown = {
+        name: 'KAMU',
+        car: {
+          position: new THREE.Vector3(),
+          speed: 0,
+          damage: new VehicleDamage(),
+          upright: 0.1,
+          setTowed: () => {},
+          carryTo: () => {},
+          dropAt: () => {},
+        },
+      };
+      for (let i = 0; i < 20; i++) flipped.update(DT, [upsideDown]);
+      check(flipped.flag === 'yellow' && flipped.ambPhase !== 'off', 'mobil terbalik mengirim ambulans', flipped.ambPhase);
+    }
+
     // 6. Tanpa kecelakaan: tidak ada kuning, tidak ada safety car.
     const calm = new RaceControl({
       safety: makeHandle(),

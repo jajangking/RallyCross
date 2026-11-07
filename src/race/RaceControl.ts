@@ -10,11 +10,12 @@ import { serviceTimeFor } from './PitStop';
  * di fisika — bukan timer acak.
  *
  * Alurnya:
- *  1. Ada mobil hancur (mesin mati / dua roda copot / bodi < 25 %) atau
- *     berhenti lama setelah menabrak → **insiden**.
+ *  1. Ada mobil hancur (mesin mati / dua roda copot / bodi < 25 % / terbalik)
+ *     atau berhenti lama setelah menabrak → **insiden**.
  *  2. Safety car keluar dari area servis, masuk garis balap, dan memimpin
  *     rombongan pelan (semua AI melambat, dilarang menyalip).
- *  3. Kalau mobilnya **tidak bisa jalan** (mesin mati / roda copot), ambulans
+ *  3. Kalau mobilnya **tidak bisa jalan** (mesin mati / roda copot / terbalik),
+ *     ambulans
  *     meluncur ke lokasi, mengait mobil itu, lalu **mendereknya ke kotak
  *     servisnya**. Servis di pit tetap memakan waktu seperti pit stop biasa
  *     (tidak ada perbaikan instan di tempat). Kalau derek tidak tersedia
@@ -32,6 +33,8 @@ export interface ServiceHandle {
   driveRoute(points: THREE.Vector3[], after: 'park' | 'line', pace?: number): void;
   /** Susuri garis balap sampai dekat titik, lalu berhenti di sisinya. */
   intercept?(target: THREE.Vector3, pace?: number): void;
+  /** Berhenti di tempat (tanpa teleport ke kotak parkir). */
+  hold?(): void;
   parkNow(): void;
   readonly car: { position: THREE.Vector3; yaw?: number };
 }
@@ -48,6 +51,8 @@ export interface RaceCar {
     carryTo?(position: THREE.Vector3, yaw: number): void;
     /** Turunkan mobil di kotak servis **tanpa** memperbaikinya. */
     dropAt?(position: THREE.Vector3, yaw: number): void;
+    /** 1 = tegak, < 0,25 = terbalik/miring (opsional untuk uji). */
+    upright?: number;
   };
   isPlayer?: boolean;
 }
@@ -155,6 +160,20 @@ export class RaceControl {
     return this.flag === 'yellow' ? this.options.yellowPace : 1;
   }
 
+  /** Sisa waktu servis setelah derek (untuk HUD), `null` kalau tidak ada. */
+  get repairStatus(): { remaining: number; progress: number } | null {
+    if (this.ambPhase !== 'repairing' || this.repairTime <= 0) return null;
+    return {
+      remaining: Math.max(0, this.repairTime - this.attendTimer),
+      progress: Math.min(1, this.attendTimer / this.repairTime),
+    };
+  }
+
+  /** Mobil `name` sedang diservis setelah diderek? (Pit stop pemain dilewati.) */
+  isRepairing(name: string): boolean {
+    return this.incident?.name === name && this.ambPhase === 'repairing';
+  }
+
   get overtakeAllowed(): boolean {
     return this.flag === 'green';
   }
@@ -219,8 +238,14 @@ export class RaceControl {
     if (this.ambPhase === 'toScene') {
       if (!ambulance) {
         this.ambPhase = 'off';
-      } else if (ambulance.reachedRoute) {
+      } else if (
+        ambulance.reachedRoute ||
+        // Cukup dekat dengan mobilnya (bukan titik lama saat insiden mulai:
+        // mobil bisa menggelinding atau terdorong).
+        ambulance.car.position.distanceTo(incident.target.position) < 10
+      ) {
         this.attendTimer = 0;
+        ambulance.hold?.();
         if (this.towTarget) {
           // Mobil tidak bisa jalan: kait dan derek ke kotak servisnya.
           this.ambPhase = 'hooking';
@@ -268,7 +293,8 @@ export class RaceControl {
           this.ambPhase = 'repairing';
           this.attendTimer = 0;
           this.repairTime = serviceTimeFor(incident.target.damage);
-          ambulance.parkNow();
+          // Tetap di kotak selama servis (jangan teleport pulang).
+          ambulance.hold?.();
           this.events.push({ kind: 'towing', text: 'MOBIL TIBA DI PIT · DISERVIS' });
         }
       } else {
@@ -339,8 +365,14 @@ export class RaceControl {
     for (const entry of cars) {
       const car = entry.car;
       const damage = car.damage;
+      // Terbalik = tidak bisa jalan sendiri, walau mesinnya masih hidup.
+      const flipped = (car.upright ?? 1) < 0.25;
       const wrecked =
-        damage.engineDead || damage.immobile || damage.lostCount >= 2 || damage.bodyHealth < 0.25;
+        damage.engineDead ||
+        damage.immobile ||
+        damage.lostCount >= 2 ||
+        damage.bodyHealth < 0.25 ||
+        flipped;
 
       const slow = Math.abs(car.speed) < this.options.stoppedSpeed;
       const stuckFor = slow ? (this.stopped.get(entry.name) ?? 0) + dt : 0;
@@ -348,10 +380,12 @@ export class RaceControl {
 
       // Berhenti lama TANPA rusak berat = mungkin nyangkut; tetap dikirim
       // marshal supaya balapan tidak macet, tapi tanpa ambulans.
-      const blocked = stuckFor > this.options.stuckTime && damage.bodyHealth < 0.95;
+      const blocked = stuckFor > this.options.stuckTime && (damage.bodyHealth < 0.95 || flipped);
 
       if (wrecked || blocked) {
-        this.startIncident(entry, wrecked && (damage.engineDead || damage.immobile));
+        // Ambulans selalu dikirim untuk mobil yang rusak berat; yang ringan
+        // cukup ditangani marshal (safety car saja).
+        this.startIncident(entry, wrecked);
         return;
       }
     }
@@ -371,9 +405,15 @@ export class RaceControl {
     this.scPhase = 'deploying';
     this.yellowTime = 0;
     this.stopped.set(entry.name, 0);
-    // Mobil yang tidak bisa jalan diderek ke kotak servisnya (kalau ada).
-    const stuck = entry.car.damage.engineDead || entry.car.damage.immobile || entry.car.damage.lostCount >= 2;
-    this.towTarget = medical && stuck ? (this.setup.towTo?.(entry.name) ?? null) : null;
+    // Mobil yang **tidak bisa jalan** diderek ke kotak servisnya (kalau ada):
+    // mesin mati, roda tinggal dua, atau terbalik.
+    const damage = entry.car.damage;
+    const canDrive =
+      !damage.engineDead &&
+      !damage.immobile &&
+      damage.lostCount < 2 &&
+      (entry.car.upright ?? 1) >= 0.25;
+    this.towTarget = medical && !canDrive ? (this.setup.towTo?.(entry.name) ?? null) : null;
     this.repairTime = 0;
 
     this.setup.safety?.driveRoute([this.setup.scJoin], 'line', 0.7);
