@@ -69,6 +69,10 @@ body {
   text-transform: uppercase;
 }
 
+#gear.rev {
+  color: var(--hot);
+}
+
 #gear {
   position: absolute;
   left: 0;
@@ -169,6 +173,13 @@ body.is-touch #hud {
   gap: 10px;
   align-items: flex-end;
   pointer-events: auto;
+}
+
+/* gear + handbrake stacked so the pad keeps its width on small phones */
+#touch .pad .col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 /* ---------- analogue touch controls ---------- */
@@ -290,6 +301,19 @@ body.is-touch #hud {
 
 #touch button:active,
 #touch button.on {
+  transform: scale(0.94);
+}
+
+#touch button.gear {
+  color: var(--ok);
+  border-color: rgba(87, 214, 141, 0.32);
+  letter-spacing: 0.04em;
+}
+
+#touch button.gear.on {
+  color: #fff;
+  background: rgba(255, 90, 60, 0.55);
+  border-color: rgba(255, 90, 60, 0.9);
   transform: scale(0.94);
 }
 

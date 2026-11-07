@@ -5,6 +5,9 @@ const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(mi
 const moveTowards = (current: number, target: number, maxDelta: number) =>
   current + clamp(target - current, -maxDelta, maxDelta);
 
+/** 1 = gigi maju (D), -1 = gigi mundur (R). */
+export type GearDirection = 1 | -1;
+
 export interface VehicleConfig {
   /* chassis */
   mass: number;
@@ -34,6 +37,9 @@ export interface VehicleConfig {
   handbrakeForce: number;
   frontSplit: number;
   maxSpeed: number;
+  reverseMaxSpeed: number;
+  /** Kecepatan maksimum (m/s) saat gigi D/R boleh ditukar. */
+  shiftSpeedLimit: number;
   rollingResistance: number;
   /* tires */
   muFront: number;
@@ -77,6 +83,8 @@ export const defaultConfig: VehicleConfig = {
   handbrakeForce: 9000,
   frontSplit: 0.42,
   maxSpeed: 55,
+  reverseMaxSpeed: 12,
+  shiftSpeedLimit: 1.5,
   rollingResistance: 40,
 
   muFront: 1.25,
@@ -93,12 +101,24 @@ export const defaultConfig: VehicleConfig = {
 };
 
 export interface VehicleInput {
-  throttle: number; // -1 (brake/reverse) .. 1 (gas)
-  steer: number; // -1 (left) .. 1 (right)
+  /** Bukaan gas 0..1. Selalu mendorong ke arah gigi yang aktif. */
+  throttle: number;
+  /** Bukaan rem 0..1. Hanya memperlambat — tidak pernah membuat mobil mundur. */
+  brake: number;
+  /** -1 (kiri) .. 1 (kanan). */
+  steer: number;
   handbrake: boolean;
+  /** Gigi yang diminta pengemudi; mobil hanya menerimanya saat hampir berhenti. */
+  gear: GearDirection;
 }
 
-export const neutralInput: VehicleInput = { throttle: 0, steer: 0, handbrake: false };
+export const neutralInput: VehicleInput = {
+  throttle: 0,
+  brake: 0,
+  steer: 0,
+  handbrake: false,
+  gear: 1,
+};
 
 export interface WheelState {
   isFront: boolean;
@@ -134,20 +154,24 @@ export class VehiclePhysics {
 
   steerAngle = 0;
   speed = 0;
+  /** Gigi yang benar-benar aktif (bisa berbeda dari yang diminta input). */
+  gear: GearDirection = 1;
 
   private readonly world: RAPIER.World;
   private readonly spawn: THREE.Vector3;
   private readonly ray = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
   private readonly comPos = new THREE.Vector3();
 
-  /* scratch */
-  private readonly tUp = new THREE.Vector3();
-  private readonly tDown = new THREE.Vector3();
-  private readonly tFwd = new THREE.Vector3();
-  private readonly tR = new THREE.Vector3();
-  private readonly tV = new THREE.Vector3();
-  private readonly tN = new THREE.Vector3();
-  private readonly tForce = new THREE.Vector3();
+  /* scratch — satu set, dipakai ulang tiap step (tanpa alokasi di hot loop) */
+  private readonly sUp = new THREE.Vector3();
+  private readonly sDown = new THREE.Vector3();
+  private readonly sFwd = new THREE.Vector3();
+  private readonly sRel = new THREE.Vector3();
+  private readonly sPointVel = new THREE.Vector3();
+  private readonly sForce = new THREE.Vector3();
+  private readonly sDrift = new THREE.Vector3();
+  private readonly impulse = { x: 0, y: 0, z: 0 };
+  private readonly impulseAt = { x: 0, y: 0, z: 0 };
 
   constructor(world: RAPIER.World, cfg: VehicleConfig = defaultConfig, spawn = new THREE.Vector3(0, 0.95, 0)) {
     this.world = world;
@@ -212,6 +236,11 @@ export class VehiclePhysics {
     return Math.abs(this.speed) * 3.6;
   }
 
+  /** 'D' atau 'R' — untuk HUD. */
+  get gearName(): 'D' | 'R' {
+    return this.gear === -1 ? 'R' : 'D';
+  }
+
   /** Recompute mass / inertia from the current config (used by live tuning). */
   applyMassProperties() {
     const cfg = this.cfg;
@@ -231,6 +260,11 @@ export class VehiclePhysics {
     this.body.recomputeMassPropertiesFromColliders();
   }
 
+  /** Angular damping hanya bisa diubah lewat body, jadi slider GUI memanggil ini. */
+  applyDamping() {
+    this.body.setAngularDamping(this.cfg.angularDamping);
+  }
+
   /** Public transform refresh so the renderer can draw the post-step pose. */
   sync() {
     this.syncTransform();
@@ -239,11 +273,8 @@ export class VehiclePhysics {
   /** Angle between the chassis heading and the travel direction (radians). */
   get driftAngle() {
     if (this.speed < 3) return 0;
-    const vx = this.velocity.x;
-    const vz = this.velocity.z;
-    const hx = this.tFwd.set(0, 0, 1).applyQuaternion(this.quaternion).x;
-    const hz = this.tFwd.z;
-    return Math.atan2(hx * vz - hz * vx, hx * vx + hz * vz);
+    const h = this.sDrift.set(0, 0, 1).applyQuaternion(this.quaternion);
+    return Math.atan2(h.x * this.velocity.z - h.z * this.velocity.x, h.x * this.velocity.x + h.z * this.velocity.z);
   }
 
   reset() {
@@ -252,12 +283,15 @@ export class VehiclePhysics {
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     this.steerAngle = 0;
+    this.speed = 0;
+    this.gear = 1;
     for (const w of this.wheels) {
       w.spinAngle = 0;
       w.contact = false;
       w.suspLength = this.cfg.suspensionRest;
       w.compression = 0;
       w.springForce = 0;
+      w.surfaceMu = 1;
     }
     this.syncTransform();
   }
@@ -270,33 +304,58 @@ export class VehiclePhysics {
   }
 
   /** Advance the vehicle by a fixed physics step. Call BEFORE world.step(). */
-  fixedStep(dt: number, input: VehicleInput) {    const cfg = this.cfg;
+  fixedStep(dt: number, input: VehicleInput) {
     this.syncTransform();
 
     const lin = this.body.linvel();
     this.velocity.set(lin.x, lin.y, lin.z);
     const ang = this.body.angvel();
     this.angularVelocity.set(ang.x, ang.y, ang.z);
+    this.speed = this.velocity.length();
 
-    const up = this.tUp.set(0, 1, 0).applyQuaternion(this.quaternion);
-    const bodyFwd = this.tFwd.set(0, 0, 1).applyQuaternion(this.quaternion);
-    const speed = this.velocity.length();
-    this.speed = speed;
+    const up = this.sUp.set(0, 1, 0).applyQuaternion(this.quaternion);
+    const fwd = this.sFwd.set(0, 0, 1).applyQuaternion(this.quaternion);
+    const forwardSpeed = this.velocity.dot(fwd);
 
-    this.comPos.set(0, cfg.comY, 0).applyQuaternion(this.quaternion).add(this.position);
+    this.comPos.set(0, this.cfg.comY, 0).applyQuaternion(this.quaternion).add(this.position);
 
-    /* ---------------- steering ---------------- */
+    this.updateGear(input.gear, forwardSpeed);
+    this.updateSteering(dt, input.steer, this.speed);
+    this.updateSuspension(up);
+    this.applyAntiRoll();
+    this.applyTireForces(dt, input, up, fwd, forwardSpeed);
+    this.applyAero(dt, up);
+
+    if (this.position.y < -25) this.reset();
+  }
+
+  /**
+   * Gigi hanya boleh ditukar saat mobil hampir berhenti, seperti gearbox manual:
+   * menekan R di tengah lintasan tidak langsung membalik arah mobil.
+   */
+  private updateGear(requested: GearDirection, forwardSpeed: number) {
+    if (requested === this.gear) return;
+    if (Math.abs(forwardSpeed) > this.cfg.shiftSpeedLimit) return;
+    this.gear = requested;
+  }
+
+  private updateSteering(dt: number, steerInput: number, speed: number) {
+    const cfg = this.cfg;
     const maxSteer =
       THREE.MathUtils.degToRad(cfg.maxSteerDeg) * (1 - cfg.steerFalloff * clamp(speed / cfg.maxSpeed, 0, 1));
     // three.js is right-handed: with the car facing +Z, a positive rotation
     // about +Y swings the nose toward +X, which is the car's LEFT (right-hand
     // side of a +Z-facing car is -X). Input +1 means "right", so negate here.
     // Convention: steerAngle > 0 == counter-clockwise (left) in world space.
-    this.steerAngle = moveTowards(this.steerAngle, -input.steer * maxSteer, cfg.steerRate * dt);
+    this.steerAngle = moveTowards(this.steerAngle, -clamp(steerInput, -1, 1) * maxSteer, cfg.steerRate * dt);
+  }
 
-    /* ---------------- suspension raycasts ---------------- */
+  /* ---------------- suspension ---------------- */
+
+  private updateSuspension(up: THREE.Vector3) {
+    const cfg = this.cfg;
+    const down = this.sDown.copy(up).negate();
     const maxToi = cfg.suspensionRest + cfg.wheelRadius;
-    const down = this.tDown.copy(up).negate();
 
     for (const w of this.wheels) {
       w.anchor.copy(w.localAnchor).applyQuaternion(this.quaternion).add(this.position);
@@ -324,41 +383,39 @@ export class VehiclePhysics {
         this.body,
       );
 
-      if (hit) {
-        this.tN.set(hit.normal.x, hit.normal.y, hit.normal.z);
-        if (this.tN.dot(up) < 0.25) {
-          // nearly vertical surface: treat as a wall, not ground
-          w.suspLength = cfg.suspensionRest;
-          w.compression = 0;
-          w.center.copy(w.anchor).addScaledVector(down, cfg.suspensionRest);
-          continue;
-        }
+      w.suspLength = cfg.suspensionRest;
+      w.compression = 0;
 
-        const toi = hit.timeOfImpact;
-        w.contact = true;
-        w.suspLength = clamp(toi - cfg.wheelRadius, 0, cfg.suspensionRest);
-        w.compression = cfg.suspensionRest - w.suspLength;
-        w.contactPoint.copy(w.anchor).addScaledVector(down, toi);
-        w.normal.copy(this.tN);
-        w.surfaceMu = clamp(hit.collider.friction(), 0.15, 1.5);
-
-        this.tR.copy(w.anchor).sub(this.comPos);
-        const vAnchor = this.tV.copy(this.angularVelocity).cross(this.tR).add(this.velocity);
-        // vDown > 0 while the suspension compresses. A damper opposes the
-        // suspension velocity, so it ADDS to the spring force in compression.
-        const vDown = vAnchor.dot(down);
-        w.springForce = Math.max(cfg.springK * w.compression + cfg.damperC * vDown, 0);
-      } else {
-        w.suspLength = cfg.suspensionRest;
-        w.compression = 0;
+      if (!hit) {
         w.center.copy(w.anchor).addScaledVector(down, cfg.suspensionRest);
         continue;
       }
 
+      w.normal.set(hit.normal.x, hit.normal.y, hit.normal.z);
+      if (w.normal.dot(up) < 0.25) {
+        // nearly vertical surface: treat as a wall, not ground
+        w.center.copy(w.anchor).addScaledVector(down, cfg.suspensionRest);
+        continue;
+      }
+
+      const toi = hit.timeOfImpact;
+      w.contact = true;
+      w.suspLength = clamp(toi - cfg.wheelRadius, 0, cfg.suspensionRest);
+      w.compression = cfg.suspensionRest - w.suspLength;
+      w.contactPoint.copy(w.anchor).addScaledVector(down, toi);
+      w.surfaceMu = clamp(hit.collider.friction(), 0.15, 1.5);
+
+      this.sRel.copy(w.anchor).sub(this.comPos);
+      const vAnchor = this.sPointVel.copy(this.angularVelocity).cross(this.sRel).add(this.velocity);
+      // vDown > 0 while the suspension compresses. A damper opposes the
+      // suspension velocity, so it ADDS to the spring force in compression.
+      const vDown = vAnchor.dot(down);
+      w.springForce = Math.max(cfg.springK * w.compression + cfg.damperC * vDown, 0);
       w.center.copy(w.anchor).addScaledVector(down, w.suspLength);
     }
+  }
 
-    /* ---------------- anti-roll bars ---------------- */
+  private applyAntiRoll() {
     const arb = (a: number, b: number, stiffness: number) => {
       const wa = this.wheels[a];
       const wb = this.wheels[b];
@@ -367,13 +424,29 @@ export class VehiclePhysics {
       wa.springForce = Math.max(wa.springForce + f, 0);
       wb.springForce = Math.max(wb.springForce - f, 0);
     };
-    arb(0, 1, cfg.antiRollFront);
-    arb(2, 3, cfg.antiRollRear);
+    arb(0, 1, this.cfg.antiRollFront);
+    arb(2, 3, this.cfg.antiRollRear);
+  }
 
-    /* ---------------- tire forces ---------------- */
+  /* ---------------- tires ---------------- */
+
+  private applyTireForces(
+    dt: number,
+    input: VehicleInput,
+    up: THREE.Vector3,
+    bodyFwd: THREE.Vector3,
+    forwardSpeed: number,
+  ) {
+    const cfg = this.cfg;
     const peak = THREE.MathUtils.degToRad(cfg.peakSlipDeg);
-    const powerScale = clamp(1 - Math.pow(speed / cfg.maxSpeed, 2), 0, 1);
-    const dragScale = 1 - 0.55 * clamp(speed / cfg.maxSpeed, 0, 1);
+    // Power falls off with speed *in the direction of the engaged gear*; the
+    // brake pedal never feeds power, so top speed is capped here only once.
+    const limit = this.gear === 1 ? cfg.maxSpeed : cfg.reverseMaxSpeed;
+    const speedInGear = Math.max(forwardSpeed * this.gear, 0);
+    const powerScale = clamp(1 - Math.pow(speedInGear / limit, 2), 0, 1);
+
+    const throttle = clamp(input.throttle, 0, 1);
+    const brake = clamp(input.brake, 0, 1);
 
     for (const w of this.wheels) {
       if (!w.contact) continue;
@@ -386,8 +459,8 @@ export class VehiclePhysics {
       // right = forward x up  (three.js right-handed -> -X when forward is +Z)
       w.right.crossVectors(w.forward, up).normalize();
 
-      this.tR.copy(w.contactPoint).sub(this.comPos);
-      const vC = this.tV.copy(this.angularVelocity).cross(this.tR).add(this.velocity);
+      this.sRel.copy(w.contactPoint).sub(this.comPos);
+      const vC = this.sPointVel.copy(this.angularVelocity).cross(this.sRel).add(this.velocity);
       const vLong = vC.dot(w.forward);
       const vLat = vC.dot(w.right);
       w.vLong = vLong;
@@ -406,26 +479,26 @@ export class VehiclePhysics {
       let Fy = -Math.sign(alpha) * latScale * mu * Fz;
 
       /* longitudinal */
-      let Fx = 0;
       const share = w.isFront ? cfg.frontSplit * 0.5 : (1 - cfg.frontSplit) * 0.5;
-      const throttle = input.throttle;
+      let Fx = 0;
 
       if (throttle > 0.01) {
-        Fx += cfg.engineForce * throttle * share * powerScale * dragScale;
-      } else if (throttle < -0.01) {
-        if (vLong > 0.4) {
-          const brakeShare = w.isFront ? 0.28 : 0.22;
-          Fx -= Math.sign(vLong) * cfg.brakeForce * -throttle * brakeShare;
-        } else {
-          Fx += cfg.engineForce * throttle * share * 0.5;
-        }
+        Fx += cfg.engineForce * throttle * share * this.gear * powerScale;
+      }
+
+      // The brake only ever opposes the current motion. The `vLong`-based
+      // authority fades out near standstill so it cannot push the car backwards
+      // (that is the reverse gear's job) and cannot jitter around zero.
+      const stoppingAuthority = clamp(Math.abs(vLong) / 1.2, 0, 1);
+      if (brake > 0.01) {
+        const brakeShare = w.isFront ? 0.28 : 0.22;
+        Fx -= Math.sign(vLong) * cfg.brakeForce * brake * brakeShare * stoppingAuthority;
+      }
+      if (input.handbrake && !w.isFront) {
+        Fx -= Math.sign(vLong) * cfg.handbrakeForce * 0.25 * stoppingAuthority;
       }
 
       Fx -= Math.sign(vLong) * cfg.rollingResistance * share;
-
-      if (input.handbrake && !w.isFront) {
-        Fx -= Math.sign(vLong) * cfg.handbrakeForce * 0.25;
-      }
 
       /* friction circle */
       const maxF = mu * Fz;
@@ -437,40 +510,41 @@ export class VehiclePhysics {
       }
       w.traction = maxF > 0 ? clamp(Math.hypot(Fx, Fy) / maxF, 0, 1) : 0;
 
-      this.tForce
-        .copy(up)
+      // Spring pushes along the contact normal (not the chassis up axis) so
+      // slopes and ramps support the car correctly.
+      this.sForce
+        .copy(w.normal)
         .multiplyScalar(w.springForce * dt)
         .addScaledVector(w.forward, Fx * dt)
         .addScaledVector(w.right, Fy * dt);
 
-      this.body.applyImpulseAtPoint(
-        { x: this.tForce.x, y: this.tForce.y, z: this.tForce.z },
-        { x: w.contactPoint.x, y: w.contactPoint.y, z: w.contactPoint.z },
-        true,
-      );
+      this.applyImpulse(this.sForce, w.contactPoint);
 
       w.spinAngle += (vLong / cfg.wheelRadius) * dt;
     }
+  }
 
-    /* ---------------- aero ---------------- */
-    const v2 = speed * speed;
-    if (v2 > 0.01) {
-      this.tForce.copy(this.velocity).normalize().multiplyScalar(-cfg.drag * v2 * dt);
-      this.body.applyImpulseAtPoint(
-        { x: this.tForce.x, y: this.tForce.y, z: this.tForce.z },
-        { x: this.comPos.x, y: this.comPos.y, z: this.comPos.z },
-        true,
-      );
+  /* ---------------- aero ---------------- */
 
-      this.tForce.copy(up).multiplyScalar(-cfg.downforce * v2 * dt);
-      this.body.applyImpulseAtPoint(
-        { x: this.tForce.x, y: this.tForce.y, z: this.tForce.z },
-        { x: this.comPos.x, y: this.comPos.y, z: this.comPos.z },
-        true,
-      );
-    }
+  private applyAero(dt: number, up: THREE.Vector3) {
+    const cfg = this.cfg;
+    const v2 = this.speed * this.speed;
+    if (v2 <= 0.01) return;
 
-    /* ---------------- safety net ---------------- */
-    if (this.position.y < -25) this.reset();
+    this.sForce.copy(this.velocity).normalize().multiplyScalar(-cfg.drag * v2 * dt);
+    this.applyImpulse(this.sForce, this.comPos);
+
+    this.sForce.copy(up).multiplyScalar(-cfg.downforce * v2 * dt);
+    this.applyImpulse(this.sForce, this.comPos);
+  }
+
+  private applyImpulse(force: THREE.Vector3, at: THREE.Vector3) {
+    this.impulse.x = force.x;
+    this.impulse.y = force.y;
+    this.impulse.z = force.z;
+    this.impulseAt.x = at.x;
+    this.impulseAt.y = at.y;
+    this.impulseAt.z = at.z;
+    this.body.applyImpulseAtPoint(this.impulse, this.impulseAt, true);
   }
 }

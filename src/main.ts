@@ -31,7 +31,10 @@ async function boot() {
     throw err;
   }
 
-  renderer.setPixelRatio(lowQuality ? 1 : Math.min(window.devicePixelRatio, 2));
+  // Low quality pins the pixel ratio at 1x; keep that decision for resizes too
+  // (phones re-fire `resize` whenever the address bar appears/disappears).
+  const maxPixelRatio = lowQuality ? 1 : Math.min(window.devicePixelRatio, 2);
+  renderer.setPixelRatio(maxPixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = !lowQuality;
   renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -87,11 +90,15 @@ async function boot() {
     else gui.close();
   };
 
+  // A reset puts the car back on the grid, so the gear lever follows it.
+  const resetCar = () => {
+    car.reset();
+    cameraRig.snap(car);
+    input.setGear(1);
+  };
+
   const input = new Input({
-    reset: () => {
-      car.reset();
-      cameraRig.snap(car);
-    },
+    reset: resetCar,
     camera: () => cameraRig.toggleMode(),
     gui: () => setGui(!guiOpen),
   });
@@ -142,6 +149,8 @@ async function boot() {
   fDrive.add(cfg, 'brakeForce', 2000, 30000, 200);
   fDrive.add(cfg, 'frontSplit', 0, 1, 0.01).name('front split (AWD)');
   fDrive.add(cfg, 'maxSpeed', 20, 90, 1);
+  fDrive.add(cfg, 'reverseMaxSpeed', 4, 30, 0.5).name('reverse top speed');
+  fDrive.add(cfg, 'shiftSpeedLimit', 0.2, 5, 0.1).name('shift below (m/s)');
 
   const fGrip = gui.addFolder('Grip / tires');
   fGrip.add(cfg, 'muFront', 0.2, 2, 0.01);
@@ -166,7 +175,7 @@ async function boot() {
   fAero.add(cfg, 'drag', 0, 2, 0.01);
   fAero.add(cfg, 'downforce', 0, 6, 0.05);
   fAero.add(cfg, 'comY', -0.6, 0, 0.01).name('COM Y').onChange(() => car.applyMassProperties());
-  fAero.add(cfg, 'angularDamping', 0, 1, 0.01);
+  fAero.add(cfg, 'angularDamping', 0, 1, 0.01).onChange(() => car.applyDamping());
 
   const fCam = gui.addFolder('Camera');
   fCam.add(cameraRig, 'distance', 4, 16, 0.1);
@@ -177,10 +186,7 @@ async function boot() {
     Tarmac: () => applyPreset('tarmac'),
     Gravel: () => applyPreset('gravel'),
     Ice: () => applyPreset('ice'),
-    'Reset car': () => {
-      car.reset();
-      cameraRig.snap(car);
-    },
+    'Reset car': resetCar,
     'Copy config': () => {
       console.log(JSON.stringify(cfg, null, 2));
       void navigator.clipboard?.writeText(JSON.stringify(cfg, null, 2)).catch(() => {});
@@ -235,7 +241,7 @@ async function boot() {
 
   /* ---------------- resize ---------------- */
   window.addEventListener('resize', () => {
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(maxPixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     cameraRig.resize(window.innerWidth / window.innerHeight);
   });
