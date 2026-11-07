@@ -126,6 +126,8 @@ async function boot() {
     if (!model) return;
     rivalProcedural.dispose();
     rivalVisual = model;
+    // keep it hidden if the player already switched the rival off
+    model.root.visible = race.rival;
   });
 
   const playerLaps = new LapCounter(TRACK.main, TRACK.start, car.position);
