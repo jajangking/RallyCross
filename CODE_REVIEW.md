@@ -275,3 +275,56 @@ memakai model 3D yang sudah ada, di-porting ke dalam fisika yang sama.
 
 - Track ban visual (±1,51 m) lebih sempit dari anchor fisika (±1,72 m) karena model memakai proporsi pabrikan; yang penting sumbu roda dan alas ban cocok, sehingga tidak ada ban melayang/amblas.
 - Cat bodi bisa diganti tanpa rebuild: `?paint=e23b2e`.
+
+## Iterasi 4 — mobil diam tapi bergeser & ban naik ke bodi (2026-11-07)
+
+Dua laporan: (1) mobil berhenti tapi *grip* naik-turun, mobil bergeser sedikit
+ke kiri/kanan, suspensi naik-turun sendiri; (2) saat shock bekerja (atau saat
+tuning), ban naik sampai kena bodi.
+
+**1. Limit cycle 60 Hz di titik kontak (`VehiclePhysics.applyTireForces`)**
+
+Direproduksi headless: mobil didiamkan di **batas patch gravel/ice** (dua roda
+kena collider berbeda, jadi mobil miring 1 cm). Hasil pengukuran sebelum
+diperbaiki:
+
+| | sebelum | sesudah |
+|---|---|---|
+| geseran 6 s | **23,1 cm** (gravel), **12,5 cm** (ice) | 0,0 cm |
+| kecepatan lateral | berganti tanda tiap frame: +0,095 / −0,057 m/s | ~0 |
+| angka *grip* di HUD | 55–100 % berkedip | 0 % |
+| spread `suspLength` | 7,5 mm | 0,6 mm |
+
+Penyebabnya: gaya lateral ban diterapkan sebagai impuls satu step dengan gain
+`μFz/(0,9·peak)` ≈ 27 kN per m/s. Dengan massa kontak efektif yang lebih kecil
+dari `m/4` (chassis bisa berputar di titik kontak), satu step sudah membalik
+tanda kecepatan → osilasi tak pernah mereda. Perbaikannya: impuls gesek satu
+step dibatasi oleh kecepatan slip (`|F·dt| ≤ |v_slip| · mContact`, `mContact =
+massa/8`), berlaku juga untuk gaya longitudinal yang melawan gerak (rem, rolling
+resistance, handbrake). Di atas ~0,4 m/s slip batas ini tidak pernah aktif, jadi
+grip, drift, dan pengereman tidak berubah — dibuktikan 35 check lama tetap
+hijau.
+
+**2. Ban naik ke rumah roda**
+
+Penyebabnya bukan suspensi, tapi referensi tinggi model: `CarModelVisual`
+dulu memakai `suspensionRest` (pegas *belum* tertekan) sebagai titik nol,
+padahal mobil diam di `suspensionRest − m·g/4k` (sekitar **9,7 cm** lebih
+rendah). Akibatnya ban sudah tergeser 9,7 cm ke dalam fender bahkan sebelum
+shock bergerak, dan setiap kompresi kecil langsung menembus bodi.
+
+Perbaikan: posisi ban sekarang dihitung langsung dari hasil raycast tiap frame,
+`centreY = anchorY − suspLength − wheelRadius + radiusBanModel`. Konsekuensinya:
+ban selalu tepat di bidang tanah, model dipasang untuk pose *settled*, dan
+setelan `suspensionRest`/`springK` di GUI tidak lagi membuat ban naik ke bodi.
+Diukur dengan vertex-scan mesh bodi: ruang ban ke fender **154 mm** saat diam,
+masih 94 mm saat kompresi 6 cm, dan 54 mm saat kompresi 10 cm.
+
+**Test baru (`npm run smoke`, sekarang 41 check)**
+
+- `parked on the gravel edge stays put` (< 2 cm / 6 s)
+- `no grip flicker on the gravel edge` (peak traction < 10 %)
+- `suspension settles on the gravel edge` (spread < 3 mm)
+- versi yang sama untuk **ice edge**
+- Semua sudah diverifikasi *gagal* kalau batas impuls dimatikan, jadi test ini
+  benar-benar menjaga bug-nya.

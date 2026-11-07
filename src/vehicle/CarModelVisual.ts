@@ -50,6 +50,10 @@ export interface AssembledCarModel {
   lights: CarLampRig;
   /** Model units -> metres. */
   scale: number;
+  /** Vertical offset of the model group in car space (metres). */
+  yOffset: number;
+  /** Tyre radius of the imported wheels (metres). */
+  radius: number;
   /** Visual bounding box in car space (metres). */
   size: THREE.Vector3;
   /** Height of a hub in car space at rest (metres). */
@@ -57,6 +61,17 @@ export interface AssembledCarModel {
 }
 
 const WHEEL_NODE = /^(circle|wheel|wheel_|tyre|tire)[\s._-]*\d*$/i;
+
+/**
+ * Suspension length a parked car settles at: the free length minus the static
+ * sag of one corner (`m*g/4` over `springK`). The model must be placed for
+ * THIS pose, not for the uncompressed one, otherwise the body sits a full sag
+ * too low on its wheels and every bump pushes the tyres into the arches.
+ */
+export function suspEquilibrium(cfg: VehicleConfig): number {
+  const sag = (cfg.mass * 9.81) / (4 * Math.max(cfg.springK, 1));
+  return Math.max(cfg.suspensionRest - sag, 0);
+}
 
 /** Championship white; override with `?paint=rrggbb`. */
 const DEFAULT_PAINT = 0xdfe4e8;
@@ -393,10 +408,10 @@ export function assembleCarModel(
     ? rawWheels.reduce((sum, w) => sum + w.center.y, 0) / rawWheels.length
     : box.min.y;
 
-  /* ground is `suspensionRest + wheelRadius` below the body origin (the
-     procedural car rests exactly there), so the imported tyres must touch the
-     same plane instead of hovering or sinking. */
-  const groundY = cfg.anchorY - cfg.suspensionRest - cfg.wheelRadius;
+  /* Height of the body origin above the ground once the car has settled on
+     its springs, so the imported tyres touch the same plane the raycast
+     suspension rests on instead of hovering or sinking into it. */
+  const groundY = cfg.anchorY - suspEquilibrium(cfg) - cfg.wheelRadius;
   const restHubY = groundY + radiusM;
   const yOffset = restHubY - centerYModel * scale;
 
@@ -468,6 +483,8 @@ export function assembleCarModel(
     wheels,
     lights,
     scale,
+    yOffset,
+    radius: radiusM,
     size: visualBox.getSize(new THREE.Vector3()),
     restHubY: restHubY,
   };
@@ -483,6 +500,8 @@ export class CarModelVisual {
 
   private readonly wheels: Array<ModelWheel | null>;
   private readonly scale: number;
+  private readonly yOffset: number;
+  private readonly radius: number;
   private readonly restHubY: number;
   private readonly cfg: VehicleConfig;
   private readonly hubY: number[];
@@ -493,6 +512,8 @@ export class CarModelVisual {
     this.root = assembled.root;
     this.wheels = assembled.wheels;
     this.scale = assembled.scale;
+    this.yOffset = assembled.yOffset;
+    this.radius = assembled.radius;
     this.cfg = phys.cfg;
     this.restHubY = assembled.restHubY;
     this.hubY = [-0.72, -0.72, -0.72, -0.72].map(() => this.restHubY);
@@ -523,15 +544,19 @@ export class CarModelVisual {
     this.root.position.copy(phys.position);
     this.root.quaternion.copy(phys.quaternion);
 
-    const rest = this.cfg.suspensionRest;
+    // The tyre is placed from the raycast suspension itself: its centre sits
+    // `suspLength` under the anchor, so the contact patch stays exactly on the
+    // ground plane for any ride height / spring rate the GUI is tuned to, and
+    // the shock can never pull the tyre up into the arch on its own.
+    const cfg = this.cfg;
     for (let i = 0; i < phys.wheels.length; i++) {
       const state = phys.wheels[i];
-      const travel = state.suspLength - rest; // metres, positive = droop
-      this.hubY[i] = this.restHubY - travel;
+      const centreY = cfg.anchorY - state.suspLength - cfg.wheelRadius + this.radius;
+      this.hubY[i] = centreY;
 
       const wheel = this.wheels[i];
       if (!wheel) continue;
-      wheel.steer.position.y = wheel.centerY - travel / this.scale;
+      wheel.steer.position.y = (centreY - this.yOffset) / this.scale;
       wheel.steer.rotation.y = state.isFront
         ? THREE.MathUtils.clamp(phys.steerAngle, -MAX_VISUAL_STEER, MAX_VISUAL_STEER)
         : 0;

@@ -490,15 +490,30 @@ export class VehiclePhysics {
       // authority fades out near standstill so it cannot push the car backwards
       // (that is the reverse gear's job) and cannot jitter around zero.
       const stoppingAuthority = clamp(Math.abs(vLong) / 1.2, 0, 1);
+      let FxOppose = 0;
       if (brake > 0.01) {
         const brakeShare = w.isFront ? 0.28 : 0.22;
-        Fx -= Math.sign(vLong) * cfg.brakeForce * brake * brakeShare * stoppingAuthority;
+        FxOppose += cfg.brakeForce * brake * brakeShare * stoppingAuthority;
       }
       if (input.handbrake && !w.isFront) {
-        Fx -= Math.sign(vLong) * cfg.handbrakeForce * 0.25 * stoppingAuthority;
+        FxOppose += cfg.handbrakeForce * 0.25 * stoppingAuthority;
       }
+      FxOppose += cfg.rollingResistance * share;
 
-      Fx -= Math.sign(vLong) * cfg.rollingResistance * share;
+      // A tyre can slow the contact patch down but never push it back: the
+      // friction impulse of one step may not exceed the slip velocity. Without
+      // this the explicit integration overshoots at walking pace (the force
+      // reverses the velocity, the next step reverses it again, ...), which
+      // showed up as a parked car creeping sideways with the grip readout
+      // flickering at ~60 Hz. `mContact` is the mass that actually answers an
+      // impulse at one contact patch: a quarter of the car, halved again
+      // because the chassis can rotate around that point instead of
+      // translating. Above ~0.4 m/s of slip the real friction force is smaller
+      // than this cap, so the clamp only ever acts as static friction.
+      const mContact = cfg.mass * 0.125;
+      const maxLatImpulse = (Math.abs(vLat) * mContact) / dt;
+      if (Math.abs(Fy) > maxLatImpulse) Fy = Math.sign(Fy) * maxLatImpulse;
+      Fx -= Math.sign(vLong) * Math.min(FxOppose, (Math.abs(vLong) * mContact) / dt);
 
       /* friction circle */
       const maxF = mu * Fz;

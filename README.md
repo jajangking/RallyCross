@@ -100,6 +100,7 @@ scripts/
 - Tenaga mesin turun sekali terhadap kecepatan relatif gigi (`powerScale`), bukan dua kali seperti versi sebelumnya.
 - **Friction circle**: `√(Fx² + Fy²) ≤ μ·Fz`. Karena `Fz` datang dari kompresi suspensi, load transfer terjadi otomatis.
 - `μ` dikali **friction collider** yang kena raycast → patch gravel (0.62) dan ice (0.28) di scene benar-benar mengubah grip.
+- **Static friction / anti-creep**: impuls gesek satu step dibatasi oleh kecepatan slip di titik kontak (`|F|·dt ≤ |v_slip|·m_contact`). Ban boleh menghentikan tapak, tapi tidak boleh mendorongnya balik. Tanpa batas ini, integrasi eksplisit 60 Hz bisa overshoot dan masuk limit cycle: mobil diam di batas patch gravel/ice bergeser ±0.23 m dalam 6 detik sambil angka *grip* di HUD berkedip 55–100 %. Sekarang 0.0 cm dan 0 %.
 
 **Aero**
 - Drag `0.55·v²`, downforce `1.2·v²` di titik COM.
@@ -115,6 +116,12 @@ perubahan ada di [`public/models/CREDITS.md`](public/models/CREDITS.md).
   dengan `wheelBaseHalf` di fisika; tinggi ban diukur dari bounding box roda,
   jadi keempat ban menyentuh bidang tanah yang sama dengan suspensi (tidak
   melayang, tidak amblas).
+- **Ride height ikut suspensi, bukan pose kosong** — model dipasang untuk posisi
+  mobil *setelah* pegas tertekan berat sendiri (`suspensionRest − m·g/4k`), dan
+  tiap frame posisi ban dihitung dari `suspLength` hasil raycast. Jadi ban
+  selalu menempel di tanah berapa pun setelan `suspensionRest`/`springK` di
+  panel tuning, dan ban tidak naik ke dalam rumah roda saat shock bekerja
+  (sisa ruang ke fender ±154 mm saat diam).
 - **Roda tetap hidup** — empat node roda model di-*re-parent* ke pivot kemudi
   dan pivot putaran, lalu tiap frame mengikuti `steerAngle`, `spinAngle`, dan
   `suspLength` per roda, termasuk gerak naik/turun saat suspensi terkompresi.

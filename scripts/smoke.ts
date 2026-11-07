@@ -103,6 +103,45 @@ async function run() {
   check(car.gear === 1, 'gear stays in drive', car.gearName);
 
   /* ---------------------------------------------------------------- */
+  console.log('\n— parked car does not creep —');
+  // Straddling the edge of a low-grip patch is the nasty case: two wheels see
+  // a different friction collider and sit 1 cm higher, which used to excite a
+  // 60 Hz limit cycle (the car drifted ~20 cm and the grip readout flickered
+  // between 55 % and 100 % while standing still).
+  const parkWorld = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+  parkWorld.timestep = DT;
+  buildTrackColliders(parkWorld);
+  for (const [label, x, z] of [
+    ['gravel edge', 46, 30],
+    ['ice edge', -48, 40],
+  ] as Array<[string, number, number]>) {
+    const parked = new VehiclePhysics(parkWorld, defaultConfig, new THREE.Vector3(x, 1.2, z));
+    for (let i = 0; i < Math.round(4 / DT); i++) {
+      parked.fixedStep(DT, coast);
+      parkWorld.step();
+    }
+    parked.sync();
+    const p0 = parked.position.clone();
+    let gripPeak = 0;
+    let suspSpread = 0;
+    for (let i = 0; i < Math.round(6 / DT); i++) {
+      parked.fixedStep(DT, coast);
+      parkWorld.step();
+      const traction = parked.wheels.reduce((sum, w) => sum + w.traction, 0) / 4;
+      gripPeak = Math.max(gripPeak, traction);
+      const lengths = parked.wheels.map((w) => w.suspLength);
+      suspSpread = Math.max(suspSpread, Math.max(...lengths) - Math.min(...lengths));
+    }
+    parked.sync();
+    const creep = Math.hypot(parked.position.x - p0.x, parked.position.z - p0.z);
+    check(creep < 0.02, `parked on the ${label} stays put`, `creep ${(creep * 100).toFixed(1)} cm / 6 s`);
+    check(gripPeak < 0.1, `no grip flicker on the ${label}`, `peak traction ${(gripPeak * 100).toFixed(0)} %`);
+    check(suspSpread < 0.003, `suspension settles on the ${label}`, `spread ${(suspSpread * 1000).toFixed(1)} mm`);
+    parked.body.setTranslation({ x: 0, y: 50, z: 0 }, true);
+    parked.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+  }
+
+  /* ---------------------------------------------------------------- */
   console.log('\n— steering direction (2.5s full lock) —');
   // Car forward is +Z, so its right-hand side is -X (right = forward x up).
   // yawOf = atan2(fwd.x, fwd.z) => turning right gives a NEGATIVE delta yaw.
