@@ -351,6 +351,59 @@ function raiseBand(ribbon: Ribbon, y0: number, y1: number): Ribbon {
 const facing = (dir: THREE.Vector3) => Math.atan2(dir.x, dir.z);
 
 /** Meshes only — mirrors `buildTrackColliders()` so both stay in sync. */
+/* ------------------------------------------------------------------ */
+/* kamera TV                                                           */
+/* ------------------------------------------------------------------ */
+
+const wrapDistance = (d: number) => ((d % MAIN_LENGTH) + MAIN_LENGTH) % MAIN_LENGTH;
+
+export interface BroadcastSpot {
+  /** Nama pendek untuk overlay, mis. "T2". */
+  name: string;
+  /** Posisi kamera (di menara, di luar tikungan). */
+  position: THREE.Vector3;
+  /** Titik yang dibidik kalau mobilnya jauh (apex tikungan). */
+  aim: THREE.Vector3;
+  /** Jarak tikungan ini dari garis start, meter — dipakai sutradara TV supaya
+   *  kamera berganti tikungan demi tikungan, bukan berdasarkan jarak lurus. */
+  trackDistance: number;
+}
+
+/**
+ * Satu kamera TV di luar setiap tikungan + satu di garis start. Diletakkan di
+ * sisi luar tikungan pada ketinggian menara ~6,5 m, jadi mobil terlihat
+ * datang menghadap kamera lalu lewat — sudut yang dipakai siaran sungguhan.
+ */
+export const BROADCAST_SPOTS: BroadcastSpot[] = (() => {
+  const spots: BroadcastSpot[] = [];
+  const zones = cornerSections(MAIN, 1 / 45);
+  zones.forEach((zone, i) => {
+    const mid = pointAt(MAIN, (zone.from + zone.to) / 2);
+    const entry = pointAt(MAIN, zone.from - 14);
+    const outside = -Math.sign(zone.side) || 1;
+    const position = entry.pos
+      .clone()
+      .addScaledVector(entry.side, outside * (entry.halfWidth + 11));
+    position.y = entry.pos.y + 6.5;
+    const aim = mid.pos.clone();
+    aim.y += 1.2;
+    spots.push({
+      name: `T${i + 1}`,
+      position,
+      aim,
+      trackDistance: wrapDistance((zone.from + zone.to) / 2 - START_DIST),
+    });
+  });
+
+  const start = pointAt(MAIN, START_DIST);
+  const tower = start.pos.clone().addScaledVector(start.side, -(start.halfWidth + 13));
+  tower.y = start.pos.y + 9;
+  const aim = start.pos.clone();
+  aim.y += 1.2;
+  spots.push({ name: 'GARIS START', position: tower, aim, trackDistance: 0 });
+  return spots;
+})();
+
 export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
   const asphalt = asphaltTexture();
   const gravelTex = gravelTexture();
@@ -955,6 +1008,7 @@ export const JUMPS = (() => {
 export const TRACK = {
   main: MAIN,
   joker: JOKER,
+  cameras: BROADCAST_SPOTS,
   length: MAIN_LENGTH,
   start: START_DIST,
   jumps: JUMPS,

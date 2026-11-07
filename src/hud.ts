@@ -11,6 +11,7 @@ export class Hud {
   private readonly autoEl = document.getElementById('auto');
   private readonly rivalEl = document.getElementById('rival');
   private readonly finishEl = document.getElementById('finish');
+  private readonly tvEl = document.getElementById('tv');
   private readonly indLeft = document.getElementById('ind-left');
   private readonly indRight = document.getElementById('ind-right');
   private readonly indBeam = document.getElementById('ind-beam');
@@ -64,6 +65,15 @@ export class Hud {
       ? 'LAWAN nonaktif'
       : `LAWAN · lap ${Math.min(lap + 1, laps)}/${laps} · ${gap > 0 ? '+' : '−'}${Math.abs(gap).toFixed(0)} m`;
     if (el.textContent !== text) el.textContent = text;
+  }
+
+  /** Overlay kamera TV: muncul hanya saat kamera siaran aktif. */
+  setCamera(tv: boolean, name: string | null) {
+    const el = this.tvEl;
+    if (!el) return;
+    el.classList.toggle('hide', !tv);
+    const text = name ? `● LIVE · ${name}` : '● LIVE';
+    if (tv && el.textContent !== text) el.textContent = text;
   }
 
   /** Banner hasil balapan; `null` menyembunyikannya. */

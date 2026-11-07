@@ -18,6 +18,7 @@ export interface InputActions {
   camera(): void;
   gui(): void;
   ai(): void;
+  spectate(): void;
 }
 
 interface SliderOpts {
@@ -133,6 +134,7 @@ export class Input {
   private gearShown: GearDirection | null = null;
   private lampButtons: HTMLButtonElement[] = [];
   private aiButton: HTMLButtonElement | null = null;
+  private tvButton: HTMLButtonElement | null = null;
 
   private steer: TouchSlider | null = null;
   private gas: TouchSlider | null = null;
@@ -173,6 +175,14 @@ export class Input {
   /** Nyalakan/matikan tampilan tombol AI di layar sentuh. */
   setAi(on: boolean) {
     const btn = this.aiButton;
+    if (!btn) return;
+    btn.classList.toggle('on', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+
+  /** Status tombol TV (tonton AI vs AI). */
+  setSpectate(on: boolean) {
+    const btn = this.tvButton;
     if (!btn) return;
     btn.classList.toggle('on', on);
     btn.setAttribute('aria-pressed', on ? 'true' : 'false');
@@ -220,6 +230,14 @@ export class Input {
         this.actions.ai();
       });
       this.aiButton.addEventListener('contextmenu', (e) => e.preventDefault());
+    }
+    this.tvButton = document.querySelector<HTMLButtonElement>('#lampbar button[data-tv]');
+    if (this.tvButton) {
+      this.tvButton.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        this.actions.spectate();
+      });
+      this.tvButton.addEventListener('contextmenu', (e) => e.preventDefault());
     }
     const panelBtn = document.querySelector<HTMLButtonElement>('#lampbar button[data-panel]');
     if (panelBtn) {
@@ -274,6 +292,9 @@ export class Input {
         break;
       case 'KeyP':
         this.actions.ai();
+        break;
+      case 'KeyV':
+        this.actions.spectate();
         break;
       case 'KeyQ':
         this.toggleGear();

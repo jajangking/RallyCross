@@ -5,7 +5,8 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import { defaultConfig, VehiclePhysics, type VehicleInput } from '../src/vehicle/VehiclePhysics';
-import { buildTrackColliders, TRACK } from '../src/world/track';
+import { BROADCAST_SPOTS, buildTrackColliders, TRACK } from '../src/world/track';
+import { BroadcastDirector } from '../src/camera/BroadcastDirector';
 import { lapPath, type PathSample } from '../src/world/circuit';
 import { AutoPilot } from '../src/ai/AutoPilot';
 import { LapCounter } from '../src/race/LapCounter';
@@ -383,6 +384,55 @@ async function run() {
   check(rival.lap >= 1, 'the rival drives a full lap', `${raceTime.toFixed(1)} s`);
   check(rivalExcess < 3, 'the rival stays on the road', `max ${rivalExcess.toFixed(1)} m past the edge`);
   check(closest > 1.4, 'the two cars never clip each other', `closest ${closest.toFixed(1)} m`);
+
+  /* ---------------------------------------------------------------- */
+  console.log('\n— kamera TV —');
+  check(BROADCAST_SPOTS.length >= 4, 'a broadcast camera per corner', `${BROADCAST_SPOTS.length} cameras`);
+  let outside = Infinity;
+  for (const spot of BROADCAST_SPOTS) {
+    let nearest = Infinity;
+    let halfWidth = 0;
+    for (const s of TRACK.main) {
+      const d = Math.hypot(spot.position.x - s.pos.x, spot.position.z - s.pos.z);
+      if (d < nearest) {
+        nearest = d;
+        halfWidth = s.halfWidth;
+      }
+    }
+    outside = Math.min(outside, nearest - halfWidth);
+  }
+  check(outside > 4, 'every camera stands outside the track', `closest wall ${outside.toFixed(1)} m from the edge`);
+
+  const director = new BroadcastDirector(BROADCAST_SPOTS);
+  const focus = new THREE.Vector3();
+  const dt = 1 / 60;
+  const lap = TRACK.main[TRACK.main.length - 1].distance;
+  const used = new Set<string>();
+  let cuts = 0;
+  let sinceCut = 0;
+  let minGap = Infinity;
+  let worst = 0;
+  // Drive a virtual car at 22 m/s for two laps and let the director cut.
+  // `trackDistance` is measured from the start line, exactly like LapCounter.
+  for (let time = 0; time < (lap * 2) / 22; time += dt) {
+    const d = (time * 22) % lap;
+    const p = TRACK.at(d);
+    focus.copy(p.pos);
+    focus.y += 0.9;
+    const trackDistance = ((d - TRACK.start) % lap + lap) % lap;
+    const spot = director.update(dt, focus, trackDistance, lap);
+    sinceCut += dt;
+    if (director.takeCut()) {
+      used.add(spot?.name ?? '?');
+      if (cuts > 0) minGap = Math.min(minGap, sinceCut);
+      sinceCut = 0;
+      cuts++;
+    }
+    if (spot) worst = Math.max(worst, spot.position.distanceTo(focus));
+  }
+  check(used.size >= 5, 'the director cuts between several cameras', `${used.size} cameras, ${cuts} cuts`);
+  check(minGap > 1.4, 'cameras never flicker', `shortest shot ${minGap.toFixed(1)} s`);
+  check(worst < 220, 'the framed car is never absurdly far away', `worst ${worst.toFixed(0)} m`);
 
   console.log(`\n${failures === 0 ? '✅ all checks passed' : `❌ ${failures} check(s) failed`}\n`);
   if (failures > 0) process.exitCode = 1;

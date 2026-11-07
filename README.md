@@ -1,6 +1,6 @@
 # RallyCross — Vehicle Physics Prototype
 
-Prototipe **mobil rally 3D di web** (three.js + Rapier): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot** yang bisa menyetir sendiri (termasuk joker lap) dan **satu lawan AI** yang balapan 3 lap melawan kamu (bisa dimatikan dari panel). Belum ada multiplayer.
+Prototipe **mobil rally 3D di web** (three.js + Rapier): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **satu lawan AI** yang balapan 3 lap melawan kamu, dan **9 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI. Belum ada multiplayer.
 
 ## Jalanin
 
@@ -32,7 +32,8 @@ Semua input **analog/proporsional** — bukan tombol on/off:
 | Lampu utama | `L` | tombol ◐ |
 | Handbrake | `Space` | HB |
 | Reset mobil | `R` | — |
-| Ganti kamera (chase/hood) | `C` | — |
+| Ganti kamera (chase → kap → TV) | `C` | — |
+| Tonton **AI vs AI** (kamera TV) | `V` | tombol **TV** (kiri atas) |
 | Panel tuning | `G` | tombol **⚙** (kiri atas) |
 | **AI autopilot on/off** | `P` | tombol **AI** (kiri atas) |
 | Ulangi balapan (grid + lap) | `R` | — |
@@ -67,6 +68,7 @@ src/
 │  ├─ buildTrackColliders() # permukaan + barrier + joker — tanpa DOM
 │  └─ ...
 │ src/race/                # LapCounter (odometer) + Rival (mobil AI kedua)
+│ src/camera/              # BroadcastDirector: sutradara kamera TV
 │ src/ai/AutoPilot.ts      # pure pursuit + speed profile + pemulihan
 │  └─ buildTrackVisuals()   # mesh, tekstur canvas, gantry, stand — hanya browser
 ├─ camera.ts                # chase / hood cam + FOV dinamis
@@ -206,6 +208,21 @@ Cara kerjanya (`src/ai/AutoPilot.ts`, murni matematika, tanpa DOM):
 
 Hasil uji headless dengan fisika asli: **satu putaran 29,2 s**, tidak pernah keluar tepi trek, 0 reset, dan stabil di 6 putaran berturut-turut (aspal & gravel, dengan/tanpa joker).
 
+## Kamera TV (broadcast)
+
+Ada **9 kamera** tetap di pinggir trek: satu di **luar setiap tikungan** (T1–T8) dan satu menara di **garis start**. Semuanya di ketinggian 6,5–9 m, di belakang pagar pengaman, jadi mobilnya terlihat datang menghadap kamera lalu lewat — sudut yang dipakai siaran sungguhan.
+
+Tekan **`V`** (atau tombol **TV** di HP) untuk **AI vs AI**: mobilmu disetir AI, lawan disetir AI, kameranya pindah ke siaran TV. Tombol **`AI`** mematikan mode ini dan mengembalikan setir (juga kamera) ke pemain.
+
+Cara sutradaranya bekerja (`src/camera/BroadcastDirector.ts`):
+
+- Tiap kamera tahu **jarak tikungannya sepanjang trek**, jadi pemilihan kamera berbasis posisi mobil di lintasan — bukan jarak lurus. Hasilnya gambar berpindah **tikungan demi tikungan**, dan kamera yang sudah dilewati mobil tidak dipakai lagi walaupun dua tikungan kebetulan berdekatan secara geometris.
+- Kamera idealnya membidik mobil **±22 m sebelum kamera itu**; plus penalti untuk sudut pandang yang melenceng dan untuk kamera yang mobilnya terlalu jauh (kelihatan kecil di seberang tikungan).
+- Gambar dipotong paling cepat **1,6 s** sekali, dengan histeresis supaya tidak berkedip-kedip bolak-balik. Uji simulasi: **16 potongan dalam 2 putaran, memakai 7 kamera berbeda**.
+- Saat potong (`cut`) posisi kamera langsung pindah, sementara arah bidiknya dilarutkan halus — persis kesan "ganti kamera" di TV. Lensa otomatis **tele saat mobil jauh** (fov 16°) dan **lebar saat lewat dekat** (62°).
+- Overlay **`● LIVE · T3`** muncul di atas layar saat kamera siaran aktif.
+- Di mode tontonan, kamera mengikuti **pemimpin balapan**; kalau kedua mobil berdekatan (< 30 m), titik bidiknya digeser ke tengah supaya duelnya tetap satu frame.
+
 ## Lawan AI (1 mobil)
 
 Di grid selalu ada **mobil kedua berwarna merah** yang kamu lawan balapan **3 lap** (jumlahnya bisa diubah di panel → *Lawan*). Lawan memakai `VehiclePhysics` yang sama — ban, suspensi, lompatan, dan tabrakan diperlakukan sama seperti mobilmu, jadi tidak ada hax:
@@ -240,6 +257,7 @@ Agar AI bisa secepat itu, tepi trek juga diperbaiki: bahu jalan sekarang punya *
 - **AI menyelesaikan satu putaran sendiri** (29 s), tidak keluar tepi trek, tanpa reset
 - penghitung lap menambah tepat satu lap per putaran, odometer cocok dengan panjang trek
 - **lawan AI menyelesaikan putaran** (33 s), tetap di trek, dan dua mobil tidak saling menembus
+- 9 kamera TV berdiri di luar trek, sutradara memakai ≥5 kamera berbeda, tidak ada shot < 1,6 s, dan mobil yang dibidik tidak pernah lebih dari 220 m
 
 `npm run check:browser` (opsional, perlu Chromium) menambah cek UI: bukaan gas/rem 1:1 (50 %, 85 %, 70 %), gas dan rem saling independen, rem tidak menambah throttle, semuanya menutup saat dilepas, slider setir balik ke tengah, tombol D/R memindah gigi + HUD menampilkan `R` saat mundur, rem tidak membalikkan mobil, dan arah setir cocok dengan layar. Untuk detail visual: lampu rem menguat saat pedal ditekan, sein kiri berkedip sementara kanan tetap mati, repeater HUD menyala, lampu utama menyala, lampu mundur menyala di gigi R, empat hub suspensi berada di rentang travel, dan setir berputar.
 

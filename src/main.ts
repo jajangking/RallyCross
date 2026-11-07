@@ -4,7 +4,7 @@ import GUI from 'lil-gui';
 import { defaultConfig, VehiclePhysics, type VehicleInput } from './vehicle/VehiclePhysics';
 import { CarVisual } from './vehicle/CarVisual';
 import { CarModelVisual } from './vehicle/CarModelVisual';
-import { buildTrack, TRACK } from './world/track';
+import { buildTrack, BROADCAST_SPOTS, TRACK } from './world/track';
 import { AutoPilot, type TrafficCar } from './ai/AutoPilot';
 import { Rival } from './race/Rival';
 import { LapCounter } from './race/LapCounter';
@@ -150,11 +150,16 @@ async function boot() {
     useJoker: true,
     jumpSpeed: pilot.options.jumpSpeed,
   };
+  /** Mode tontonan: dua mobil AI + kamera TV. */
+  const spectate = { on: false };
   let aiToggle: { updateDisplay(): void } | null = null;
   let rivalToggle: { updateDisplay(): void } | null = null;
+  let spectateToggle: { updateDisplay(): void } | null = null;
+  const camFocus = new THREE.Vector3();
+  let camFocusDistance = 0;
 
   /* ---------------- camera / input / hud ---------------- */
-  const cameraRig = new CameraRig(window.innerWidth / window.innerHeight);
+  const cameraRig = new CameraRig(window.innerWidth / window.innerHeight, BROADCAST_SPOTS);
   cameraRig.snap(car);
 
   const hud = new Hud(car.cfg.mass);
@@ -196,9 +201,24 @@ async function boot() {
     if (on) {
       pilot.reset(car.position);
       input.setGear(1);
+    } else {
+      spectate.on = false;
+      if (cameraRig.modeName === 'tv') cameraRig.setMode('chase');
+      input.setSpectate(false);
+      spectateToggle?.updateDisplay();
     }
     input.setAi(on);
     aiToggle?.updateDisplay();
+  };
+
+  /** Ambil alih? Tidak: dua mobil disetir AI, kamera pindah ke siaran TV. */
+  const setSpectate = (on: boolean) => {
+    setAutopilot(on);
+    spectate.on = on;
+    if (on) cameraRig.setMode('tv');
+    input.setSpectate(on);
+    aiToggle?.updateDisplay();
+    spectateToggle?.updateDisplay();
   };
 
   const input = new Input({
@@ -206,6 +226,7 @@ async function boot() {
     camera: () => cameraRig.toggleMode(),
     gui: () => setGui(!guiOpen),
     ai: () => setAutopilot(!auto.enabled),
+    spectate: () => setSpectate(!spectate.on),
   });
 
   /** Perintah yang dipakai frame ini: AI kalau aktif, kalau tidak pemain. */
@@ -295,6 +316,22 @@ async function boot() {
   fCam.add(cameraRig, 'distance', 4, 16, 0.1);
   fCam.add(cameraRig, 'height', 1, 8, 0.1);
   fCam.add(cameraRig, 'fovBase', 45, 85, 1).name('fov');
+  const camModes = {
+    get mode() {
+      return cameraRig.modeName;
+    },
+    set mode(v: string) {
+      cameraRig.setMode(v as 'chase' | 'hood' | 'tv');
+    },
+  };
+  fCam
+    .add(camModes, 'mode', ['chase', 'hood', 'tv'])
+    .name('mode kamera')
+    .onChange((v: string) => cameraRig.setMode(v as 'chase' | 'hood' | 'tv'));
+  spectateToggle = fCam
+    .add(spectate, 'on')
+    .name('tonton AI vs AI (V)')
+    .onChange((v: boolean) => setSpectate(v));
 
   const actions = {
     Tarmac: () => applyPreset('tarmac'),
@@ -348,6 +385,22 @@ async function boot() {
     right: false,
     hazard: false,
     headlights: false,
+  };
+
+  /** Titik yang dibidik kamera TV: pemimpin balapan (atau mobilmu), plus lawan
+   *  kalau mereka sedang berdekatan — seperti siaran yang menjaga duel tetap
+   *  dalam satu frame. */
+  const updateCamFocus = () => {
+    const rivalLive = race.rival && !rival.isParked;
+    const leaderIsRival =
+      rivalLive && spectate.on && rival.odometer > playerLaps.odometer;
+    camFocus.copy(leaderIsRival ? rival.car.position : car.position);
+    camFocusDistance = leaderIsRival ? rival.counter.lapDistance : playerLaps.lapDistance;
+    if (rivalLive) {
+      const gap = Math.abs(rival.odometer - playerLaps.odometer);
+      if (gap < 30) camFocus.lerp(leaderIsRival ? car.position : rival.car.position, 0.42);
+    }
+    camFocus.y += 0.9;
   };
 
   const rivalLights: CarLightState = {
@@ -423,7 +476,12 @@ async function boot() {
     track.update(raw);
     carVisual.update(car, raw, lightState);
     if (race.rival) rivalVisual.update(rival.car, raw, rivalLights);
-    cameraRig.update(raw, car);
+    if (cameraRig.modeName === 'tv') {
+      updateCamFocus();
+      cameraRig.updateBroadcast(raw, camFocus, camFocusDistance, TRACK.length);
+    } else {
+      cameraRig.update(raw, car);
+    }
     hud.update(car, raw);
     hud.setLamps(lightState);
     hud.setAutopilot(auto.enabled, pilot.lap, auto.enabled ? pilot.lapTime : 0, pilot.bestLap);
@@ -433,6 +491,7 @@ async function boot() {
       race.laps,
       race.rival ? rival.odometer - playerLaps.odometer : 0,
     );
+    hud.setCamera(cameraRig.modeName === 'tv', cameraRig.broadcastName);
     hud.setFinish(
       race.winner === null
         ? null
@@ -467,6 +526,8 @@ async function boot() {
     setAutopilot,
     rival,
     race,
+    spectate,
+    setSpectate,
     playerLaps,
     setRival,
     cameraRig,
