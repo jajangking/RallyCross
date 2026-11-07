@@ -852,6 +852,10 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
 
   /* ---------------- grandstands ---------------- */
   const standMat = toon({ color: 0x39414b, roughness: 0.85 });
+  // Atap seng terang + fasia merah: dari kamera heli, tribun jadi bentuk yang
+  // terbaca (bukan kotak hitam).
+  const roofMat = toon({ color: 0x9aa5b2, roughness: 0.7 });
+  const fasciaMat = toon({ color: 0xc9382c, roughness: 0.8 });
   const crowdMat = toon({ map: crowd, roughness: 0.9 });
   // Warna penonton diambil dari `instanceColor`, jadi materialnya putih.
   const fanMat = toon({ color: 0xffffff });
@@ -869,10 +873,16 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
     people.rotation.x = -Math.PI / 2.55;
     people.position.set(0, height * 0.62, -rows * 0.75 - 1.0);
     group.add(people);
-    const roof = new THREE.Mesh(new THREE.BoxGeometry(length + 1.4, 0.25, rows * 1.5 + 3), standMat);
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(length + 1.4, 0.25, rows * 1.5 + 3), roofMat);
     roof.position.set(0, height + 2.1, -rows * 0.75 - 0.6);
     roof.castShadow = true;
+    roof.receiveShadow = true;
     group.add(roof);
+
+    // fasia merah di tepi atap (menghadap lintasan)
+    const fascia = new THREE.Mesh(new THREE.BoxGeometry(length + 1.4, 0.5, 0.18), fasciaMat);
+    fascia.position.set(0, height + 1.85, rows * 0.75 + 0.92);
+    group.add(fascia);
     for (const sign of [-1, 1]) {
       const leg = new THREE.Mesh(new THREE.BoxGeometry(0.3, height + 2.1, 0.3), standMat);
       leg.position.set(sign * (length / 2 - 0.4), (height + 2.1) / 2, -(rows * 1.5 + 0.2));
@@ -1236,6 +1246,62 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
     puffs.instanceMatrix.needsUpdate = true;
     puffs.frustumCulled = false;
     scene.add(puffs);
+  }
+
+  /* ---------------- gapura sponsor di atas lintasan ---------------- */
+  {
+    // Tiga gapura (rallycross selalu punya ini): dua kaki di luar pagar, balok
+    // melintang, dan spanduk menggantung di atas trek. Titiknya dicari di
+    // bagian trek yang datar & lurus, bukan di puncak lompatan.
+    const archMat = toon({ color: 0x2f3742 });
+    const lapLength = MAIN[MAIN.length - 1].distance;
+    const arches: Array<[number, string, string, string]> = [
+      [0.18, 'NITRO OIL', '#0f3f2c', '#d8f0c8'],
+      [0.47, 'GRAVEL KING', '#8c1f14', '#f6e7c9'],
+      [0.76, 'TURBO', '#b3202c', '#fff1f1'],
+    ];
+    for (const [fraction, name, bg, fg] of arches) {
+      const target = fraction * lapLength;
+      let bestSample = MAIN[0];
+      let bestScore = Infinity;
+      for (const sample of MAIN) {
+        const gap = Math.abs(sample.distance - target);
+        if (gap > 26) continue;
+        const score = Math.abs(sample.pos.y) * 2 + Math.abs(sample.curvature) * 120 + gap * 0.05;
+        if (score < bestScore) {
+          bestScore = score;
+          bestSample = sample;
+        }
+      }
+      const point = bestSample;
+      const span = point.halfWidth + 1.7;
+      for (const sign of [-1, 1]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.34, 7.6, 0.34), archMat);
+        leg.position.copy(point.pos).addScaledVector(point.side, sign * span);
+        leg.position.y = point.pos.y + 3.8;
+        leg.castShadow = true;
+        scene.add(leg);
+      }
+      const beam = new THREE.Mesh(new THREE.BoxGeometry(span * 2 + 0.5, 0.55, 0.46), archMat);
+      beam.position.copy(point.pos);
+      beam.position.y = point.pos.y + 7.35;
+      beam.rotation.y = Math.atan2(-point.side.z, point.side.x);
+      beam.castShadow = true;
+      scene.add(beam);
+
+      const banner = new THREE.Mesh(
+        new THREE.PlaneGeometry(span * 1.5, 1.5),
+        toon({
+          map: bannerTexture(name, bg, fg),
+          side: THREE.DoubleSide,
+          roughness: 0.85,
+        }),
+      );
+      banner.position.copy(point.pos);
+      banner.position.y = point.pos.y + 6.4;
+      banner.rotation.y = facing(point.tangent.clone().negate());
+      scene.add(banner);
+    }
   }
 
   /* ---------------- joker signs ---------------- */
