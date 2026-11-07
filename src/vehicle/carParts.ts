@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { toon } from '../world/style';
 
 export const UP_AXIS = new THREE.Vector3(0, 1, 0);
 const tmpDir = new THREE.Vector3();
@@ -53,63 +54,44 @@ export function helixGeometry(
   return new THREE.TubeGeometry(curve, steps, wire, detail ? 6 : 4, false);
 }
 
+/** Semua material bodi bergaya toon (kartun) — lihat `src/world/style.ts`. */
 export interface CarMaterials {
-  paint: THREE.MeshPhysicalMaterial;
-  paintDark: THREE.MeshStandardMaterial;
-  trim: THREE.MeshStandardMaterial;
-  carbon: THREE.MeshStandardMaterial;
-  glass: THREE.MeshPhysicalMaterial;
-  rubber: THREE.MeshStandardMaterial;
-  rim: THREE.MeshStandardMaterial;
-  disc: THREE.MeshStandardMaterial;
-  caliper: THREE.MeshStandardMaterial;
-  interior: THREE.MeshStandardMaterial;
-  cage: THREE.MeshStandardMaterial;
-  spring: THREE.MeshStandardMaterial;
-  plate: THREE.MeshStandardMaterial;
+  paint: THREE.MeshToonMaterial;
+  paintDark: THREE.MeshToonMaterial;
+  trim: THREE.MeshToonMaterial;
+  carbon: THREE.MeshToonMaterial;
+  glass: THREE.MeshToonMaterial;
+  rubber: THREE.MeshToonMaterial;
+  rim: THREE.MeshToonMaterial;
+  disc: THREE.MeshToonMaterial;
+  caliper: THREE.MeshToonMaterial;
+  interior: THREE.MeshToonMaterial;
+  cage: THREE.MeshToonMaterial;
+  spring: THREE.MeshToonMaterial;
+  plate: THREE.MeshToonMaterial;
 }
 
 export function createCarMaterials(detail: boolean, paint = 0xd8402f): CarMaterials {
   return {
-    paint: new THREE.MeshPhysicalMaterial({
-      color: paint,
-      metalness: 0.45,
-      roughness: 0.3,
-      clearcoat: 1,
-      clearcoatRoughness: 0.12,
-      envMapIntensity: 1.15,
-    }),
-    paintDark: new THREE.MeshStandardMaterial({ color: 0x1a1e24, metalness: 0.35, roughness: 0.42 }),
-    trim: new THREE.MeshStandardMaterial({ color: 0xe8eef6, metalness: 0.6, roughness: 0.28 }),
-    carbon: new THREE.MeshStandardMaterial({ color: 0x101317, metalness: 0.4, roughness: 0.55 }),
-    glass: new THREE.MeshPhysicalMaterial({
-      color: 0x0d1620,
-      metalness: 0,
-      roughness: 0.06,
-      clearcoat: 1,
-      clearcoatRoughness: 0.04,
+    paint: toon({ color: paint }),
+    paintDark: toon({ color: 0x1a1e24 }),
+    trim: toon({ color: 0xe8eef6 }),
+    carbon: toon({ color: 0x101317 }),
+    glass: toon({
+      color: 0x2a4a63,
       transparent: true,
-      opacity: 0.5,
-      envMapIntensity: 1.6,
+      opacity: 0.62,
       side: THREE.DoubleSide,
       depthWrite: false,
     }),
-    rubber: new THREE.MeshStandardMaterial({ color: 0x0c0e10, roughness: 0.95, metalness: 0.05 }),
-    rim: new THREE.MeshStandardMaterial({ color: 0xc2c9d1, metalness: 0.9, roughness: 0.26 }),
-    disc: new THREE.MeshStandardMaterial({
-      color: 0x6d737b,
-      metalness: 0.85,
-      roughness: 0.45,
-      emissive: 0xff3b12,
-      emissiveIntensity: 0,
-    }),
-    caliper: new THREE.MeshStandardMaterial({ color: 0xe0a12a, metalness: 0.5, roughness: 0.4 }),
-    interior: new THREE.MeshStandardMaterial({ color: 0x15181c, roughness: 0.85, metalness: 0.1 }),
-    cage: detail
-      ? new THREE.MeshStandardMaterial({ color: 0xd7dce3, metalness: 0.7, roughness: 0.32 })
-      : new THREE.MeshStandardMaterial({ color: 0x9aa2ac, metalness: 0.4, roughness: 0.5 }),
-    spring: new THREE.MeshStandardMaterial({ color: 0xe3b325, metalness: 0.55, roughness: 0.35 }),
-    plate: new THREE.MeshStandardMaterial({ color: 0xf2f4f7, roughness: 0.6 }),
+    rubber: toon({ color: 0x0c0e10 }),
+    rim: toon({ color: 0xc2c9d1 }),
+    disc: toon({ color: 0x6d737b, emissive: 0xff3b12, emissiveIntensity: 0 }),
+    caliper: toon({ color: 0xe0a12a }),
+    interior: toon({ color: 0x15181c }),
+    cage: toon({ color: detail ? 0xd7dce3 : 0x9aa2ac }),
+    spring: toon({ color: 0xe3b325 }),
+    plate: toon({ color: 0xf2f4f7 }),
   };
 }
 

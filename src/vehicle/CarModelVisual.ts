@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { toonFrom } from '../world/style';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { VehicleConfig, VehiclePhysics } from './VehiclePhysics';
 import {
@@ -145,14 +146,14 @@ function measureWheel(node: THREE.Object3D, yaw: number): RawWheel {
 /* ------------------------------------------------------------------ */
 
 interface LampSlot {
-  mat: THREE.MeshStandardMaterial;
+  mat: THREE.MeshToonMaterial;
   /** Colour the lamp takes while it is lit. */
   lit: THREE.Color;
 }
 
-function lampMaterial(source: THREE.Mesh): THREE.MeshStandardMaterial {
-  const src = source.material as THREE.MeshStandardMaterial;
-  const mat = src.clone() as THREE.MeshStandardMaterial;
+function lampMaterial(source: THREE.Mesh): THREE.MeshToonMaterial {
+  const src = source.material as THREE.MeshToonMaterial;
+  const mat = src.clone();
   // emissive straight from the material colour reads better than an emissive
   // map here: the lamp silhouettes come from the model, the glow from us.
   mat.emissiveMap = null;
@@ -221,9 +222,9 @@ function splitBySide(mesh: THREE.Mesh): SplitLamp {
 }
 
 /** Material a split lamp part is drawn with (already an emissive clone). */
-const lampMaterialOf = (part: THREE.Mesh) => part.material as THREE.MeshStandardMaterial;
+const lampMaterialOf = (part: THREE.Mesh) => part.material as THREE.MeshToonMaterial;
 
-const slot = (mat: THREE.MeshStandardMaterial, lit: number): LampSlot => ({
+const slot = (mat: THREE.MeshToonMaterial, lit: number): LampSlot => ({
   mat,
   lit: new THREE.Color(lit),
 });
@@ -249,16 +250,10 @@ class ModelLampRig implements CarLampRig {
   private readonly frontAmberLeft: LampSlot[] = [];
   private readonly frontAmberRight: LampSlot[] = [];
   private readonly head: LampSlot[] = [];
-  private readonly spots: THREE.SpotLight[] = [];
 
   private constructor() {}
 
-  static build(
-    source: THREE.Object3D,
-    root: THREE.Object3D,
-    cfg: VehicleConfig,
-    detail: boolean,
-  ): CarLampRig | null {
+  static build(source: THREE.Object3D): CarLampRig | null {
     const rig = new ModelLampRig();
     const headMeshes: THREE.Mesh[] = [];
     const amberMeshes: THREE.Mesh[] = [];
@@ -303,19 +298,9 @@ class ModelLampRig implements CarLampRig {
       }
     }
 
-    // head light beams, aimed forward from the nose of the model
-    if (detail) {
-      const box = new THREE.Box3().setFromObject(root);
-      const nose = box.max.z;
-      for (const side of [-1, 1]) {
-        const spot = new THREE.SpotLight(0xfff3d8, 0, 60, 0.45, 0.5, 1.3);
-        spot.position.set(side * cfg.halfWidth * 0.55, box.min.y * 0.2, nose);
-        spot.target.position.set(side * cfg.halfWidth * 0.55, -0.6, nose + 16);
-        spot.castShadow = false;
-        rig.spots.push(spot);
-        root.add(spot, spot.target);
-      }
-    }
+    // Lampu sorot 3D sengaja tidak dipakai: dua SpotLight per mobil berarti
+    // 12 lampu di grid, dan setiap material harus menghitung semuanya tiap
+    // fragment. Untuk gaya kartun, lampu yang menyala (emissive) sudah cukup.
 
     return rig;
   }
@@ -357,7 +342,6 @@ class ModelLampRig implements CarLampRig {
     rear(this.tailLeft, this.frame.amberLeft);
     rear(this.tailRight, this.frame.amberRight);
 
-    for (const spot of this.spots) spot.intensity = this.lamp.spotIntensity;
   }
 
   get readings() {
@@ -452,28 +436,32 @@ export function assembleCarModel(
 
   root.updateMatrixWorld(true);
 
+  // Seluruh material model (yang aslinya PBR/MeshStandardMaterial) diganti
+  // versi toon: warna & peta dipertahankan, tapi warnanya jadi rata dan
+  // shadernya jauh lebih murah. Bodinya tetap di-respray ke warna livery.
   const paint = new THREE.Color(opts.paint ?? DEFAULT_PAINT);
+  const convert = (m: THREE.Material): THREE.Material => {
+    if ((m as THREE.MeshToonMaterial).isMeshToonMaterial) return m;
+    const isPaint = /paint/i.test(m.name);
+    const out = toonFrom(m, isPaint ? paint : undefined);
+    if (isPaint) {
+      out.side = THREE.FrontSide;
+      out.name = m.name;
+    }
+    m.dispose();
+    return out;
+  };
   source.traverse((o) => {
     if (!isMeshLike(o)) return;
     const mesh = o as THREE.Mesh;
-    mesh.castShadow = detail;
-    mesh.receiveShadow = true;
-    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    for (const m of mats) {
-      const std = m as THREE.MeshStandardMaterial;
-      if (!std.isMeshStandardMaterial) continue;
-      std.envMapIntensity = 1.25;
-      if (/paint/i.test(std.name)) {
-        // the imported body colour is a placeholder; respray it in the rally
-        // livery (single-sided paint shades much better than the authored one)
-        std.color.copy(paint);
-        std.metalness = 0.32;
-        std.roughness = 0.3;
-      }
-    }
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.material = Array.isArray(mesh.material)
+      ? mesh.material.map(convert)
+      : convert(mesh.material);
   });
 
-  const lights = ModelLampRig.build(source, root, cfg, detail) ?? new CarLights(root, cfg, detail);
+  const lights = ModelLampRig.build(source) ?? new CarLights(root, cfg, detail);
 
   root.updateMatrixWorld(true);
   const visualBox = new THREE.Box3().setFromObject(root);

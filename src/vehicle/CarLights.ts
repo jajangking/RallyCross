@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { toon } from '../world/style';
 import type { VehicleConfig } from './VehiclePhysics';
 import { roundedBox } from './carParts';
 
@@ -104,29 +105,21 @@ export class CarLights {
   readonly group = new THREE.Group();
   readonly lamp = new LampController();
 
-  private readonly headMat: THREE.MeshStandardMaterial;
-  private readonly tailMat: THREE.MeshStandardMaterial;
-  private readonly reverseMat: THREE.MeshStandardMaterial;
-  private readonly amberLeftMat: THREE.MeshStandardMaterial;
-  private readonly amberRightMat: THREE.MeshStandardMaterial;
+  private readonly headMat: THREE.MeshToonMaterial;
+  private readonly tailMat: THREE.MeshToonMaterial;
+  private readonly reverseMat: THREE.MeshToonMaterial;
+  private readonly amberLeftMat: THREE.MeshToonMaterial;
+  private readonly amberRightMat: THREE.MeshToonMaterial;
 
-  private readonly spots: THREE.SpotLight[] = [];
-  private readonly spotTargets: THREE.Object3D[] = [];
 
-  constructor(parent: THREE.Object3D, cfg: VehicleConfig, detail: boolean) {
+  constructor(parent: THREE.Object3D, cfg: VehicleConfig, _detail: boolean) {
     const L = cfg.halfLength;
     const lampMat = (
       color: number,
       emissive: number,
       intensity: number,
     ) =>
-      new THREE.MeshStandardMaterial({
-        color,
-        emissive,
-        emissiveIntensity: intensity,
-        roughness: 0.28,
-        metalness: 0.15,
-      });
+      toon({ color, emissive, emissiveIntensity: intensity });
 
     this.headMat = lampMat(0xdfe4ea, 0xfff4d6, 0.2);
     this.tailMat = lampMat(0x330603, 0xff1508, 0.6);
@@ -159,17 +152,10 @@ export class CarLights {
       add(0.11, 0.09, 0.075, side * 0.8, 0.11, -L - 0.05, side < 0 ? this.amberLeftMat : this.amberRightMat);
     }
 
-    if (detail) {
-      for (const side of [-1, 1]) {
-        const spot = new THREE.SpotLight(0xfff3d8, 0, 60, 0.45, 0.5, 1.3);
-        spot.position.set(side * 0.52, 0.12, L + 0.08);
-        spot.target.position.set(side * 0.52, -0.6, L + 16);
-        spot.castShadow = false;
-        this.spots.push(spot);
-        this.spotTargets.push(spot.target);
-        this.group.add(spot, spot.target);
-      }
-    }
+    // Dulu ada dua SpotLight per mobil untuk sorot lampu utama. Dengan enam
+    // mobil itu berarti 12 lampu: setiap fragment semua material menghitung
+    // ke-12-nya. Lampu emissive di atas sudah cukup untuk gaya kartun, dan
+    // seluruh scene jadi jauh lebih ringan.
 
     parent.add(this.group);
   }
@@ -182,7 +168,6 @@ export class CarLights {
     this.headMat.emissiveIntensity = read.head;
     this.amberLeftMat.emissiveIntensity = read.amberLeft;
     this.amberRightMat.emissiveIntensity = read.amberRight;
-    for (const spot of this.spots) spot.intensity = this.lamp.spotIntensity;
   }
 
   /** Exposed for the browser regression check. */

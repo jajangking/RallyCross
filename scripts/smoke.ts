@@ -16,6 +16,7 @@ import { LapRecords, standings, type StandingsCar } from '../src/race/Standings'
 import { SkidMarks } from '../src/fx/SkidMarks';
 import { SmokePuffs } from '../src/fx/Smoke';
 import { CarEffects } from '../src/fx/CarEffects';
+import { toon, toonFrom, toonRamp, PALETTE } from '../src/world/style';
 
 const DT = 1 / 60;
 let failures = 0;
@@ -319,20 +320,23 @@ async function run() {
   const aiCar = new VehiclePhysics(aiWorld, defaultConfig, new THREE.Vector3(0, 0.95, -10));
   const pilot = new AutoPilot(TRACK.main, TRACK.joker, { useJoker: true });
   let maxExcess = 0;
-  let resets = 0;
+  let upright = 1;
   let aiTime = 0;
+  const upProbe = new THREE.Vector3();
   for (let i = 0; i < Math.round(80 / DT) && pilot.lap < 1; i++) {
     const command = pilot.update(DT, aiCar);
-    if (pilot.needsReset) resets++;
     aiCar.fixedStep(DT, command);
     aiWorld.step();
     aiCar.sync();
     aiTime += DT;
     maxExcess = Math.max(maxExcess, Math.abs(pilot.lateral) - pilot.sample.halfWidth);
+    upright = Math.min(upright, upProbe.set(0, 1, 0).applyQuaternion(aiCar.quaternion).y);
   }
   check(pilot.lap >= 1, 'the AI drives a full lap unaided', `${pilot.lastLap.toFixed(1)} s lap, ${aiTime.toFixed(1)} s total`);
   check(maxExcess < 3, 'the AI keeps the car on the road', `max ${maxExcess.toFixed(1)} m past the edge`);
-  check(resets === 0, 'the AI never needs a reset', `${resets} resets`);
+  // Tidak ada reset otomatis lagi: mobil yang terbalik dibiarkan, dan AI hanya
+  // melepas pedal sampai rodanya kembali ke bawah.
+  check(upright > 0.5, 'the AI never ends up on its roof', `lowest tilt ${upright.toFixed(2)}`);
   check(pilot.bestLap < 45, 'AI lap time is sane', `best ${pilot.bestLap.toFixed(1)} s`);
 
   /* ---------------------------------------------------------------- */
@@ -486,6 +490,66 @@ async function run() {
   check(fxSmoke.alive > 0, 'a sliding car raises smoke', `${fxSmoke.alive} puffs`);
 
   /* ---------------------------------------------------------------- */
+  console.log('\n— gaya kartun (material) —');
+  const ramp = toonRamp();
+  check(
+    ramp.image.width === 4 && ramp.image.height === 1,
+    'cel-shading ramp has four hard steps',
+    `${ramp.image.width}x${ramp.image.height} px, nearest filter`,
+  );
+  check(ramp.minFilter === THREE.NearestFilter, 'the ramp does not blur', 'NearestFilter');
+  const toonMat = toon({ color: PALETTE.grass, map: null, roughness: 1, metalness: 0.4 });
+  check(
+    toonMat.isMeshToonMaterial && toonMat.gradientMap === ramp,
+    'toon() builds a toon material that shares one ramp',
+    `colour #${toonMat.color.getHexString()}`,
+  );
+  check(
+    !('metalness' in toonMat) && !('roughness' in toonMat),
+    'legacy PBR keys are ignored, not copied',
+    'no metalness/roughness',
+  );
+  const standard = new THREE.MeshStandardMaterial({ color: 0x3366cc, transparent: true, opacity: 0.5 });
+  const converted = toonFrom(standard);
+  check(
+    converted.isMeshToonMaterial &&
+      converted.color.getHex() === 0x3366cc &&
+      converted.transparent &&
+      Math.abs(converted.opacity - 0.5) < 1e-6,
+    'imported model materials convert to toon without losing colour/alpha',
+    `#${converted.color.getHexString()} · opacity ${converted.opacity}`,
+  );
+
+  /* Mobil terbalik: tidak di-reset, AI hanya melepas pedal. */
+  const flippedPilot = new AutoPilot(TRACK.main, TRACK.joker);
+  const upsideDown = {
+    position: new THREE.Vector3(0, 0.9, 0),
+    velocity: new THREE.Vector3(),
+    quaternion: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI),
+    angularVelocity: new THREE.Vector3(),
+    speed: 0,
+    gear: 1 as const,
+    wheels: [{ contact: true }, { contact: true }, { contact: true }, { contact: true }],
+  };
+  let flipCmd = flippedPilot.update(DT, upsideDown);
+  // 0,15 s pertama masih "drive" (bisa saja cuma terangkat sesaat), setelah
+  // itu AI harus diam total.
+  for (let i = 0; i < 14; i++) flipCmd = flippedPilot.update(DT, upsideDown);
+  check(
+    flipCmd.throttle === 0 && flipCmd.brake === 0 && flipCmd.steer === 0,
+    'a flipped car is left alone instead of being restarted',
+    `throttle ${flipCmd.throttle} · brake ${flipCmd.brake} · steer ${flipCmd.steer}`,
+  );
+  const rolledBack = { ...upsideDown, quaternion: new THREE.Quaternion() };
+  let recovered = flipCmd;
+  for (let i = 0; i < 30; i++) recovered = flippedPilot.update(DT, rolledBack);
+  check(
+    recovered.throttle > 0.1 || recovered.brake > 0.1,
+    'the AI drives again as soon as the car is back on its wheels',
+    `throttle ${recovered.throttle.toFixed(2)}`,
+  );
+
+  /* ---------------------------------------------------------------- */
   console.log('\n— papan klasemen & rekor —');
   const fakeCars: StandingsCar[] = [
     { name: 'A', color: 0xff0000, lap: 1, odometer: 480, bestLap: 30, laps: 3 },
@@ -584,10 +648,11 @@ async function run() {
   );
   const worstExcess = Math.max(...pack.map((r) => packExcess.get(r.name) ?? 0));
   check(worstExcess < 12, 'nobody in the pack wanders far off the track', `worst ${worstExcess.toFixed(1)} m past the edge`);
+  const up = new THREE.Vector3();
   check(
-    pack.every((r) => r.rescues <= 2),
-    'nobody gets stuck and needs rescuing repeatedly',
-    pack.map((r) => `${r.name} ${r.rescues}`).join(' · '),
+    pack.every((r) => up.set(0, 1, 0).applyQuaternion(r.car.quaternion).y > 0.5),
+    'nobody in the pack ends the lap upside down',
+    pack.map((r) => r.name).join(' · '),
   );
   check(packClosest > 1.2, 'the pack never merges into one car', `closest ${packClosest.toFixed(2)} m`);
   const packLaps = pack.map((r) => r.bestLap).filter((b) => Number.isFinite(b));

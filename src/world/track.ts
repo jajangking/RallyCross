@@ -15,6 +15,8 @@ import {
   type Ribbon,
   type Surface,
 } from './circuit';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { PALETTE, toon } from './style';
 
 /**
  * A full rallycross arena: ~950 m mixed-surface circuit with two jumps, a
@@ -156,7 +158,9 @@ function canvasTexture(
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 8;
+  // Anisotropi 4 sudah cukup untuk jalan yang dilihat dari kamera mobil;
+  // 8+ hanya membebani sampling tekstur di HP.
+  tex.anisotropy = 4;
   tex.repeat.set(repeat, repeat);
   return tex;
 }
@@ -170,55 +174,54 @@ const noise = (ctx: CanvasRenderingContext2D, size: number, count: number, alpha
 };
 
 function asphaltTexture() {
+  // Aspal kartun: satu warna dasar + bintik halus, bukan bising foto.
   return canvasTexture((ctx, size) => {
-    ctx.fillStyle = '#31353b';
+    ctx.fillStyle = '#565d66';
     ctx.fillRect(0, 0, size, size);
-    for (let i = 0; i < 2600; i++) {
-      const v = 40 + Math.random() * 46;
-      ctx.fillStyle = `rgba(${v},${v + 2},${v + 6},0.7)`;
-      ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
+    ctx.fillStyle = 'rgba(38,43,50,0.35)';
+    for (let i = 0; i < 900; i++) {
+      ctx.fillRect(Math.random() * size, Math.random() * size, 3, 3);
     }
-    ctx.strokeStyle = 'rgba(24,26,30,0.5)';
-    ctx.lineWidth = 1;
-    for (let i = 0; i < 6; i++) {
-      const y = Math.random() * size;
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.bezierCurveTo(size * 0.3, y + 6, size * 0.6, y - 6, size, y + 2);
-      ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    for (let i = 0; i < 400; i++) {
+      ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
     }
   }, 256, 1);
 }
 
 function gravelTexture() {
+  // Gravel: pasir hangat dengan kerikil besar-besar (gaya kartun).
   return canvasTexture((ctx, size) => {
-    ctx.fillStyle = '#6f6353';
+    ctx.fillStyle = '#c9a878';
     ctx.fillRect(0, 0, size, size);
-    for (let i = 0; i < 5200; i++) {
-      const r = 110 + Math.random() * 60;
-      const g = 100 + Math.random() * 55;
-      const b = 82 + Math.random() * 45;
-      ctx.fillStyle = `rgba(${r},${g},${b},0.85)`;
-      const s = 1 + Math.random() * 3;
-      ctx.fillRect(Math.random() * size, Math.random() * size, s, s);
-    }
-    ctx.fillStyle = 'rgba(45,38,30,0.35)';
-    for (let i = 0; i < 40; i++) {
+    ctx.fillStyle = 'rgba(233,207,164,0.85)';
+    for (let i = 0; i < 700; i++) {
+      const r = 1.5 + Math.random() * 3;
       ctx.beginPath();
-      ctx.arc(Math.random() * size, Math.random() * size, 4 + Math.random() * 12, 0, Math.PI * 2);
+      ctx.arc(Math.random() * size, Math.random() * size, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = 'rgba(160,131,94,0.8)';
+    for (let i = 0; i < 500; i++) {
+      const r = 1 + Math.random() * 2.4;
+      ctx.beginPath();
+      ctx.arc(Math.random() * size, Math.random() * size, r, 0, Math.PI * 2);
       ctx.fill();
     }
   }, 256, 1);
 }
 
 function grassTexture() {
+  // Rumput: dua garis potong bergantian — pola khas lapangan di game arcade.
   return canvasTexture((ctx, size) => {
-    ctx.fillStyle = '#3d5a2c';
+    ctx.fillStyle = '#74b446';
     ctx.fillRect(0, 0, size, size);
-    for (let i = 0; i < 4000; i++) {
-      const g = 70 + Math.random() * 60;
-      ctx.fillStyle = `rgba(${40 + Math.random() * 30},${g},${34 + Math.random() * 24},0.8)`;
-      ctx.fillRect(Math.random() * size, Math.random() * size, 2, 3);
+    ctx.fillStyle = 'rgba(94,158,54,0.55)';
+    const band = size / 4;
+    for (let i = 0; i < 4; i += 2) ctx.fillRect(0, i * band, size, band);
+    ctx.fillStyle = 'rgba(255,255,255,0.045)';
+    for (let i = 0; i < 350; i++) {
+      ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
     }
   }, 256, 1);
 }
@@ -404,7 +407,50 @@ export const BROADCAST_SPOTS: BroadcastSpot[] = (() => {
   return spots;
 })();
 
-export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
+/**
+ * Gabungkan mesh statis yang memakai material sama jadi satu mesh.
+ *
+ * Arena ini punya ~190 potong mesh kecil (tiang, tribun, spanduk, tiang
+ * lampu). Semuanya berbagi belasan material, jadi ribuan draw call itu bisa
+ * ditekan jadi puluhan tanpa mengubah satu pixel pun. Yang dilewati: mesh
+ * beranimasi (`userData.noMerge`), `InstancedMesh`, dan material transparan
+ * (urutan gambar transparan harus tetap per objek).
+ */
+function mergeStaticProps(scene: THREE.Scene) {
+  const groups = new Map<THREE.Material, THREE.Mesh[]>();
+  scene.updateMatrixWorld(true);
+  scene.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || (o as THREE.InstancedMesh).isInstancedMesh) return;
+    if (mesh.userData.noMerge) return;
+    if (Array.isArray(mesh.material) || !mesh.material) return;
+    if (mesh.material.transparent) return;
+    const list = groups.get(mesh.material) ?? [];
+    list.push(mesh);
+    groups.set(mesh.material, list);
+  });
+
+  for (const [material, meshes] of groups) {
+    if (meshes.length < 2) continue;
+    const baked: THREE.BufferGeometry[] = [];
+    for (const mesh of meshes) {
+      const geo = mesh.geometry.clone();
+      geo.applyMatrix4(mesh.matrixWorld);
+      baked.push(geo);
+    }
+    const merged = mergeGeometries(baked, false);
+    for (const geo of baked) geo.dispose();
+    if (!merged) continue;
+    for (const mesh of meshes) mesh.removeFromParent();
+    merged.computeBoundingSphere();
+    const single = new THREE.Mesh(merged, material);
+    single.name = `merged:${material.name || material.type}`;
+    single.matrixAutoUpdate = false;
+    scene.add(single);
+  }
+}
+
+export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandle {
   const asphalt = asphaltTexture();
   const gravelTex = gravelTexture();
   const grass = grassTexture();
@@ -430,23 +476,23 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
   /* ---------------- ground + verges + road ---------------- */
   const groundMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(GROUND_HALF * 2, GROUND_HALF * 2),
-    new THREE.MeshStandardMaterial({ map: grass, roughness: 1, metalness: 0 }),
+    toon({ map: grass, roughness: 1, metalness: 0 }),
   );
   groundMesh.rotation.x = -Math.PI / 2;
   groundMesh.position.y = -0.005;
   groundMesh.receiveShadow = true;
   scene.add(groundMesh);
 
-  const vergeMat = new THREE.MeshStandardMaterial({ color: 0x46602f, roughness: 1 });
+  const vergeMat = toon({ color: PALETTE.verge });
   for (const ribbon of [VERGE, JOKER_VERGE]) {
     const mesh = new THREE.Mesh(ribbonGeometry(ribbon), vergeMat);
     mesh.receiveShadow = true;
     scene.add(mesh);
   }
 
-  const roadMaterials: Record<Surface, THREE.MeshStandardMaterial> = {
-    tarmac: new THREE.MeshStandardMaterial({ map: asphalt, roughness: 0.92, metalness: 0 }),
-    gravel: new THREE.MeshStandardMaterial({ map: gravelTex, roughness: 1, metalness: 0 }),
+  const roadMaterials: Record<Surface, THREE.MeshToonMaterial> = {
+    tarmac: toon({ map: asphalt, roughness: 0.92, metalness: 0 }),
+    gravel: toon({ map: gravelTex, roughness: 1, metalness: 0 }),
   };
   for (const surface of ['tarmac', 'gravel'] as Surface[]) {
     for (const ribbon of [MAIN_ROAD[surface], JOKER_ROAD[surface]]) {
@@ -458,7 +504,7 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
   }
 
   /* white edge lines, following the width of each section */
-  const white = new THREE.MeshStandardMaterial({ color: 0xe8eef6, roughness: 0.7 });
+  const white = toon({ color: PALETTE.kerbWhite });
   for (const sign of [-1, 1]) {
     const line = stripRibbon(MAIN, (s) => sign * (s.halfWidth - 0.32), 0.16, 0.016);
     scene.add(new THREE.Mesh(ribbonGeometry(line, false), white));
@@ -481,14 +527,14 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
     tex.repeat.set(8, 1);
     const bandMesh = new THREE.Mesh(
       ribbonGeometry(band),
-      new THREE.MeshStandardMaterial({ map: tex, roughness: 0.8 }),
+      toon({ map: tex, roughness: 0.8 }),
     );
     bandMesh.receiveShadow = true;
     scene.add(bandMesh);
   }
 
   /* starting grid, staggered boxes behind the line */
-  const gridMat = new THREE.MeshStandardMaterial({ color: 0xdfe6ee, roughness: 0.8 });
+  const gridMat = toon({ color: 0xdfe6ee, roughness: 0.8 });
   for (let i = 0; i < 6; i++) {
     const p = pointAt(MAIN, START_DIST - 13 - i * 7);
     const box = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 4.4), gridMat);
@@ -500,7 +546,7 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
   }
 
   /* ---------------- kerbs on the tight corners ---------------- */
-  const kerbMat = new THREE.MeshStandardMaterial({ map: kerbTexture(), roughness: 0.75 });
+  const kerbMat = toon({ map: kerbTexture(), roughness: 0.75 });
   for (const zone of cornerSections(MAIN, 1 / 45)) {
     const section = MAIN.filter((s) => s.distance >= zone.from && s.distance <= zone.to);
     if (section.length < 5) continue;
@@ -526,12 +572,7 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
   }
 
   /* ---------------- crash barrier + catch fencing ---------------- */
-  const wallMat = new THREE.MeshStandardMaterial({
-    color: 0xb9c2cc,
-    roughness: 0.55,
-    metalness: 0.45,
-    side: THREE.DoubleSide,
-  });
+  const wallMat = toon({ color: PALETTE.barrier, side: THREE.DoubleSide });
   scene.add(new THREE.Mesh(ribbonGeometry(OUTER_FENCE, false), wallMat));
 
   const fenceTex = canvasTexture((ctx, size) => {
@@ -552,7 +593,7 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
       ctx.stroke();
     }
   }, 128, 1);
-  const meshFenceMat = new THREE.MeshStandardMaterial({
+  const meshFenceMat = toon({
     map: fenceTex,
     transparent: true,
     alphaTest: 0.05,
@@ -564,7 +605,7 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
   });
   scene.add(new THREE.Mesh(ribbonGeometry(raiseBand(OUTER_FENCE, WALL_HEIGHT, FENCE_TOP), false), meshFenceMat));
 
-  const jokerWallMat = new THREE.MeshStandardMaterial({
+  const jokerWallMat = toon({
     color: 0xe6e9ee,
     roughness: 0.7,
     side: THREE.DoubleSide,
@@ -584,7 +625,7 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
   ];
   const bannerMats = sponsors.map(
     ([text, bg, fg]) =>
-      new THREE.MeshStandardMaterial({
+      toon({
         map: bannerTexture(text, bg, fg),
         roughness: 0.85,
         side: THREE.DoubleSide,
@@ -601,11 +642,7 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
 
   /* ---------------- tyre walls at the corner exits ---------------- */
   const tyreGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.34, 12, 1, true);
-  const tyreMat = new THREE.MeshStandardMaterial({
-    color: 0x191b1e,
-    roughness: 0.95,
-    side: THREE.DoubleSide,
-  });
+  const tyreMat = toon({ color: PALETTE.tyre, side: THREE.DoubleSide });
   const tyreSpots: Array<{ pos: THREE.Vector3; angle: number }> = [];
   for (const zone of cornerSections(MAIN, 1 / 55)) {
     const steps = Math.max(4, Math.round((zone.to - zone.from) / 4));
@@ -636,7 +673,7 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
 
   /* ---------------- start gantry + lights ---------------- */
   const gantry = new THREE.Group();
-  const steelMat = new THREE.MeshStandardMaterial({ color: 0x2b323b, roughness: 0.6, metalness: 0.45 });
+  const steelMat = toon({ color: 0x2b323b, roughness: 0.6, metalness: 0.45 });
   const postGeo = new THREE.BoxGeometry(0.5, 7, 0.5);
   for (const sign of [-1, 1]) {
     const post = new THREE.Mesh(postGeo, steelMat);
@@ -655,7 +692,7 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
 
   const board = new THREE.Mesh(
     new THREE.PlaneGeometry(Math.min(14, beamLen - 2), 1.7),
-    new THREE.MeshStandardMaterial({
+    toon({
       map: bannerTexture('RALLYCROSS ARENA', '#101720', '#ffd24a'),
       roughness: 0.8,
       side: THREE.DoubleSide,
@@ -669,14 +706,14 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
 
   const lightPanel = new THREE.Mesh(
     new THREE.BoxGeometry(3.4, 0.9, 0.3),
-    new THREE.MeshStandardMaterial({ color: 0x14171c, roughness: 0.7 }),
+    toon({ color: 0x14171c, roughness: 0.7 }),
   );
   lightPanel.position.copy(start.pos);
   lightPanel.position.y = 5.4;
   lightPanel.rotation.y = startHeading;
   gantry.add(lightPanel);
 
-  const startLampMat = new THREE.MeshStandardMaterial({
+  const startLampMat = toon({
     color: 0x2a0a08,
     emissive: 0xff2200,
     emissiveIntensity: 0,
@@ -695,8 +732,8 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
   scene.add(gantry);
 
   /* ---------------- grandstands ---------------- */
-  const standMat = new THREE.MeshStandardMaterial({ color: 0x39414b, roughness: 0.85 });
-  const crowdMat = new THREE.MeshStandardMaterial({ map: crowd, roughness: 0.9 });
+  const standMat = toon({ color: 0x39414b, roughness: 0.85 });
+  const crowdMat = toon({ map: crowd, roughness: 0.9 });
   const makeStand = (length: number, rows: number) => {
     const group = new THREE.Group();
     for (let io = 0; io < rows; io++) {
@@ -731,14 +768,14 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
 
   /* ---------------- race control tower ---------------- */
   const tower = new THREE.Group();
-  const towerMat = new THREE.MeshStandardMaterial({ color: 0x59636f, roughness: 0.7 });
+  const towerMat = toon({ color: 0x59636f, roughness: 0.7 });
   const shaft = new THREE.Mesh(new THREE.BoxGeometry(3.6, 11, 3.6), towerMat);
   shaft.position.y = 5.5;
   shaft.castShadow = true;
   tower.add(shaft);
   const cab = new THREE.Mesh(
     new THREE.CylinderGeometry(3.1, 3.1, 2.4, 8),
-    new THREE.MeshStandardMaterial({
+    toon({
       color: 0x16212c,
       roughness: 0.18,
       metalness: 0.5,
@@ -750,7 +787,7 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
   tower.add(cab);
   const towerSign = new THREE.Mesh(
     new THREE.PlaneGeometry(5.2, 1.1),
-    new THREE.MeshStandardMaterial({
+    toon({
       map: bannerTexture('RACE CONTROL', '#0b1420', '#7fe3ff'),
       roughness: 0.7,
       side: THREE.DoubleSide,
@@ -761,14 +798,14 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
   place(tower, pointAt(MAIN, START_DIST - 34), -1, 15);
 
   /* ---------------- marshal posts + flags ---------------- */
-  const hutMat = new THREE.MeshStandardMaterial({ color: 0xd8dde4, roughness: 0.8 });
+  const hutMat = toon({ color: 0xd8dde4, roughness: 0.8 });
   const flagMats = [
-    new THREE.MeshStandardMaterial({ color: 0xffcc22, roughness: 0.9, side: THREE.DoubleSide }),
-    new THREE.MeshStandardMaterial({ color: 0x2f7fe0, roughness: 0.9, side: THREE.DoubleSide }),
-    new THREE.MeshStandardMaterial({ color: 0xd8342a, roughness: 0.9, side: THREE.DoubleSide }),
-    new THREE.MeshStandardMaterial({ color: 0xf2f4f7, roughness: 0.9, side: THREE.DoubleSide }),
+    toon({ color: 0xffcc22, roughness: 0.9, side: THREE.DoubleSide }),
+    toon({ color: 0x2f7fe0, roughness: 0.9, side: THREE.DoubleSide }),
+    toon({ color: 0xd8342a, roughness: 0.9, side: THREE.DoubleSide }),
+    toon({ color: 0xf2f4f7, roughness: 0.9, side: THREE.DoubleSide }),
   ];
-  const poleMat = new THREE.MeshStandardMaterial({ color: 0xc7ccd3, metalness: 0.6, roughness: 0.4 });
+  const poleMat = toon({ color: 0xc7ccd3, metalness: 0.6, roughness: 0.4 });
   for (const zone of cornerSections(MAIN, 1 / 80)) {
     const p = pointAt(MAIN, (zone.from + zone.to) / 2);
     const base = offsetPoint(p, -1, 10.5);
@@ -781,6 +818,8 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
     pole.position.set(1.4, 2.5, 0.6);
     post.add(pole);
     const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.0), flagMats[flags.length % flagMats.length]);
+    // Bendera dianimasikan per mesh, jadi tidak boleh ikut digabung.
+    flag.userData.noMerge = true;
     flag.position.set(2.2, 4.5, 0.6);
     post.add(flag);
     flags.push(flag);
@@ -789,8 +828,8 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
   }
 
   /* ---------------- floodlight masts ---------------- */
-  const mastMat = new THREE.MeshStandardMaterial({ color: 0x39424c, roughness: 0.6, metalness: 0.5 });
-  const lampHeadMat = new THREE.MeshStandardMaterial({
+  const mastMat = toon({ color: 0x39424c, roughness: 0.6, metalness: 0.5 });
+  const lampHeadMat = toon({
     color: 0xf4f6f8,
     emissive: 0xfff3d6,
     emissiveIntensity: 0.55,
@@ -821,7 +860,7 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
   const paddock = new THREE.Group();
   const apron = new THREE.Mesh(
     new THREE.PlaneGeometry(64, 38),
-    new THREE.MeshStandardMaterial({ map: asphalt.clone(), roughness: 0.95 }),
+    toon({ map: asphalt.clone(), roughness: 0.95 }),
   );
   apron.material.map!.repeat.set(10, 6);
   apron.rotation.x = -Math.PI / 2;
@@ -829,8 +868,8 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
   apron.receiveShadow = true;
   paddock.add(apron);
 
-  const tentMat = new THREE.MeshStandardMaterial({ color: 0xeef1f4, roughness: 0.85 });
-  const awningMat = new THREE.MeshStandardMaterial({
+  const tentMat = toon({ color: 0xeef1f4, roughness: 0.85 });
+  const awningMat = toon({
     color: 0xd8342a,
     roughness: 0.85,
     side: THREE.DoubleSide,
@@ -851,7 +890,7 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
     }
     const signBoard = new THREE.Mesh(
       new THREE.PlaneGeometry(Math.min(6, w - 1), 1),
-      new THREE.MeshStandardMaterial({
+      toon({
         map: bannerTexture(name, '#132033', '#ffd24a'),
         roughness: 0.8,
         side: THREE.DoubleSide,
@@ -875,8 +914,8 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
   }
 
   /* a couple of service trucks */
-  const truckBodyMat = new THREE.MeshStandardMaterial({ color: 0xf0f2f5, roughness: 0.7 });
-  const truckCabMat = new THREE.MeshStandardMaterial({ color: 0x1f4f8a, roughness: 0.5, metalness: 0.3 });
+  const truckBodyMat = toon({ color: 0xf0f2f5, roughness: 0.7 });
+  const truckCabMat = toon({ color: 0x1f4f8a, roughness: 0.5, metalness: 0.3 });
   for (const [x, z, rot] of [
     [66, 12, 0.3],
     [88, 2, -0.2],
@@ -907,9 +946,9 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
   /* ---------------- trees around the venue ---------------- */
   const trunkGeo = new THREE.CylinderGeometry(0.18, 0.26, 2.2, 6);
   const crownGeo = new THREE.ConeGeometry(1.9, 5.2, 7);
-  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3524, roughness: 1 });
-  const crownMat = new THREE.MeshStandardMaterial({ color: 0x2f4a26, roughness: 1 });
-  const treeCount = 190;
+  const trunkMat = toon({ color: PALETTE.trunk });
+  const crownMat = toon({ color: PALETTE.leaf });
+  const treeCount = detail ? 190 : 90;
   const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, treeCount);
   const crowns = new THREE.InstancedMesh(crownGeo, crownMat, treeCount);
   crowns.castShadow = true;
@@ -947,7 +986,7 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
   const jokerPoint = pointAt(MAIN, MAIN[nearestSample(MAIN, JOKER_START)].distance - 14);
   const jokerSign = new THREE.Mesh(
     new THREE.PlaneGeometry(5.2, 1.8),
-    new THREE.MeshStandardMaterial({
+    toon({
       map: bannerTexture('JOKER', '#101720', '#ffb02e'),
       roughness: 0.8,
       side: THREE.DoubleSide,
@@ -964,6 +1003,9 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
     scene.add(leg);
   }
 
+  // Semua prop statis sudah dibuat: satukan per material.
+  mergeStaticProps(scene);
+
   /* ---------------- animation ---------------- */
   let clock = 0;
   return {
@@ -979,9 +1021,13 @@ export function buildTrackVisuals(scene: THREE.Scene): TrackHandle {
 }
 
 /** Convenience for the browser: colliders + meshes in one call. */
-export function buildTrack(world: RAPIER.World, scene: THREE.Scene): TrackHandle {
+export function buildTrack(
+  world: RAPIER.World,
+  scene: THREE.Scene,
+  detail = true,
+): TrackHandle {
   buildTrackColliders(world);
-  return buildTrackVisuals(scene);
+  return buildTrackVisuals(scene, detail);
 }
 
 /** Take-off crest of every jump on the lap, in lap order. */

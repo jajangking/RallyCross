@@ -1,6 +1,6 @@
 # RallyCross — Vehicle Physics Prototype
 
-Prototipe **mobil rally 3D di web** (three.js + Rapier): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **grid 6 mobil** (kamu + 5 lawan AI) yang balapan 3 lap, **jejak ban + asap/debu** dari ban yang benar-benar selip, papan klasemen langsung, dan **9 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI. Belum ada multiplayer.
+Prototipe **mobil rally 3D di web** (three.js + Rapier) dengan gaya **kartun** (cel shading, langit gradasi, bayangan blob): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **grid 6 mobil** (kamu + 5 lawan AI) yang balapan 3 lap, **jejak ban + asap/debu** dari ban yang benar-benar selip, papan klasemen langsung, dan **9 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI. Belum ada multiplayer.
 
 ## Jalanin
 
@@ -9,7 +9,7 @@ npm install
 npm run dev        # buka http://localhost:5173
 ```
 
-Di Android/Termux: jalankan `npm run dev`, lalu buka `http://localhost:5173` di Chrome HP. Tambah `?quality=low` kalau GPU-nya lemah (shadow dimatikan, pixel ratio 1x).
+Di Android/Termux: jalankan `npm run dev`, lalu buka `http://localhost:5173` di Chrome HP. Tambah `?quality=low` kalau GPU-nya lemah (pixel ratio 1x, tanpa anti-alias, pohon lebih sedikit); `?quality=high` memaksa detail. Di HP kecil, mode ringan dipilih otomatis.
 
 ```bash
 npm run build      # type-check + bundle
@@ -64,6 +64,7 @@ src/
 │  ├─ CarLights.ts          # lampu rem, sein, mundur, lampu utama
 │  └─ carParts.ts           # material + helper geometri (link, pegas)
 ├─ world/
+│  ├─ style.ts              # gaya kartun: cel shading, langit, bayangan blob
 │  ├─ circuit.ts            # geometri sirkuit: node, sampling, ribbon (tanpa DOM)
 │  └─ track.ts              # arena rallycross
 │     ├─ buildTrackColliders() # permukaan + barrier + joker — tanpa DOM
@@ -169,8 +170,9 @@ perubahan ada di [`public/models/CREDITS.md`](public/models/CREDITS.md).
   `suspLength` per roda, termasuk gerak naik/turun saat suspensi terkompresi.
 - **Lampu dari model itu sendiri** — mesh lampu bawaan model dibelah kiri/kanan
   di index buffer, jadi lampu rem, lampu posisi, sein, lampu mundur, dan lampu
-  utama menyala di bentuk lampu aslinya (plus dua `SpotLight` untuk sorot
-  lampu utama, dimatikan di `?quality=low`).
+  utama menyala di bentuk lampu aslinya. Lampu sorot 3D (`SpotLight`) sudah
+  dihapus: enam mobil × dua lampu = 12 lampu yang harus dihitung setiap
+  fragment, dan gaya kartun cukup dengan lampu yang menyala (emissive).
 - **Cat bisa diganti** — default putih `#dfe4e8`; coba `?paint=e23b2e`,
   `?paint=1f3fbf`, dan seterusnya.
 - **Fallback** — kalau GLB gagal dimuat, `CarVisual.ts` (bodi prosedural lama)
@@ -183,8 +185,9 @@ nyala / 0.42 s mati dan restart saat pilihan berubah, lampu mundur mengikuti
 gigi R, dan repeater ◀ ▶ ◐ di HUD ikut berkedip.
 
 **Material & performa**
-- `PMREMGenerator` + `RoomEnvironment` memberi environment map supaya cat
-  metalik, kaca, dan krom model terbaca (dilewati di `?quality=low`).
+- Semua material — trek, props, bodi mobil, termasuk material bawaan model GLB —
+  diganti `MeshToonMaterial` dengan satu gradasi 4 langkah bersama
+  (`src/world/style.ts`). Cat bodi juga ikut warna livery per mobil.
 - Model: 39 mesh / ±18 ribu triangle, 250 KB, satu tekstur JPEG (lampu + plat
   nomor); bodi prosedural fallback: 132 mesh / ±37 ribu triangle.
 
@@ -229,7 +232,8 @@ Cara kerjanya (`src/ai/AutoPilot.ts`, murni matematika, tanpa DOM):
 - **Melebar** — di luar > 60 % lebar trek target kecepatan dipotong; kalau sudah keluar trek, titik tujuan justru didekatkan dan tarikan garis dimatikan supaya mobil benar-benar berbelok kembali ke garis (titik jauh membuat sudutnya kecil dan mobil malah jalan lurus makin jauh).
 - **Menyalip** — kalau ada mobil lebih lambat < 12 m di depan dan jalurnya sudah cukup cepat, AI menggeser **seluruh garisnya** ke sisi yang lapang (maks. selebar ruang yang tersisa), lalu kembali ke garis. Geseran itu dihitung ulang frame-nya: kalau hanya posisi yang digeser, kecepatan tikungan tetap dihitung dari radius garis lama dan mobil keluar trek.
 - **Tidak menyalip di tikungan sempit** — kalau lengkung 45 m ke depan > 0,013 (radius < 77 m), AI batal menggeser lajur dan (kalau sedang bergeser) kembali ke garis 2,5× lebih cepat. Pindah lajur sambil berbelok berarti radius yang harus dilalui berubah; di uji 6 mobil inilah penyebab satu-satunya mobil yang keluar trek lalu perlu di-rescue. Setelah aturan ini: **0 rescue, 0 tabrakan, seluruh grid finis**.
-- **Macet / terbalik** — diam < 1,2 m/s selama 1,6 s → mundur sebentar lalu maju lagi; terbalik (up < 0,35) selama 2,5 s → minta reset. Jaring pengaman terakhir: di luar trek > 1,2 m dengan kecepatan < 4,5 m/s selama 3 s → mobil dikembalikan ke garis (dihitung di kolom `rescues`).
+- **Macet** — diam < 1,2 m/s selama 1,6 s → mundur sebentar lalu maju lagi.
+- **Terbalik / menabrak: tidak ada reset.** Mobil dibiarkan apa adanya — sama sekali tidak ada teleportasi ke garis atau ke grid. AI cuma melepas semua pedal (gas, rem, setir) selama mobilnya miring lebih dari ~69°, lalu langsung lanjut balapan begitu rodanya kembali ke bawah. Satu-satunya pengecualian: mobil yang jatuh di bawah dunia (y < −20, artinya bug fisika, bukan kecelakaan) dikembalikan ke garis.
 - **Joker** — pilihan joker dievaluasi ulang tiap putaran (checkbox *joker lap*), dan HUD menampilkan status AI + lap + waktu lap/best.
 
 Hasil uji headless dengan fisika asli: **satu putaran 29,9 s**, tidak pernah keluar tepi trek, 0 reset, dan stabil di 6 putaran berturut-turut (aspal & gravel, dengan/tanpa joker). Diuji juga dari 30 titik start berbeda (offset ±3 m): semuanya menyelesaikan putaran.
@@ -259,7 +263,7 @@ Di grid ada **enam mobil**: punyamu + **lima lawan AI** dengan nama dan warna se
 - **Papan klasemen.** HUD kanan atas menampilkan 6 baris: posisi, nama, lap (atau selisih meter terhadap pemimpin), dan lap terbaik. Baris pemain disorot. Urutannya: yang finis dulu, lalu lap, lalu odometer.
 - **Rekor lap.** Setiap kali ada mobil (termasuk kamu) mencatat lap tercepat baru, angka itu masuk papan rekor, disimpan di `localStorage` (`rallycross.recordLap.v1`), dan baris **REKOR BARU 30,92s · Bagas** menyala emas selama ~3 detik. Jadi AI memang saling menciptakan rekor, bukan cuma kamu.
 - **Putaran dihitung di garis start**, bukan di ujung spline: `LapCounter` memakai odometer yang tidak pernah wrap.
-- **Terbalik / terlempar** → kembali ke garis balap menghadap arah putaran (bukan ke grid).
+- **Terbalik / terlempar** → dibiarkan, tidak di-reset (lihat bagian AI di atas).
 - Selesai 3 lap → banner `FINISH · P1 KAMU` / `FINISH · P1 <nama>`; `R` mengulang dari grid.
 
 Hasil uji headless 6 mobil di trek asli (`LAPS=3`, fisika penuh): **seluruh grid finis dalam 102 s**, jarak terdekat **1,84 m** (0 tabrakan, 0 rescue), lap terbaik 29,92–31,70 s — selisih pemimpin–pemburu cuma 1,8 s. Hasilnya deterministik (dua run identik).
@@ -272,6 +276,37 @@ Untuk setiap mobil (`src/fx/`):
 - **Asap & debu** (`Smoke.ts`) — satu `Points` dengan kolam partikel tetap (480; 220 di low). Partikel lahir dari titik kontak ban, membesar, naik, dan memudar; warna mengikuti jenis permukaan (aspal = asap kelabu, gravel = debu coklat, rumput = debu kehijauan).
 - **Pemicunya fisika, bukan animasi** (`CarEffects.ts`) — semuanya dibaca dari `WheelState`: `vLat` (selip lateral), `slipAngle`, `traction` (ban berputar di tempat saat start), `handbrake`, `surfaceMu`, dan `contactPoint`. Jadi handbrake di aspal mengasapi ban belakang, mobil yang melebar ke gravel menyemburkan debu walau tidak selip, dan pendaratan setelah lompatan mengepulkan debu sesuai lama melayang.
 - **Anggaran per mobil** (2 kepulan/frame) menjamin enam mobil drifting sekaligus tidak membanjiri kolam partikel. Panel → *Lawan* → **hapus jejak ban** membersihkan sisa goresan.
+
+## Gaya kartun & performa render
+
+Seluruh arena sekarang bergaya kartun (`src/world/style.ts`), dan itu sekaligus
+cara paling murah untuk merender:
+
+- **Cel shading** — semua material trek, props, dan mobil memakai
+  `MeshToonMaterial` dengan satu gradasi 4 langkah (`NearestFilter`, jadi
+  batas terang/gelapnya tajam). Material bawaan model GLB ikut dikonversi saat
+  dimuat (warna, peta, dan transparansinya dipertahankan).
+- **Tanpa shadow map** — bayangan diganti **blob** (satu bidang gradasi radial
+  di bawah tiap mobil, ikut mengecil/menghilang saat mobil terbang). Satu pass
+  shadow 2048² untuk seluruh arena jauh lebih mahal daripada enam lingkaran.
+- **Tanpa environment map** — `PMREMGenerator` + `RoomEnvironment` dihapus:
+  material toon tidak butuh pantulan, dan render kubah lingkungan saat boot
+  termasuk biaya terbesar di HP.
+- **Satu directional light** (plus satu hemisphere). Dua `SpotLight` per mobil
+  (12 lampu untuk grid 6 mobil) dihapus — setiap fragment harus menghitung
+  semuanya, padahal lampu emissive sudah cukup.
+- **Draw call digabung** — ~190 mesh kecil (tiang, tribun, spanduk, tiang
+  lampu) yang berbagi material digabung jadi satu per material saat trek
+  dibangun: **195 → 55 draw call** untuk seluruh arena, dengan triangle yang
+  persis sama (22.562). Bendera tetap terpisah karena dianimasikan per mesh.
+- **Kabut & far plane** dipendekkan (120–330 m, kamera 400 m) supaya props di
+  kejauhan tidak ikut digambar; **pixel ratio** dibatasi 1,5× (dari 2×) dan
+  anisotropi tekstur 4×.
+- **Mode ringan otomatis** — di HP (pointer kasar, sisi terpendek < 620 px)
+  game mulai tanpa anti-alias, pixel ratio 1×, dan 90 pohon saja.
+  `?quality=low` / `?quality=high` memaksa pilihan itu.
+- Warna: aspal biru-gelap, gravel pasir hangat, rumput hijau cerah dengan pola
+  potong, langit gradasi dengan kubah yang mengikuti kamera.
 
 ## Verifikasi
 
@@ -290,11 +325,13 @@ Untuk setiap mobil (`src/fx/`):
 - determinisme: dua run identik → state akhir identik
 - `buildTrackColliders()` jalan tanpa DOM, ramp melontarkan mobil lalu mendarat tegak
 - jalur lap (utama + joker) punya jarak yang monoton dan joker memang lebih pendek
-- **AI menyelesaikan satu putaran sendiri** (30 s), tidak keluar tepi trek, tanpa reset
+- **AI menyelesaikan satu putaran sendiri** (30 s), tidak keluar tepi trek, tidak pernah terbalik
+- mobil terbalik: AI mengirim gas/rem/setir nol (tidak ada reset), lalu menyetir lagi begitu rodanya kembali ke bawah
+- material kartun: gradasi cel shading 4 langkah dipakai bersama, `toon()` mengabaikan kunci PBR lama, dan material model GLB jadi toon tanpa kehilangan warna/transparansi
 - jejak ban: quad terkumpul, buffer berputar (tidak tumbuh selamanya), bisa dibersihkan, dan mobil yang diam tidak meninggalkan jejak sama sekali; mobil yang selip + handbrake menghasilkan >10 potong jejak dan asap
 - asap: partikel lahir, hidup, dan habis sesuai umurnya, semuanya di satu buffer tetap
 - papan klasemen: urut finis → lap → odometer, selisih diukur ke pemimpin; papan rekor: lap pertama jadi rekor, lap lebih lambat tidak mencuri rekor, rekor bertahan setelah reload, dan tetap jalan tanpa `localStorage`
-- **grid 6 mobil**: lima lawan finis satu putaran, tidak ada yang melebar > 12 m, tidak ada yang perlu rescue > 2×, jarak terdekat > 1,2 m, dan papan klasemen memuat keenam mobil berurutan
+- **grid 6 mobil**: lima lawan finis satu putaran, tidak ada yang melebar > 12 m, tidak ada yang berakhir terbalik, jarak terdekat > 1,2 m, dan papan klasemen memuat keenam mobil berurutan
 - penghitung lap menambah tepat satu lap per putaran, odometer cocok dengan panjang trek
 - **lawan AI menyelesaikan putaran** (35–38 s), tetap di dekat trek, dan dua mobil tidak saling menembus
 - 9 kamera TV berdiri di luar trek, sutradara memakai ≥5 kamera berbeda, tidak ada shot < 1,6 s, dan mobil yang dibidik tidak pernah lebih dari 220 m
@@ -309,7 +346,7 @@ Status terakhir: **semua lolos**.
 2. **Suara** — mesin, ban, tabrakan (WebAudio), plus kamera shake.
 3. **AI** — strategi joker per lap (sudah ada, belum dioptimalkan), dan menyalip di tikungan sempit (sekarang sengaja dihindari).
 4. **Multiplayer** — Rapier headless di server (kode fisika sudah DOM-free).
-5. **Optimasi mobile** — instancing, LOD, KTX2, shadow hanya untuk mobil.
+5. **Optimasi mobile lanjutan** — LOD, KTX2, dan tekstur atlas (draw call sudah ditekan ke ~55 untuk seluruh arena).
 
 ## Catatan lingkungan
 

@@ -26,7 +26,7 @@ export class CameraRig {
   private readonly fwd = new THREE.Vector3();
 
   constructor(aspect: number, spots: BroadcastSpot[] = []) {
-    this.camera = new THREE.PerspectiveCamera(this.fovBase, aspect, 0.1, 700);
+    this.camera = new THREE.PerspectiveCamera(this.fovBase, aspect, 0.1, 400);
     this.camera.position.set(0, 5, -12);
     this.director = spots.length ? new BroadcastDirector(spots) : null;
   }

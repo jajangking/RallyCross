@@ -237,12 +237,7 @@ export class CarVisual {
     }
 
     /* ---------------- mirrors ---------------- */
-    const mirrorMat = new THREE.MeshPhysicalMaterial({
-      color: 0xa8bccd,
-      metalness: 1,
-      roughness: 0.05,
-      envMapIntensity: 2,
-    });
+    const mirrorMat = new THREE.MeshBasicMaterial({ color: 0xd8e6f2 });
     for (const side of [-1, 1]) {
       const housing = roundedBox(0.19, 0.11, 0.22, 0.035, mats.paint);
       housing.position.set(side * (bodyHalf + 0.13), 0.34, 0.48);

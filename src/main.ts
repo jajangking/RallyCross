@@ -17,10 +17,24 @@ import { Input } from './input';
 import { Hud } from './hud';
 import { CameraRig } from './camera';
 import type { CarLightState } from './vehicle/CarLights';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { createBlobShadow, createSky, PALETTE } from './world/style';
 
 const FIXED_DT = 1 / 60;
 const MAX_SUBSTEPS = 5;
+/** Tinggi bodi di atas permukaan saat diam (untuk menaruh bayangan blob). */
+const RIDE_HEIGHT = 0.92;
+
+/**
+ * Bayangan blob mengikuti mobil; disembunyikan saat roda tidak menyentuh tanah
+ * (di udara bayangan yang menempel di mobil justru terlihat aneh).
+ */
+const followShadow = (shadow: THREE.Mesh, body: VehiclePhysics) => {
+  const grounded = body.wheels.some((w) => w.contact);
+  shadow.visible = grounded;
+  if (!grounded) return;
+  shadow.position.set(body.position.x, body.position.y - RIDE_HEIGHT, body.position.z);
+};
+
 /** Jam yang selalu ada, baik di browser maupun saat diuji headless. */
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
@@ -32,8 +46,14 @@ async function boot() {
   const bootEl = document.getElementById('boot')!;
   const app = document.getElementById('app')!;
 
-  // `?quality=low` -> no shadow maps, 1x pixel ratio (weak phones / headless test)
-  const lowQuality = new URLSearchParams(location.search).get('quality') === 'low';
+  // `?quality=low` -> 1x pixel ratio, tanpa anti-alias, pohon lebih sedikit
+  // (dipakai di HP lemah dan di uji headless). `?quality=high` memaksa detail.
+  const qualityParam = new URLSearchParams(location.search).get('quality');
+  // Kalau tidak disebut, HP kecil/kelas menengah otomatis dapat versi ringan.
+  const weakDevice =
+    window.matchMedia?.('(pointer: coarse)').matches === true &&
+    Math.min(window.innerWidth, window.innerHeight) < 620;
+  const lowQuality = qualityParam === 'low' || (qualityParam === null && weakDevice);
 
   /* ---------------- renderer ---------------- */
   let renderer: THREE.WebGLRenderer;
@@ -46,45 +66,40 @@ async function boot() {
 
   // Low quality pins the pixel ratio at 1x; keep that decision for resizes too
   // (phones re-fire `resize` whenever the address bar appears/disappears).
-  const maxPixelRatio = lowQuality ? 1 : Math.min(window.devicePixelRatio, 2);
+  // 1,5x sudah tajam untuk gaya kartun dan 44 % lebih ringan dari 2x.
+  const maxPixelRatio = lowQuality ? 1 : Math.min(window.devicePixelRatio, 1.5);
   renderer.setPixelRatio(maxPixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.shadowMap.enabled = !lowQuality;
-  renderer.shadowMap.type = THREE.PCFShadowMap;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.06;
+  // Tanpa shadow map sama sekali: bayangan diganti "blob" di bawah tiap mobil.
+  // Satu pass shadow 2048² untuk seluruh arena jauh lebih mahal daripada enam
+  // lingkaran hitam, dan gaya kartun tidak butuh bayangan tajam.
+  renderer.shadowMap.enabled = false;
+  // Tone mapping "neutral": warna tetap pekat (tidak pudar seperti ACES),
+  // tapi bagian yang sangat terang tidak langsung menjadi putih rata.
+  renderer.toneMapping = THREE.NeutralToneMapping;
+  renderer.toneMappingExposure = 1;
   app.appendChild(renderer.domElement);
 
   /* ---------------- scene ---------------- */
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x121820);
-  scene.fog = new THREE.Fog(0x121820, 90, 420);
+  scene.background = new THREE.Color(PALETTE.sky);
+  // Kabut tipis: menyembunyikan batas dunia dan memotong kerja jauh.
+  scene.fog = new THREE.Fog(PALETTE.fog, 120, 330);
+  // Kubah langit ikut kamera, jadi tidak pernah terpotong far plane.
+  const sky = createSky(PALETTE.skyTop, PALETTE.skyHorizon, 340);
+  scene.add(sky);
 
-  // A tiny procedural environment map is what makes the paint, glass and
-  // mirrors read as real materials instead of flat colours.
-  if (!lowQuality) {
-    const pmrem = new THREE.PMREMGenerator(renderer);
-    const room = new RoomEnvironment();
-    scene.environment = pmrem.fromScene(room, 0.04).texture;
-    room.dispose();
-    pmrem.dispose();
-  }
+  // Tidak ada environment map (PMREM): material toon memang tidak butuh
+  // pantulan, dan render kubah lingkungan saat boot termasuk biaya terbesar
+  // di HP.
 
-  const hemi = new THREE.HemisphereLight(0xb7d2ef, 0x2b2419, 1.15);
+  const hemi = new THREE.HemisphereLight(0xdff0ff, 0x6b7a4a, 0.85);
   scene.add(hemi);
 
-  const sun = new THREE.DirectionalLight(0xfff0da, 2.3);
+  // Satu directional light saja: cukup untuk cel shading, dan tidak ada
+  // shadow map yang harus dirender ulang tiap frame.
+  const sun = new THREE.DirectionalLight(0xfff6df, 1.35);
   sun.position.set(45, 65, 25);
-  sun.castShadow = !lowQuality;
-  sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.left = -45;
-  sun.shadow.camera.right = 45;
-  sun.shadow.camera.top = 45;
-  sun.shadow.camera.bottom = -45;
-  sun.shadow.camera.near = 1;
-  sun.shadow.camera.far = 220;
-  sun.shadow.bias = -0.0006;
-  sun.shadow.normalBias = 0.035;
   scene.add(sun);
   scene.add(sun.target);
 
@@ -92,7 +107,7 @@ async function boot() {
   const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
   world.timestep = FIXED_DT;
 
-  const track = buildTrack(world, scene);
+  const track = buildTrack(world, scene, !lowQuality);
 
   // first grid slot, ten metres behind the start/finish line
   const car = new VehiclePhysics(world, defaultConfig, new THREE.Vector3(0, 0.95, -10));
@@ -106,6 +121,9 @@ async function boot() {
   smoke.setPixelRatio(renderer.getPixelRatio());
   scene.add(smoke.points);
   const playerEffects = new CarEffects(car, skidMarks, smoke);
+  // Bayangan "blob": pengganti shadow map, satu bidang per mobil.
+  const playerShadow = createBlobShadow(1.5, 0.34);
+  scene.add(playerShadow);
 
   // The hand-built body is only a stand-in: the detailed GLB in `public/models`
   // replaces it as soon as it is decoded (and stays if the download fails).
@@ -156,6 +174,7 @@ async function boot() {
         return visual;
       },
       effects: new CarEffects(rival.car, skidMarks, smoke),
+      shadow: createBlobShadow(1.5, 0.34),
       /** Lap terbaik yang sudah dikirim ke papan rekor. */
       lastBest: Infinity,
       /** Perintah terakhir: efek ban butuh tahu gas/rem/handbrake. */
@@ -170,6 +189,8 @@ async function boot() {
       } as CarLightState,
     };
   });
+
+  for (const r of rivals) scene.add(r.shadow);
 
   const playerLaps = new LapCounter(TRACK.main, TRACK.start, car.position);
   const race = {
@@ -252,6 +273,7 @@ async function boot() {
     race.rivals = on;
     for (const r of rivals) {
       r.visual.root.visible = on;
+      r.shadow.visible = on;
       r.effects.reset();
       if (on) r.rival.resetToGrid();
       else r.rival.park();
@@ -527,10 +549,8 @@ async function boot() {
       world.step();
       accumulator -= FIXED_DT;
       steps++;
-      if (auto.enabled && pilot.needsReset) {
-        resetCar();
-        break;
-      }
+      // Catatan: mobil yang terbalik atau menabrak **tidak** di-reset otomatis.
+      // Biar apa adanya — pemain bisa mengulang balapan dengan `R`.
     }
     if (steps === MAX_SUBSTEPS) accumulator = 0;
 
@@ -587,6 +607,10 @@ async function boot() {
         r.effects.update(raw, r.lastCommand);
       }
     }
+    // Bayangan blob: ikut mobil, sembunyi saat roda tidak menyentuh tanah.
+    followShadow(playerShadow, car);
+    if (race.rivals) for (const r of rivals) followShadow(r.shadow, r.rival.car);
+
     // Jejak ban + asap di-upload sekali per frame, setelah semua mobil menulis.
     skidMarks.flush();
     smoke.update(raw);
@@ -633,6 +657,7 @@ async function boot() {
           : `finish · P1 ${race.winnerName} · ${race.laps} lap`,
     );
     followSun();
+    sky.position.copy(cameraRig.camera.position);
 
     renderer.render(scene, cameraRig.camera);
   });

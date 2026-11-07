@@ -94,7 +94,7 @@ export interface TrafficCar {
   speed: number;
 }
 
-export type PilotMode = 'drive' | 'reverse' | 'align';
+export type PilotMode = 'drive' | 'reverse' | 'align' | 'flip';
 
 /**
  * Garis balap yang digeser ke samping. Menggeser *jalurnya* (bukan cuma titik
@@ -166,8 +166,6 @@ export class AutoPilot {
   lastLap = 0;
   /** Jarak lateral dari garis tengah, meter (positif = ke sisi `+side`). */
   lateral = 0;
-  /** True kalau AI minta mobil di-reset (mobil terbalik, tidak bisa sendiri). */
-  needsReset = false;
 
   private readonly plain: PathSample[];
   private readonly withJoker: PathSample[];
@@ -240,10 +238,14 @@ export class AutoPilot {
     this.lateral =
       (car.position.x - s.pos.x) * s.side.x + (car.position.z - s.pos.z) * s.side.z;
 
-    // Terbalik / nyangkut di dinding: minta reset setelah beberapa detik.
+    // Terbalik / tertidur: **tidak** minta reset — mobil dibiarkan apa adanya.
+    // AI cuma melepas semua pedal dan menunggu gravitasi menurunkannya lagi.
     const up = tmpUp.set(0, 1, 0).applyQuaternion(car.quaternion);
     this.flipTime = up.y < 0.35 ? this.flipTime + dt : 0;
-    if (this.flipTime > 2.5) this.needsReset = true;
+    if (this.flipTime > 0.15 && this.mode !== 'flip') {
+      this.mode = 'flip';
+      this.maneuverTime = 0;
+    }
 
     if (this.mode !== 'drive') return this.maneuver(dt, car, speed);
 
@@ -265,7 +267,6 @@ export class AutoPilot {
     this.stuckTime = 0;
     this.flipTime = 0;
     this.maneuverTime = 0;
-    this.needsReset = false;
     this.lapTime = 0;
     this.steerCmd = 0;
     this.throttleCmd = 0;
@@ -539,9 +540,21 @@ export class AutoPilot {
     return { throttle, brake, steer, handbrake: false, gear: 1 };
   }
 
-  /** Manuver mundur / luruskan setelah tersangkut. */
+  /** Manuver mundur / luruskan / tunggu setelah mobil terbalik. */
   private maneuver(dt: number, car: PilotCar, speed: number): VehicleInput {
     this.maneuverTime += dt;
+
+    if (this.mode === 'flip') {
+      // Diam total: tidak ada gas, rem, atau setir. Begitu rodanya kembali ke
+      // bawah, AI langsung lanjut balapan dari posisi terakhirnya.
+      const up = tmpUp.set(0, 1, 0).applyQuaternion(car.quaternion);
+      if (up.y > 0.6) {
+        this.mode = 'drive';
+        this.maneuverTime = 0;
+        this.stuckTime = 0;
+      }
+      return { throttle: 0, brake: 0, steer: 0, handbrake: false, gear: 1 };
+    }
 
     if (this.mode === 'reverse') {
       // Gigi R hanya diterima mobil saat hampir berhenti.
