@@ -373,6 +373,7 @@ async function boot() {
     pilot.reset(car.position);
     playerLaps.reset(car.position);
     playerEffects.reset();
+    focusDirector.snap();
     if (race.rivals) for (const r of rivals) r.rival.resetToGrid();
     for (const r of rivals) {
       r.visual.root.visible = race.rivals;
