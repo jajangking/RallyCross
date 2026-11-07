@@ -82,9 +82,10 @@ async function boot() {
   const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
   world.timestep = FIXED_DT;
 
-  buildTrack(world, scene);
+  const track = buildTrack(world, scene);
 
-  const car = new VehiclePhysics(world, defaultConfig, new THREE.Vector3(0, 0.95, 0));
+  // first grid slot, ten metres behind the start/finish line
+  const car = new VehiclePhysics(world, defaultConfig, new THREE.Vector3(0, 0.95, -10));
 
   // The hand-built body is only a stand-in: the detailed GLB in `public/models`
   // replaces it as soon as it is decoded (and stays if the download fails).
@@ -273,6 +274,7 @@ async function boot() {
     lightState.hazard = input.lights.hazard;
     lightState.headlights = input.lights.headlights;
 
+    track.update(raw);
     carVisual.update(car, raw, lightState);
     cameraRig.update(raw, car);
     hud.update(car, raw);

@@ -5,7 +5,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import { defaultConfig, VehiclePhysics, type VehicleInput } from '../src/vehicle/VehiclePhysics';
-import { buildTrackColliders } from '../src/world/track';
+import { buildTrackColliders, TRACK } from '../src/world/track';
 
 const DT = 1 / 60;
 let failures = 0;
@@ -111,11 +111,28 @@ async function run() {
   const parkWorld = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
   parkWorld.timestep = DT;
   buildTrackColliders(parkWorld);
-  for (const [label, x, z] of [
-    ['gravel edge', 46, 30],
-    ['ice edge', -48, 40],
-  ] as Array<[string, number, number]>) {
-    const parked = new VehiclePhysics(parkWorld, defaultConfig, new THREE.Vector3(x, 1.2, z));
+
+  // Every place where the grip under the car changes hands: the tarmac/gravel
+  // seams, plus one spot straddling the white line and the grass verge.
+  const parkSpots: Array<{ label: string; x: number; y: number; z: number; yaw: number }> = [];
+  {
+    const main = TRACK.main;
+    const seen: number[] = [];
+    for (let i = 1; i < main.length; i++) {
+      if (main[i].surface === main[i - 1].surface) continue;
+      if (seen.some((d) => Math.abs(main[i].distance - d) < 25)) continue;
+      seen.push(main[i].distance);
+      const a = TRACK.at(main[i].distance);
+      parkSpots.push({ label: `${main[i - 1].surface}→${main[i].surface} seam`, x: a.pos.x, y: 0.6, z: a.pos.z, yaw: a.yaw });
+    }
+    const a = TRACK.at(TRACK.start + 26);
+    const side = new THREE.Vector3(a.tangent.z, 0, -a.tangent.x);
+    const edge = a.pos.clone().addScaledVector(side, 7.8);
+    parkSpots.push({ label: 'road edge / grass', x: edge.x, y: 0.6, z: edge.z, yaw: a.yaw });
+  }
+
+  for (const spot of parkSpots) {
+    const parked = new VehiclePhysics(parkWorld, defaultConfig, new THREE.Vector3(spot.x, 1.2, spot.z), spot.yaw);
     for (let i = 0; i < Math.round(4 / DT); i++) {
       parked.fixedStep(DT, coast);
       parkWorld.step();
@@ -134,9 +151,9 @@ async function run() {
     }
     parked.sync();
     const creep = Math.hypot(parked.position.x - p0.x, parked.position.z - p0.z);
-    check(creep < 0.02, `parked on the ${label} stays put`, `creep ${(creep * 100).toFixed(1)} cm / 6 s`);
-    check(gripPeak < 0.1, `no grip flicker on the ${label}`, `peak traction ${(gripPeak * 100).toFixed(0)} %`);
-    check(suspSpread < 0.003, `suspension settles on the ${label}`, `spread ${(suspSpread * 1000).toFixed(1)} mm`);
+    check(creep < 0.02, `parked on the ${spot.label} stays put`, `creep ${(creep * 100).toFixed(1)} cm / 6 s`);
+    check(gripPeak < 0.1, `no grip flicker on the ${spot.label}`, `peak traction ${(gripPeak * 100).toFixed(0)} %`);
+    check(suspSpread < 0.003, `suspension settles on the ${spot.label}`, `spread ${(suspSpread * 1000).toFixed(1)} mm`);
     parked.body.setTranslation({ x: 0, y: 50, z: 0 }, true);
     parked.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
   }
@@ -242,15 +259,30 @@ async function run() {
   }
   check(trackBuilt, 'buildTrackColliders() runs without a DOM');
 
-  const trackCar = new VehiclePhysics(trackWorld, defaultConfig, new THREE.Vector3(0, 0.95, 0));
+  // Aim at the biggest jump on the lap and floor it from 30 m back: the car
+  // must leave the ground, fly, and land rubber side down.
+  const biggest = TRACK.jumps.reduce((best, j) => (j.height > best.height ? j : best), TRACK.jumps[0]);
+  const approach = TRACK.at(biggest.distance - 30);
+  const trackCar = new VehiclePhysics(
+    trackWorld,
+    defaultConfig,
+    new THREE.Vector3(approach.pos.x, 1.0, approach.pos.z),
+    approach.yaw,
+  );
   let maxY = 0;
+  let airborne = 0;
   for (let i = 0; i < Math.round(9 / DT); i++) {
     trackCar.fixedStep(DT, gas);
     trackWorld.step();
     maxY = Math.max(maxY, trackCar.position.y);
+    if (trackCar.position.y > biggest.height + 1.2) airborne += DT;
   }
   trackCar.sync();
-  check(maxY > 2.5, 'kick ramp launches the car', `peak y=${maxY.toFixed(2)} m`);
+  check(
+    maxY > biggest.height + 1.2,
+    'take-off ramp launches the car',
+    `crest ${biggest.height.toFixed(2)} m, peak y=${maxY.toFixed(2)} m, airborne ${airborne.toFixed(2)} s`,
+  );
   check(trackCar.position.y > 0.6, 'lands back on the track', `y=${trackCar.position.y.toFixed(2)} m`);
   check(Math.abs(trackCar.quaternion.x) < 0.3, 'stays upright after the jump', `qx=${trackCar.quaternion.x.toFixed(2)}`);
 

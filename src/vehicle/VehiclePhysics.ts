@@ -173,13 +173,20 @@ export class VehiclePhysics {
   private readonly impulse = { x: 0, y: 0, z: 0 };
   private readonly impulseAt = { x: 0, y: 0, z: 0 };
 
-  constructor(world: RAPIER.World, cfg: VehicleConfig = defaultConfig, spawn = new THREE.Vector3(0, 0.95, 0)) {
+  constructor(
+    world: RAPIER.World,
+    cfg: VehicleConfig = defaultConfig,
+    spawn = new THREE.Vector3(0, 0.95, 0),
+    /** Heading in radians; 0 points the nose along +Z. */
+    yaw = 0,
+  ) {
     this.world = world;
     this.cfg = { ...cfg };
     this.spawn = spawn.clone();
 
     const desc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(spawn.x, spawn.y, spawn.z)
+      .setRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) })
       .setLinearDamping(0.02)
       .setAngularDamping(cfg.angularDamping)
       .setCcdEnabled(true)
@@ -325,8 +332,36 @@ export class VehiclePhysics {
     this.applyAntiRoll();
     this.applyTireForces(dt, input, up, fwd, forwardSpeed);
     this.applyAero(dt, up);
+    this.applyParkingHold(dt, input);
 
     if (this.position.y < -25) this.reset();
+  }
+
+  /**
+   * Rem parkir: dengan gas dan rem dilepas, mobil yang sudah berhenti menancap
+   * di tanah, tidak menggelinding pelan di turunan landai. Ban asli punya
+   * gesekan statis; bodi rigid tidak, jadi tanpa ini mobil yang diparkir di
+   * tanjakan 0,5 % merayap turun (~0,3 m/s di trek baru yang bertanjakan).
+   */
+  private applyParkingHold(dt: number, input: VehicleInput) {
+    if (input.throttle > 0.01 || input.brake > 0.01 || input.handbrake) return;
+    let grounded = 0;
+    for (const w of this.wheels) if (w.contact) grounded++;
+    if (grounded < 3) return;
+
+    const lin = this.body.linvel();
+    const horizontal = Math.hypot(lin.x, lin.z);
+    if (horizontal > 0.8) return;
+    // static friction beats gravity up to about half a g of creep per step
+    const maxDelta = 0.5 * 9.81 * dt;
+    const scale = horizontal > 1e-6 ? Math.max(0, 1 - Math.min(1, maxDelta / horizontal)) : 0;
+    this.body.setLinvel({ x: lin.x * scale, y: lin.y, z: lin.z * scale }, true);
+
+    const ang = this.body.angvel();
+    if (ang.x !== 0 || ang.z !== 0) {
+      // kill the pitch/roll wobble, leave yaw alone so steering still works
+      this.body.setAngvel({ x: ang.x * 0.4, y: ang.y, z: ang.z * 0.4 }, true);
+    }
   }
 
   /**

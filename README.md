@@ -1,6 +1,6 @@
 # RallyCross — Vehicle Physics Prototype
 
-Prototipe **fisika mobil rally 3D di web** (three.js + Rapier). Fokus tahap ini: *feel* handling — chassis, suspensi raycast, model ban, drift, permukaan licin. Belum ada track/AI/multiplayer.
+Prototipe **mobil rally 3D di web** (three.js + Rapier): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control. Belum ada AI/multiplayer.
 
 ## Jalanin
 
@@ -60,9 +60,10 @@ src/
 │  ├─ CarSuspension.ts      # per roda: wishbone, tie rod, coilover, rem
 │  ├─ CarLights.ts          # lampu rem, sein, mundur, lampu utama
 │  └─ carParts.ts           # material + helper geometri (link, pegas)
-├─ world/track.ts
-│  ├─ buildTrackColliders() # ground, ramp, cone, gravel, ice — tanpa DOM
-│  └─ buildTrackVisuals()   # mesh + tekstur canvas — hanya browser
+├─ world/circuit.ts         # geometri sirkuit: node, sampling, ribbon (tanpa DOM)
+├─ world/track.ts           # arena rallycross
+│  ├─ buildTrackColliders() # permukaan + barrier + joker — tanpa DOM
+│  └─ buildTrackVisuals()   # mesh, tekstur canvas, gantry, stand — hanya browser
 ├─ camera.ts                # chase / hood cam + FOV dinamis
 ├─ input.ts                 # slider setir/gas/rem analog + gigi D/R + sein/lampu
 ├─ hud.ts                   # speedo, gear D/R, beban per roda, drift
@@ -76,7 +77,25 @@ scripts/
 .github/workflows/ci.yml    # check + smoke + build di setiap push
 ```
 
-`VehiclePhysics.ts` dan `buildTrackColliders()` sengaja **tidak menyentuh DOM/renderer**, jadi bisa dijalankan di Node (lihat `scripts/smoke.ts`, termasuk uji ramp di track asli) — penting kalau nanti mau server-authoritative multiplayer atau training AI.
+`VehiclePhysics.ts` dan `buildTrackColliders()` sengaja **tidak menyentuh DOM/renderer**, jadi bisa dijalankan di Node (lihat `scripts/smoke.ts`, termasuk uji lompatan di trek asli) — penting kalau nanti mau server-authoritative multiplayer atau training AI.
+
+## Arena rallycross
+
+Satu putaran 478 m, searah jarum jam, garis start/finish di `(0, 0)` menghadap `+Z`:
+
+| Bagian | Isi |
+| --- | --- |
+| Main straight | 92 m, grid 6 kotak, gantry + 5 lampu start, grandstand + race control di sisi luar |
+| T1 | kanan sedang, keluar ke straight gravel atas |
+| Gravel-out | ±55 m gravel, ada *bump* (yump) 0,55 m |
+| T2 | kanan cepat; **joker lap** memotong di dalamnya (gravel, ±8 m lebih pendek) |
+| JUMP 1 | lompatan aspal di straight timur, crest 1,35 m, lip pendek — mobil terbang ±1 s |
+| T3 + gravel-in | kanan, lalu 60 m gravel dengan JUMP 2 (crest 1,30 m) |
+| Flick + final corner | dua belokan lambat menuju garis start |
+
+Permukaan: aspal μ = 1,00, gravel μ = 0,62, rumput μ = 0,55. Barrier keliling solid setinggi pagar pengaman (3,4 m) supaya mobil tidak bisa terlempar keluar arena; ban bekas, kerb merah-putih, banner sponsor, 6 tiang lampu, paddock (tenda + truk servis) ada di infield, dan 190 pohon mengelilingi venue.
+
+Fisika dapat berhenti di tanjakan: rem parkir (`applyParkingHold`) menahan mobil yang sudah diam di landai sampai ±30 % (selama gas dan rem dilepas), tanpa mengganggu pedal gas/rem.
 
 ## Model fisika
 
