@@ -59,6 +59,40 @@ function flatWorld() {
   return world;
 }
 
+/** Flat plane plus a solid wall across the road, for crash tests. */
+function wallWorld(z: number) {
+  const world = flatWorld();
+  const wall = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+  world.createCollider(
+    RAPIER.ColliderDesc.cuboid(60, 3, 0.6).setTranslation(0, 3, z).setFriction(0.7).setRestitution(0.15),
+    wall,
+  );
+  return world;
+}
+
+/**
+ * Full throttle into the wall until the body takes its first hit, then stop.
+ * Both runs are identical up to that instant, so the numbers can be compared
+ * even though the cars diverge afterwards.
+ */
+function ramWall(damageOptions: Partial<{ enabled: boolean; severity: number }> = {}) {
+  const world = wallWorld(48);
+  const car = new VehiclePhysics(world, defaultConfig, new THREE.Vector3(0, 0.95, 0), 0, damageOptions);
+  let peakSpeed = 0;
+  let steps = 0;
+  for (; steps < Math.round(9 / DT); steps++) {
+    // Δv baru terdeteksi pada langkah SETELAH benturan (impulsnya diselesaikan
+    // oleh `world.step`), jadi kecepatan tabrak = puncak kecepatan sebelum itu.
+    const v = car.body.linvel();
+    peakSpeed = Math.max(peakSpeed, Math.hypot(v.x, v.z) * 3.6);
+    car.fixedStep(DT, gas);
+    world.step();
+    if (car.damage.bodyHealth < 1) break;
+  }
+  car.sync();
+  return { car, world, hitSpeed: peakSpeed, steps };
+}
+
 const gas = input({ throttle: 1 });
 const coast = input();
 const brake = input({ brake: 1 });
@@ -659,6 +693,14 @@ async function run() {
     pack.map((r) => r.name).join(' · '),
   );
   check(packClosest > 1.2, 'the pack never merges into one car', `closest ${packClosest.toFixed(2)} m`);
+  // Kerusakan bukan hak istimewa pemain: lima lawan memakai model yang sama
+  // (bukan mobil anti-penyok), dan mengemudi bersih tidak merusak apa pun.
+  const rivalDamage = pack.map((r) => r.car.damage);
+  check(
+    rivalDamage.every((d) => d.options.enabled) && rivalDamage.every((d) => d.bodyHealth > 0.9),
+    'lawan memakai model kerusakan yang sama (rusak kalau memang bertabrakan)',
+    `${rivalDamage.length} mobil · bodi ${rivalDamage.map((d) => (d.bodyHealth * 100).toFixed(0)).join('/')} % · mesin ${rivalDamage.map((d) => (d.engineHealth * 100).toFixed(0)).join('/')} %`,
+  );
   const packLaps = pack.map((r) => r.bestLap).filter((b) => Number.isFinite(b));
   check(
     packLaps.length === 5 && Math.max(...packLaps) - Math.min(...packLaps) < 12,
@@ -973,6 +1015,153 @@ async function run() {
     if (noAerial.aerialActive || noAerial.broadcastName === 'HELI') groundOnly = false;
   }
   check(groundOnly, 'without a helicopter the broadcast stays on the ground cameras', 'ground only');
+
+
+  /* ---------------------------------------------------------------- */
+  console.log('\n— kerusakan mobil (damage) —');
+  {
+    // 1. Mengemudi normal tidak boleh merusak apa pun.
+    const cleanWorld = flatWorld();
+    const clean = new VehiclePhysics(cleanWorld, defaultConfig, new THREE.Vector3(0, 0.95, 0));
+    for (let i = 0; i < Math.round(6 / DT); i++) {
+      clean.fixedStep(DT, input({ throttle: 0.8, steer: Math.sin(i * DT * 1.4) * 0.35 }));
+      cleanWorld.step();
+    }
+    clean.sync();
+    check(
+      clean.damage.dentLevel === 0 && clean.damage.puncturedCount === 0 && clean.damage.lostCount === 0,
+      'mengemudi normal tidak merusak mobil',
+      `${(clean.speedKmh).toFixed(0)} km/h tanpa benturan`,
+    );
+
+    // 2. Menabrak tembok pada kecepatan tinggi: bodi penyok, ban pecah, roda copot.
+    const crash = ramWall();
+    const dmg = crash.car.damage;
+    check(crash.hitSpeed > 60, 'mobil mencapai kecepatan tabrak yang wajar', `${crash.hitSpeed.toFixed(0)} km/h`);
+    check(dmg.bodyHealth < 0.9, 'tabrak tembok penyok badan', `bodi ${(dmg.bodyHealth * 100).toFixed(0)} %`);
+    check(dmg.engineHealth < 1, 'mesin ikut kena', `mesin ${(dmg.engineHealth * 100).toFixed(0)} %`);
+    check(dmg.puncturedCount > 0, 'ban pecah karena benturan', `${dmg.puncturedCount} ban pecah`);
+    check(dmg.lostCount > 0, 'benturan keras mencopot roda', `${dmg.lostCount} roda copot`);
+
+    // 3. Roda yang copot tidak menyumbang grip maupun gaya pegas lagi.
+    const lostIndex = dmg.wheels.findIndex((w) => w.lost);
+    const punctured = dmg.wheels.find((w) => w.punctured && !w.lost);
+    check(
+      lostIndex >= 0 && crash.car.damage.wheelGrip(lostIndex) === 0,
+      'roda copot kehilangan seluruh grip',
+      `roda ${lostIndex + 1}`,
+    );
+    check(
+      !punctured || (crash.car.damage.wheelGrip(dmg.wheels.indexOf(punctured)) < 0.5 && crash.car.damage.wheelGrip(dmg.wheels.indexOf(punctured)) > 0),
+      'ban pecah masih menggigit sedikit (bukan nol)',
+      punctured ? `grip ${(crash.car.damage.wheelGrip(dmg.wheels.indexOf(punctured)) * 100).toFixed(0)} %` : 'tidak ada ban pecah',
+    );
+
+    // 4. Kerusakan tidak hilang sendiri selama balapan berjalan.
+    const bodyAfterCrash = dmg.bodyHealth;
+    const puncturedAfterCrash = dmg.puncturedCount;
+    for (let i = 0; i < Math.round(5 / DT); i++) {
+      crash.car.fixedStep(DT, input({ throttle: 0.6, steer: 0.2 }));
+      crash.world.step();
+    }
+    check(
+      Math.abs(dmg.bodyHealth - bodyAfterCrash) < 1e-9 && dmg.puncturedCount === puncturedAfterCrash,
+      'kerusakan tidak pulih sendiri di tengah balapan',
+      `bodi ${(dmg.bodyHealth * 100).toFixed(0)} %`,
+    );
+
+    // 5. Mesin mati = mobil sama sekali tidak bisa maju.
+    const deadWorld = flatWorld();
+    const dead = new VehiclePhysics(deadWorld, defaultConfig, new THREE.Vector3(0, 0.95, 0));
+    dead.damage.engineHealth = 0;
+    dead.damage.engineDead = true;
+    dead.damage.revision++;
+    const start = dead.position.clone();
+    for (let i = 0; i < Math.round(4 / DT); i++) {
+      dead.fixedStep(DT, gas);
+      deadWorld.step();
+    }
+    dead.sync();
+    const rolled = Math.hypot(dead.position.x - start.x, dead.position.z - start.z);
+    check(dead.damage.throttleScale === 0, 'mesin mati mematikan gas', 'throttle 0%');
+    check(rolled < 1.0, 'mesin mati: mobil tidak bisa maju', `hanya bergeser ${rolled.toFixed(2)} m dalam 4 s`);
+
+    // 6. Reset = perbaikan total (satu-satunya cara pulih).
+    crash.car.reset();
+    check(
+      crash.car.damage.bodyHealth === 1 &&
+        crash.car.damage.engineHealth === 1 &&
+        crash.car.damage.puncturedCount === 0 &&
+        crash.car.damage.lostCount === 0,
+      'reset mobil memperbaiki semua kerusakan',
+      'bodi & mesin 100 %, 0 ban pecah',
+    );
+
+    // 6b. Setelah reset, mobil tetap utuh walau langsung digas — teleport
+    //     tidak boleh dihitung sebagai benturan (Δv dari kecepatan lama ke nol).
+    for (let i = 0; i < Math.round(2 / DT); i++) {
+      crash.car.fixedStep(DT, coast);
+      crash.world.step();
+    }
+    check(
+      crash.car.damage.bodyHealth === 1 && crash.car.damage.lostCount === 0 && crash.car.damage.puncturedCount === 0,
+      'mobil yang baru di-reset tetap utuh (teleport bukan tabrakan)',
+      `bodi ${(crash.car.damage.bodyHealth * 100).toFixed(0)} %`,
+    );
+
+    // 7. Kerusakan bisa dimatikan (untuk uji/demo).
+    const off = ramWall({ enabled: false });
+    check(
+      off.car.damage.dentLevel === 0 && off.car.damage.puncturedCount === 0,
+      'kerusakan bisa dimatikan lewat setelan',
+      `${off.hitSpeed.toFixed(0)} km/h, bodi utuh`,
+    );
+
+    // 8. Setelan "tingkat kerusakan" benar-benar mengubah besar kerusakan.
+    const soft = ramWall({ severity: 0.5 });
+    const hard = ramWall({ severity: 1 });
+    check(
+      soft.car.damage.bodyHealth > hard.car.damage.bodyHealth + 0.1,
+      'tingkat kerusakan menskala besarnya kerusakan',
+      `0,5× → bodi ${(soft.car.damage.bodyHealth * 100).toFixed(0)} % vs 1× → ${(hard.car.damage.bodyHealth * 100).toFixed(0)} %`,
+    );
+
+    // 8b. Balapan AI beberapa lap tidak boleh merusak mobilnya sendiri —
+    //     kerusakan hanya dari benturan, bukan dari getaran/kerb.
+    const longWorld = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    longWorld.timestep = DT;
+    buildTrackColliders(longWorld);
+    const longCar = new VehiclePhysics(longWorld, defaultConfig, new THREE.Vector3(0, 0.95, -10));
+    const longPilot = new AutoPilot(TRACK.main, TRACK.joker, { useJoker: true });
+    let longBest = Infinity;
+    for (let i = 0; i < Math.round(120 / DT) && longPilot.lap < 2; i++) {
+      longCar.fixedStep(DT, longPilot.update(DT, longCar));
+      longWorld.step();
+      longCar.sync();
+      longBest = Math.min(longBest, longPilot.lastLap || Infinity);
+    }
+    check(
+      longPilot.lap >= 2 && longCar.damage.bodyHealth === 1 && longCar.damage.lostCount === 0,
+      'dua lap AI tanpa satu pun kerusakan (tidak ada false positive)',
+      `${longPilot.lap} lap · terbaik ${longBest.toFixed(1)} s · bodi 100 %`,
+    );
+
+    // 9. Ban depan pecah menarik setir ke sisinya (pemain harus melawan).
+    const pullCar = new VehiclePhysics(flatWorld(), defaultConfig, new THREE.Vector3(0, 0.95, 0));
+    const pullBefore = pullCar.damage.pullSteer(15);
+    pullCar.damage.wheels[0].punctured = true;
+    const pullAfter = pullCar.damage.pullSteer(15);
+    check(
+      pullBefore === 0 && Math.abs(pullAfter) > 0.01,
+      'ban depan pecah menarik setir ke sisinya',
+      `${(pullAfter * 57.3).toFixed(1)}° pada 54 km/h`,
+    );
+    check(
+      pullCar.damage.steerScale < 1,
+      'setir jadi lebih tumpul saat ban depan rusak',
+      `sudut setir ${(pullCar.damage.steerScale * 100).toFixed(0)} %`,
+    );
+  }
 
   console.log(`\n${failures === 0 ? '✅ all checks passed' : `❌ ${failures} check(s) failed`}\n`);
   if (failures > 0) process.exitCode = 1;

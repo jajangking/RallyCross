@@ -557,6 +557,12 @@ export class CarModelVisual {
     this.lights.update(dt, lights);
   }
 
+  /** Sembunyikan roda yang copot (velg + ban ikut hilang). */
+  setWheelLost(index: number, lost: boolean) {
+    const wheel = this.wheels[index];
+    if (wheel) wheel.steer.visible = !lost;
+  }
+
   get steeringWheelAngle() {
     return this.steerValue;
   }

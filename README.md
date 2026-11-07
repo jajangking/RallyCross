@@ -32,7 +32,7 @@ Semua input **analog/proporsional** — bukan tombol on/off:
 | Hazard | `H` | tombol ! |
 | Lampu utama | `L` | tombol ◐ |
 | Handbrake | `Space` | HB |
-| Reset mobil | `R` | — |
+| Reset mobil (**sekaligus perbaikan total**) | `R` | — |
 | Ganti kamera (chase → kap → TV) | `C` | — |
 | Tonton **AI vs AI** — 6 mobil, kamera TV | `V` | tombol **TV** (kiri atas) |
 | Panel tuning | `G` | tombol **⚙** (kiri atas) |
@@ -61,6 +61,8 @@ src/
 │  ├─ VehiclePhysics.ts     # SEMUA fisika kendaraan (tidak butuh DOM)
 │  ├─ CarModelVisual.ts     # GLB Honda Civic: roda, lampu, skala ke fisika
 │  ├─ CarVisual.ts          # bodi prosedural (fallback kalau GLB gagal)
+│  ├─ Damage.ts             # kerusakan: bodi, mesin, ban pecah/copot (tanpa DOM)
+│  ├─ CarDamageVisual.ts    # penyok di bodi + roda yang copot
 │  ├─ CarSuspension.ts      # per roda: wishbone, tie rod, coilover, rem
 │  ├─ CarLights.ts          # lampu rem, sein, mundur, lampu utama
 │  └─ carParts.ts           # material + helper geometri (link, pegas)
@@ -83,7 +85,7 @@ src/
 ├─ camera/                  # BroadcastDirector: sutradara kamera TV
 ├─ camera.ts                # chase / hood cam + FOV dinamis
 ├─ input.ts                 # slider setir/gas/rem analog + gigi D/R + sein/lampu
-├─ hud.ts                   # speedo, gear D/R, beban per roda, klasemen, rekor
+├─ hud.ts                   # speedo, gear D/R, beban per roda, kerusakan, klasemen
 └─ style.css
 public/models/
 ├─ honda-civic-eg6.glb      # model bodi mobil (CC BY 4.0, lihat CREDITS.md)
@@ -318,6 +320,67 @@ Untuk setiap mobil (`src/fx/`):
 - **Pemicunya fisika, bukan animasi** (`CarEffects.ts`) — semuanya dibaca dari `WheelState`: `vLat` (selip lateral), `slipAngle`, `traction` (ban berputar di tempat saat start), `handbrake`, `surfaceMu`, dan `contactPoint`. Jadi handbrake di aspal mengasapi ban belakang, mobil yang melebar ke gravel menyemburkan debu walau tidak selip, dan pendaratan setelah lompatan mengepulkan debu sesuai lama melayang.
 - **Anggaran per mobil** (2 kepulan/frame) menjamin enam mobil drifting sekaligus tidak membanjiri kolam partikel. Panel → *Lawan* → **hapus jejak ban** membersihkan sisa goresan.
 
+## Kerusakan mobil
+
+Mobil bisa **penyok, ban pecah, roda copot, dan mesin mati sampai tidak bisa maju
+sama sekali** — dan semuanya datang dari tabrakan yang benar-benar terjadi di
+fisika, bukan skrip "kecepatan > X maka rusak".
+
+**Sumber kerusakan cuma satu: benturan.** Tiap langkah fisika `VehiclePhysics`
+membandingkan kecepatan sekarang dengan kecepatan langkah sebelumnya (Δv),
+membuang komponen gravitasi (`+9,81/60` di sumbu Y, jadi jatuh bebas bukan
+tabrakan), lalu memutar hasilnya ke kerangka mobil (x = kiri, z = depan).
+Δv di atas **2,2 m/s** dikirim ke `VehicleDamage.impact()`.
+
+| Δv | contoh | akibat |
+|---|---|---|
+| 2–5 m/s | menyenggol pagar, nyangkut di bibir ramp | penyok kecil |
+| 8–15 m/s | mendarat keras dari lompatan, menabrak lawan | ban pecah, mesin lemah |
+| > 16 m/s (≈ 58 km/h berhenti mendadak) | menabrak beton | bodi parah + **satu roda robek** |
+
+**Yang rusak** (`src/vehicle/Damage.ts` — murni angka, tanpa DOM, jadi bisa diuji
+headless dan hasilnya sama persis di browser):
+
+| bagian | efek |
+|---|---|
+| bodi | 6 tingkat penyok (patch gelap muncul satu per satu), tenaga mesin ikut turun |
+| mesin | `engineHealth` turun (benturan dari depan paling parah); **0 = mesin mati**: gas 0 % dan top speed 0 → mobil tidak bisa maju sama sekali |
+| ban pecah (health ≤ 0,45) | grip 38 %, drag gulir 3,2×, ban depan yang pecah **menarik setir** ke sisinya dan sudut setir menyusut |
+| ban copot (health ≤ 0) | grip 0 dan rodanya hilang dari visual; suspensi di sudut itu tidak menyangga apa pun, jadi mobil miring dan nyeret |
+
+Efeknya masuk ke model gaya yang sudah ada (bukan jalur cheat terpisah):
+`applyTireForces` mengalikan `μ` dengan `wheelGrip(i)`, melewati roda yang grip-nya
+0 (rodanya tetap menggantung di suspensi, tapi tidak memberi gaya), mengalikan
+gaya mesin dengan `throttleScale`, dan membatasi `limit` gigi D dengan
+`topSpeedScale`. Setir memakai `steerScale` + `pullSteer`, dan roda yang copot
+dilewati di `updateSuspension` (tidak ada raycast, tidak ada gaya pegas).
+
+- **Tidak ada perbaikan otomatis.** Sesuai aturan "biarin aja": mobil yang rusak
+  tetap rusak sepanjang balapan (lima detik setelah tabrakan angkanya tidak
+  berubah sedikit pun — dijaga smoke test). Pulih hanya lewat `R` (reset ke grid
+  = perbaikan total) atau panel → *Kerusakan* → **perbaiki semua mobil**.
+- **Pemain dan lawan sama.** Kelima lawan memakai `VehicleDamage` yang sama,
+  bukan mobil anti-penyok: kalau saling tabrak, dua-duanya rusak.
+- **Visualnya murah.** Penyok = 6 patch gelap (warna cat digelapkan 42 %, jadi
+  mobil merah penyoknya merah tua) yang baru muncul saat memang rusak; roda copot
+  = mesh roda disembunyikan, kaliper + lengan suspensi tetap ada. Semuanya cuma
+  menulis ulang saat `damage.revision` berubah, jadi biaya per frame nol selama
+  mobil utuh — `?quality=low` tidak menambah apa pun.
+- **HUD** (kiri bawah, hanya muncul kalau rusak): `PENYOK ▮▮▯▯ 41 %`,
+  `BAN KANAN DEPAN COPOT`, `MESIN MATI · TIDAK BISA MAJU`, plus kilat teks saat
+  kejadiannya (`BAN KIRI DEPAN PECAH!`).
+- **Efek**: ban pecah mengeluarkan asap hitam tipis selama mobil jalan, mesin
+  mati mengasapi kap mesin.
+
+Setelan di panel → *Kerusakan*: **mobil bisa rusak** (on/off), **tingkat
+kerusakan** 0,25–3× (0,5× = tahan banting, 2× = rapuh), dan tombol perbaiki.
+Uji cepat dari konsol: `rc.car.damage.impact(0, 0, -22)` dua kali (bodi hancur +
+roda copot) atau `rc.car.damage.reset()` untuk perbaiki. Untuk melihat hasilnya
+tanpa browser: `npm run shot -- car` → `shots/car-damage.png`.
+
+Yang belum ada: kaca pecah, panel bodi yang lepas, suara benturan, dan api dari
+mesin yang mati.
+
 ## Gaya kartun & performa render
 
 Seluruh arena sekarang bergaya kartun (`src/world/style.ts`), dan itu sekaligus
@@ -392,6 +455,7 @@ cara paling murah untuk merender:
 - **lawan AI menyelesaikan putaran** (31–33 s), tetap di dekat trek, dan dua mobil tidak saling menembus
 - 9 kamera TV berdiri di luar trek, sutradara memakai ≥5 kamera berbeda, tidak ada shot < 1,6 s, dan mobil yang dibidik tidak pernah lebih dari 220 m
 - **tidak ada kamera TV yang tertutup bangunan**: tiap segmen kamera → titik bidik diuji terhadap kotak pembatas (OBB) tribun utama, tribun kedua, dan race control; kamera garis start juga diperiksa berada di atas atap tribun (> 10 m)
+- **kerusakan**: mengemudi normal tidak merusak apa pun; tabrak tembok di 92 km/h → bodi 41 %, mesin 22 %, 1 ban pecah, 1 roda copot; roda copot kehilangan seluruh grip sementara ban pecah masih 29 %; kerusakan **tidak** pulih sendiri selama balapan; mesin mati = bergeser 0,00 m dalam 4 s; reset memperbaiki semuanya; kerusakan bisa dimatikan lewat setelan; setelan 0,5× memangkas kerusakan (bodi 71 % vs 41 %); ban depan pecah menarik setir 2,1°; **dua lap AI tanpa satu pun kerusakan** (tidak ada false positive); dan lima lawan memakai model kerusakan yang sama
 - **helikopter**: menjaga jarak 18–40 m dari mobil pada ketinggian > 20 m, ikut mengikuti mobil sepanjang putaran (< 60 m), posisi kameranya valid, dan dalam 90 detik siaran TV ia mendapat ≥ 5 shot udara yang masing-masing 4–7,5 detik (≈ 30 % dari waktu siaran), kameranya menempel di lensa heli, dan tanpa heli siaran tetap 100 % kamera darat
 
 `npm run check:browser` (opsional, perlu Chromium) menambah cek UI: bukaan gas/rem 1:1 (50 %, 85 %, 70 %), gas dan rem saling independen, rem tidak menambah throttle, semuanya menutup saat dilepas, slider setir balik ke tengah, tombol D/R memindah gigi + HUD menampilkan `R` saat mundur, rem tidak membalikkan mobil, dan arah setir cocok dengan layar. Untuk detail visual: lampu rem menguat saat pedal ditekan, sein kiri berkedip sementara kanan tetap mati, repeater HUD menyala, lampu utama menyala, lampu mundur menyala di gigi R, empat hub suspensi berada di rentang travel, dan setir berputar.

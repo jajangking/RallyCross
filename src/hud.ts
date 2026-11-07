@@ -1,14 +1,19 @@
 import * as THREE from 'three';
 import type { VehiclePhysics } from './vehicle/VehiclePhysics';
+import type { VehicleDamage } from './vehicle/Damage';
 import type { LapRecords, StandingsRow } from './race/Standings';
 
 const RAD2DEG = 180 / Math.PI;
 const fwd = new THREE.Vector3();
 
+/** Urutan roda sama dengan `VehiclePhysics.wheels`: FL, FR, RL, RR. */
+const WHEEL_NAMES = ['KIRI DEPAN', 'KANAN DEPAN', 'KIRI BELAKANG', 'KANAN BELAKANG'];
+
 export class Hud {
   private readonly speedEl = document.getElementById('speed')!;
   private readonly gearEl = document.getElementById('gear')!;
   private readonly telemEl = document.getElementById('telem')!;
+  private readonly damageEl = document.getElementById('damage');
   private readonly autoEl = document.getElementById('auto');
   private readonly boardEl = document.getElementById('board');
   private readonly standingsEl = document.getElementById('standings');
@@ -22,6 +27,9 @@ export class Hud {
   private readonly bars: Array<{ root: HTMLElement; fill: HTMLElement }> = [];
   private readonly maxLoad: number;
   private accum = 0;
+  private damageKey = '';
+  private flashText = '';
+  private flashUntil = 0;
 
   constructor(mass: number) {
     const host = document.getElementById('bars')!;
@@ -137,6 +145,67 @@ export class Hud {
     if (text && el.textContent !== text) el.textContent = text;
   }
 
+  /**
+   * Panel kerusakan. Kosong sama sekali selama mobil utuh, jadi HUD tetap
+   * bersih; begitu ada yang rusak muncul barisnya. Teks Indonesia, huruf
+   * kapital, dan sengaja pendek supaya tidak menutupi jalan di layar HP.
+   */
+  setDamage(dmg: VehicleDamage) {
+    const now = performance.now();
+    // Kejadian baru (ban pecah/copot, mesin mati) dipamerkan sebentar.
+    for (const ev of dmg.drainEvents()) {
+      this.flashUntil = now + 1900;
+      this.flashText =
+        ev.kind === 'wheel-off'
+          ? `BAN ${WHEEL_NAMES[ev.wheel]} COPOT!`
+          : ev.kind === 'puncture'
+            ? `BAN ${WHEEL_NAMES[ev.wheel]} PECAH!`
+            : ev.kind === 'engine'
+              ? 'MESIN MATI — TIDAK BISA MAJU'
+              : 'BODI PENYOK';
+    }
+
+    const el = this.damageEl;
+    if (!el) return;
+    const flash = now < this.flashUntil;
+    const bodyPct = Math.round(Math.max(0, dmg.bodyHealth) * 100);
+    const damaged = dmg.dentLevel > 0.01 || dmg.puncturedCount > 0 || dmg.lostCount > 0 || dmg.engineDead;
+
+    // Kunci isi panel: DOM cuma ditulis kalau memang ada yang berubah.
+    const key = `${flash ? this.flashText : ''}|${bodyPct}|${Math.round(dmg.engineHealth * 100)}|` +
+      dmg.wheels.map((w) => (w.lost ? 2 : w.punctured ? 1 : 0)).join('');
+    if (key === this.damageKey) return;
+    this.damageKey = key;
+
+    el.classList.toggle('hide', !damaged && !flash);
+    if (!damaged && !flash) {
+      el.replaceChildren();
+      return;
+    }
+
+    const rows: string[] = [];
+    if (flash) rows.push(`<div class="dmg-row flash">${this.flashText}</div>`);
+    if (dmg.dentLevel > 0.01) {
+      rows.push(
+        `<div class="dmg-row">PENYOK <span class="meter"><i style="width:${100 - bodyPct}%"></i></span>` +
+          `<span>${bodyPct}%</span></div>`,
+      );
+    }
+    if (dmg.engineDead) {
+      rows.push('<div class="dmg-row dead">MESIN MATI · TIDAK BISA MAJU</div>');
+    } else if (dmg.engineHealth < 0.9) {
+      rows.push(`<div class="dmg-row">MESIN ${Math.round(dmg.engineHealth * 100)}%</div>`);
+    }
+    for (let i = 0; i < dmg.wheels.length; i++) {
+      const w = dmg.wheels[i];
+      if (!w.lost && !w.punctured) continue;
+      rows.push(
+        `<div class="dmg-row${w.lost ? ' lost' : ''}">BAN ${WHEEL_NAMES[i]} ${w.lost ? 'COPOT' : 'PECAH'}</div>`,
+      );
+    }
+    el.innerHTML = rows.join('');
+  }
+
   update(phys: VehiclePhysics, dt: number) {
     this.accum += dt;
     if (this.accum < 1 / 15) return;
@@ -183,6 +252,8 @@ export class Hud {
     // positive == steering right.
     const steer = -phys.steerAngle * RAD2DEG;
     const grip = contacts > 0 ? (traction / contacts) * 100 : 0;
+
+    this.setDamage(phys.damage);
 
     this.telemEl.textContent =
       `kontak  ${contacts}/4\n` +

@@ -174,6 +174,30 @@ export class CarEffects {
           );
         }
       }
+      // BAN PECAH: ban kempes berasap tipis terus-menerus selama mobil jalan.
+      const dmg = car.damage.wheels[i];
+      if (dmg.punctured && !dmg.lost && speed > 4.5 && this.smokeBudget > 0 && Math.random() < 0.5) {
+        this.smokeBudget--;
+        this.tmpP.copy(w.contactPoint).addScaledVector(w.normal, 0.16);
+        this.tmpPush.set(-w.forward.x, 0, -w.forward.z).multiplyScalar(Math.min(2.5, speed * 0.07));
+        this.smoke.spawn(
+          this.tmpP,
+          { size: 0.42, grow: 2.4, color: 0x2f3035, life: 1.0, rise: 0.9, spread: 0.5, opacity: 0.3 },
+          this.tmpPush,
+        );
+      }
+    }
+
+    // MESIN MATI: asap hitam dari kap mesin, tanda mobil sudah tidak bisa maju.
+    if (car.damage.engineDead && this.smokeBudget > 0 && Math.random() < 0.4) {
+      this.smokeBudget--;
+      this.tmpP.set(0, 0.55, car.cfg.halfLength * 0.55).applyQuaternion(car.quaternion).add(car.position);
+      this.tmpPush.set(0, 1.2, 0).multiplyScalar(0.6);
+      this.smoke.spawn(
+        this.tmpP,
+        { size: 0.5, grow: 3, color: 0x24252a, life: 1.4, rise: 1.1, spread: 0.6, opacity: 0.34 },
+        this.tmpPush,
+      );
     }
 
     /* ---------- pendaratan ---------- */

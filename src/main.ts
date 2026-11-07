@@ -4,6 +4,7 @@ import GUI from 'lil-gui';
 import { defaultConfig, VehiclePhysics, type VehicleInput } from './vehicle/VehiclePhysics';
 import { CarVisual } from './vehicle/CarVisual';
 import { CarModelVisual } from './vehicle/CarModelVisual';
+import { CarDamageVisual } from './vehicle/CarDamageVisual';
 import { buildTrack, BROADCAST_SPOTS, TRACK } from './world/track';
 import { AutoPilot, type TrafficCar } from './ai/AutoPilot';
 import { Rival } from './race/Rival';
@@ -152,6 +153,8 @@ async function boot() {
   const modelUrl = new URL('models/honda-civic-eg6.glb', document.baseURI).href;
   const paintParam = new URLSearchParams(location.search).get('paint');
   const paint = paintParam && /^[0-9a-f]{6}$/i.test(paintParam) ? parseInt(paintParam, 16) : undefined;
+  // Penyok & roda yang copot (visual). Biayanya nol selama mobil masih utuh.
+  const playerDamageView = new CarDamageVisual(car.cfg, paint ?? 0xd8402f);
   void CarModelVisual.load(scene, car, modelUrl, { detail: !lowQuality, paint }).then((model) => {
     if (!model) return;
     proceduralCar.dispose();
@@ -196,6 +199,7 @@ async function boot() {
         return visual;
       },
       effects: new CarEffects(rival.car, skidMarks, smoke),
+      damageView: new CarDamageVisual(rival.car.cfg, plan.color),
       shadow: createBlobShadow(1.5, 0.34),
       /** Lap terbaik yang sudah dikirim ke papan rekor. */
       lastBest: Infinity,
@@ -493,6 +497,42 @@ async function boot() {
   fRival.add(race, 'laps', 1, 9, 1).name('jumlah lap');
   fRival.add({ clear: () => skidMarks.clear() }, 'clear').name('hapus jejak ban');
 
+  // Kerusakan: setelan ini berlaku untuk semua mobil (pemain & lawan), jadi
+  // tidak ada yang dapat keuntungan dari mobil yang lebih kuat.
+  const allDamage = () => [car.damage, ...rivals.map((r) => r.rival.car.damage)];
+  const damageSettings = {
+    get enabled() {
+      return car.damage.options.enabled;
+    },
+    set enabled(v: boolean) {
+      for (const d of allDamage()) d.options.enabled = v;
+    },
+    get severity() {
+      return car.damage.options.severity;
+    },
+    set severity(v: number) {
+      for (const d of allDamage()) d.options.severity = v;
+    },
+  };
+  const fDamage = gui.addFolder('Kerusakan');
+  fDamage.add(damageSettings, 'enabled').name('mobil bisa rusak').onChange((v: boolean) => {
+    for (const d of allDamage()) {
+      d.options.enabled = v;
+      if (!v) d.reset();
+    }
+  });
+  fDamage.add(damageSettings, 'severity', 0.25, 3, 0.05).name('tingkat kerusakan');
+  fDamage
+    .add(
+      {
+        repair: () => {
+          for (const d of allDamage()) d.reset();
+        },
+      },
+      'repair',
+    )
+    .name('perbaiki semua mobil');
+
   const fPreset = gui.addFolder('Presets');
   fPreset.add(actions, 'Tarmac');
   fPreset.add(actions, 'Gravel');
@@ -628,10 +668,12 @@ async function boot() {
 
     track.update(raw);
     carVisual.update(car, raw, lightState);
+    playerDamageView.sync(carVisual, car.damage);
     playerEffects.update(raw, command);
     if (race.rivals) {
       for (const r of rivals) {
         r.visual.update(r.rival.car, raw, r.lights);
+        r.damageView.sync(r.visual, r.rival.car.damage);
         r.effects.update(raw, r.lastCommand);
       }
     }

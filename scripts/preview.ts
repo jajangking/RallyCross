@@ -8,6 +8,7 @@
  *   npm run shot            # semua
  *   npm run shot -- heli    # hanya helikopter (3 sudut)
  *   npm run shot -- arena   # hanya arena (udara, darat, peta)
+ *   npm run shot -- car     # mobil rusak (penyok + ban copot)
  *
  * Hasilnya di `shots/` (di-ignore git).
  *
@@ -355,6 +356,54 @@ const main = async () => {
     render(root, { eye: new THREE.Vector3(13, 3.4, 0.5), target: new THREE.Vector3(0, 0.5, -0.8), fov: 34 }, SKY, 'shots/heli-side.png');
     render(root, { eye: new THREE.Vector3(9, 4.6, 8), target: new THREE.Vector3(0, 0.4, -0.4), fov: 34 }, SKY, 'shots/heli-front.png');
     render(root, { eye: new THREE.Vector3(-8, -2, 9), target: new THREE.Vector3(0, 0.6, -0.6), fov: 38 }, SKY, 'shots/heli-low.png');
+  }
+
+  if (what === 'car' || what === 'all') {
+    const RAPIER = (await import('@dimforge/rapier3d-compat')).default;
+    const { CarVisual } = await import('../src/vehicle/CarVisual');
+    const { CarDamageVisual } = await import('../src/vehicle/CarDamageVisual');
+    const { defaultConfig, VehiclePhysics } = await import('../src/vehicle/VehiclePhysics');
+    await RAPIER.init();
+    const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    world.timestep = 1 / 60;
+    // lantai hanya collider (tanpa mesh) supaya gambar cuma berisi mobil
+    const ground = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+    world.createCollider(RAPIER.ColliderDesc.cuboid(60, 0.5, 60).setTranslation(0, -0.5, 0), ground);
+    const car = new VehiclePhysics(world, defaultConfig, new THREE.Vector3(0, 0.95, 0));
+    for (let i = 0; i < 90; i++) {
+      car.fixedStep(1 / 60, { throttle: 0, brake: 0, steer: 0, handbrake: false, gear: 1 });
+      world.step();
+    }
+    car.sync();
+    const scene = new THREE.Scene();
+    const visual = new CarVisual(scene, car, { detail: true });
+    const damageView = new CarDamageVisual(car.cfg);
+    // tabrakan keras dari depan: bodi penyok, satu roda copot
+    car.damage.impact(0, 0, -22);
+    car.damage.impact(0, 0, -22);
+    damageView.sync(visual, car.damage);
+    const lights = { brake: 0, reverse: false, left: false, right: false, hazard: false, headlights: false };
+    visual.update(car, 0, lights);
+    render(
+      scene,
+      { eye: new THREE.Vector3(5.4, 2.2, 4.6), target: new THREE.Vector3(0, 0.7, 0), fov: 38 },
+      SKY,
+      'shots/car-damage.png',
+    );
+    render(
+      scene,
+      { eye: new THREE.Vector3(-5.6, 1.5, -3.4), target: new THREE.Vector3(0, 0.7, 0), fov: 40 },
+      SKY,
+      'shots/car-damage-rear.png',
+    );
+    console.log(
+      'kerusakan: bodi',
+      (car.damage.bodyHealth * 100).toFixed(0) + '%',
+      '· ban copot',
+      car.damage.lostCount,
+      '· pecah',
+      car.damage.puncturedCount,
+    );
   }
 
   if (what === 'arena' || what === 'all') {

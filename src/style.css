@@ -182,6 +182,60 @@ body.is-low #grade {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
 }
 
+/* Kerusakan: hanya muncul kalau mobil benar-benar rusak. */
+#damage {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  line-height: 1.35;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+}
+
+#damage.hide {
+  display: none;
+}
+
+#damage .dmg-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #ffc46b;
+}
+
+#damage .dmg-row .meter {
+  display: block;
+  width: 54px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+#damage .dmg-row .meter > i {
+  display: block;
+  height: 100%;
+  background: #ff8a3c;
+  transition: width 160ms linear;
+}
+
+#damage .dmg-row.lost {
+  color: #ff6a4a;
+}
+
+#damage .dmg-row.dead {
+  color: #ff5a3c;
+  font-weight: 700;
+}
+
+#damage .dmg-row.flash {
+  color: #fff2d6;
+  font-weight: 700;
+  text-shadow: 0 0 8px rgba(255, 90, 60, 0.9);
+}
+
 #auto {
   font-size: 10px;
   letter-spacing: 0.06em;

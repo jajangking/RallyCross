@@ -139,6 +139,14 @@ export class WheelSuspension {
     parent.add(this.group);
   }
 
+  /**
+   * BAN COPOT: roda (tapak + velg) hilang, tapi kaliper, cakram dan lengan
+   * suspensi tetap ada — persis seperti mobil nyata yang kehilangan roda.
+   */
+  setWheelLost(lost: boolean) {
+    this.spin.visible = !lost;
+  }
+
   update(steerAngle: number, suspLength: number, spinAngle: number, brake: number) {
     const cfg = this.cfg;
     const { x, z } = this.spec;

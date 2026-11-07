@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
+import { VehicleDamage, type DamageOptions } from './Damage';
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 const moveTowards = (current: number, target: number, maxDelta: number) =>
@@ -160,6 +161,8 @@ export class VehiclePhysics {
   readonly angularVelocity = new THREE.Vector3();
   readonly wheels: WheelState[] = [];
   readonly cfg: VehicleConfig;
+  /** Kerusakan mobil (bodi, mesin, ban). Selalu ada; `enabled` bisa dimatikan. */
+  readonly damage: VehicleDamage;
 
   steerAngle = 0;
   speed = 0;
@@ -180,8 +183,13 @@ export class VehiclePhysics {
   private readonly sPointVel = new THREE.Vector3();
   private readonly sForce = new THREE.Vector3();
   private readonly sDrift = new THREE.Vector3();
+  private readonly sImpact = new THREE.Vector3();
+  private readonly sInvQuat = new THREE.Quaternion();
   private readonly impulse = { x: 0, y: 0, z: 0 };
   private readonly impulseAt = { x: 0, y: 0, z: 0 };
+  /** Kecepatan sebelum langkah terakhir, untuk mengukur Δv benturan. */
+  private readonly prevVelocity = new THREE.Vector3();
+  private hasPrevVelocity = false;
 
   constructor(
     world: RAPIER.World,
@@ -189,8 +197,11 @@ export class VehiclePhysics {
     spawn = new THREE.Vector3(0, 0.95, 0),
     /** Heading in radians; 0 points the nose along +Z. */
     yaw = 0,
+    /** Setelan kerusakan (mis. `{ enabled: false }` untuk mobil demo). */
+    damageOptions: Partial<DamageOptions> = {},
   ) {
     this.world = world;
+    this.damage = new VehicleDamage(damageOptions);
     this.cfg = { ...cfg };
     this.spawn = spawn.clone();
     this.spawnYaw = yaw;
@@ -314,6 +325,15 @@ export class VehiclePhysics {
     this.steerAngle = 0;
     this.speed = 0;
     this.gear = 1;
+    // Teleport = bukan tabrakan: buang riwayat kecepatan, kalau tidak Δv dari
+    // kecepatan lama ke nol langsung dihitung sebagai benturan dan mobil yang
+    // baru saja diperbaiki malah rusak lagi di langkah berikutnya.
+    this.velocity.set(0, 0, 0);
+    this.angularVelocity.set(0, 0, 0);
+    this.hasPrevVelocity = false;
+    // Mobil yang di-reset otomatis diperbaiki: itu satu-satunya jalan keluar
+    // dari kerusakan (tidak ada perbaikan otomatis di tengah balapan).
+    this.damage.reset();
     for (const w of this.wheels) {
       w.spinAngle = 0;
       w.contact = false;
@@ -329,6 +349,35 @@ export class VehiclePhysics {
     this.placeAt(this.spawn, this.spawnYaw);
   }
 
+  /**
+   * Benturan dideteksi dari **lonjakan Δv** antar langkah fisika — tanpa perlu
+   * event queue Rapier, jadi jalan identik di browser dan di uji headless.
+   * Gravitasi hanya menambah 0,16 m/s per langkah, jauh di bawah ambang.
+   */
+  private detectImpact() {
+    const v = this.velocity;
+    if (!this.hasPrevVelocity) {
+      this.prevVelocity.copy(v);
+      this.hasPrevVelocity = true;
+      return;
+    }
+    this.sImpact.subVectors(v, this.prevVelocity);
+    // Buang komponen gravitasi supaya jatuh bebas tidak dihitung sebagai tabrakan.
+    this.sImpact.y += 9.81 / 60;
+    const mag = this.sImpact.length();
+    if (mag > 2.2) {
+      // ke kerangka mobil: x = kiri, z = depan
+      this.sImpact.applyQuaternion(this.sInvQuat.copy(this.quaternion).invert());
+      this.damage.impact(this.sImpact.x, this.sImpact.y, this.sImpact.z);
+    }
+    this.prevVelocity.copy(v);
+  }
+
+  /** Roda ini sudah copot? (dipakai visual untuk menyembunyikan rodanya) */
+  wheelLost(index: number): boolean {
+    return this.damage.wheels[index]?.lost === true;
+  }
+
   private syncTransform() {
     const t = this.body.translation();
     const q = this.body.rotation();
@@ -339,6 +388,7 @@ export class VehiclePhysics {
   /** Advance the vehicle by a fixed physics step. Call BEFORE world.step(). */
   fixedStep(dt: number, input: VehicleInput) {
     this.syncTransform();
+    this.detectImpact();
 
     const lin = this.body.linvel();
     this.velocity.set(lin.x, lin.y, lin.z);
@@ -402,13 +452,23 @@ export class VehiclePhysics {
 
   private updateSteering(dt: number, steerInput: number, speed: number) {
     const cfg = this.cfg;
+    const damage = this.damage;
+    // Roda depan rusak/copot: sudut roda yang bisa dicapai mengecil.
     const maxSteer =
-      THREE.MathUtils.degToRad(cfg.maxSteerDeg) * (1 - cfg.steerFalloff * clamp(speed / cfg.maxSpeed, 0, 1));
+      THREE.MathUtils.degToRad(cfg.maxSteerDeg) *
+      (1 - cfg.steerFalloff * clamp(speed / cfg.maxSpeed, 0, 1)) *
+      damage.steerScale;
+    // Ban depan kempes menarik setir ke sisinya, jadi mobil harus dilawan.
+    const bias = damage.pullSteer(speed);
     // three.js is right-handed: with the car facing +Z, a positive rotation
     // about +Y swings the nose toward +X, which is the car's LEFT (right-hand
     // side of a +Z-facing car is -X). Input +1 means "right", so negate here.
     // Convention: steerAngle > 0 == counter-clockwise (left) in world space.
-    this.steerAngle = moveTowards(this.steerAngle, -clamp(steerInput, -1, 1) * maxSteer, cfg.steerRate * dt);
+    this.steerAngle = moveTowards(
+      this.steerAngle,
+      -clamp(steerInput, -1, 1) * maxSteer + bias,
+      cfg.steerRate * dt,
+    );
   }
 
   /* ---------------- suspension ---------------- */
@@ -423,7 +483,8 @@ export class VehiclePhysics {
     const rayLift = 0.7;
     const maxToi = rayLift + cfg.suspensionRest + cfg.wheelRadius;
 
-    for (const w of this.wheels) {
+    for (let i = 0; i < this.wheels.length; i++) {
+      const w = this.wheels[i];
       w.anchor.copy(w.localAnchor).applyQuaternion(this.quaternion).add(this.position);
       w.contact = false;
       w.springForce = 0;
@@ -431,6 +492,15 @@ export class VehiclePhysics {
       w.slipAngle = 0;
       w.vLong = 0;
       w.vLat = 0;
+
+      // BAN COPOT: tidak ada roda, tidak ada gaya pegas di sudut itu. Mobil
+      // langsung miring ke sudut tersebut dan hanya disangga tiga roda.
+      if (this.damage.wheels[i]?.lost) {
+        w.center.copy(w.anchor).addScaledVector(down, cfg.suspensionRest);
+        w.suspLength = cfg.suspensionRest;
+        w.compression = 0;
+        continue;
+      }
 
       this.ray.origin.x = w.anchor.x + up.x * rayLift;
       this.ray.origin.y = w.anchor.y + up.y * rayLift;
@@ -518,19 +588,26 @@ export class VehiclePhysics {
   ) {
     const cfg = this.cfg;
     const peak = THREE.MathUtils.degToRad(cfg.peakSlipDeg);
+    const damage = this.damage;
+    const throttleScale = damage.throttleScale;
+    const topSpeedScale = damage.topSpeedScale;
     // Power falls off with speed *in the direction of the engaged gear*; the
     // brake pedal never feeds power, so top speed is capped here only once.
-    const limit = this.gear === 1 ? cfg.maxSpeed : cfg.reverseMaxSpeed;
+    const limit = (this.gear === 1 ? cfg.maxSpeed : cfg.reverseMaxSpeed) * (this.gear === 1 ? topSpeedScale : 1);
     const speedInGear = Math.max(forwardSpeed * this.gear, 0);
-    const powerScale = clamp(1 - Math.pow(speedInGear / limit, 2), 0, 1);
+    // `limit` bisa 0 kalau mesin mati: jangan sampai 0/0 = NaN masuk ke gaya ban.
+    const powerScale = limit > 0.05 ? clamp(1 - Math.pow(speedInGear / limit, 2), 0, 1) : 0;
 
     const throttle = clamp(input.throttle, 0, 1);
     const brake = clamp(input.brake, 0, 1);
 
-    for (const w of this.wheels) {
+    for (let wheelIndex = 0; wheelIndex < this.wheels.length; wheelIndex++) {
+      const w = this.wheels[wheelIndex];
       if (!w.contact) continue;
       const Fz = w.springForce;
       if (Fz < 1) continue;
+      const grip = damage.wheelGrip(wheelIndex);
+      if (grip <= 0) continue;
 
       const steer = w.isFront ? this.steerAngle : 0;
       w.forward.copy(bodyFwd);
@@ -548,7 +625,7 @@ export class VehiclePhysics {
       const alpha = Math.atan2(vLat, Math.abs(vLong) + 0.9);
       w.slipAngle = alpha;
 
-      let mu = (w.isFront ? cfg.muFront : cfg.muRear) * w.surfaceMu;
+      let mu = (w.isFront ? cfg.muFront : cfg.muRear) * w.surfaceMu * grip;
       if (!w.isFront && input.handbrake) mu *= cfg.handbrakeRearGrip;
 
       /* lateral: linear up to the peak slip angle, then a controlled falloff */
@@ -561,8 +638,8 @@ export class VehiclePhysics {
       const share = w.isFront ? cfg.frontSplit * 0.5 : (1 - cfg.frontSplit) * 0.5;
       let Fx = 0;
 
-      if (throttle > 0.01) {
-        Fx += cfg.engineForce * throttle * share * this.gear * powerScale;
+      if (throttle > 0.01 && throttleScale > 0) {
+        Fx += cfg.engineForce * throttle * share * this.gear * powerScale * throttleScale;
       }
 
       // The brake only ever opposes the current motion. The `vLong`-based
@@ -577,7 +654,7 @@ export class VehiclePhysics {
       if (input.handbrake && !w.isFront) {
         FxOppose += cfg.handbrakeForce * 0.25 * stoppingAuthority;
       }
-      FxOppose += cfg.rollingResistance * share;
+      FxOppose += cfg.rollingResistance * share * damage.wheelDrag(wheelIndex);
 
       // A tyre can slow the contact patch down but never push it back: the
       // friction impulse of one step may not exceed the slip velocity. Without

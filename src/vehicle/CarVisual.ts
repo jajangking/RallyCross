@@ -341,6 +341,11 @@ export class CarVisual {
     return this.steeringWheel.rotation.z;
   }
 
+  /** Sembunyikan roda yang copot, sisakan suspensi & kalipernya. */
+  setWheelLost(index: number, lost: boolean) {
+    this.suspension[index]?.setWheelLost(lost);
+  }
+
   /** Vertical position of each wheel hub in car space (suspension travel). */
   get hubHeights() {
     return this.suspension.map((s) => s.hub.position.y);
