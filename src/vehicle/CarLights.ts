@@ -1,0 +1,159 @@
+import * as THREE from 'three';
+import type { VehicleConfig } from './VehiclePhysics';
+import { roundedBox } from './carParts';
+
+export interface CarLightState {
+  /** 0..1 brake pedal opening. */
+  brake: number;
+  /** Reverse gear engaged. */
+  reverse: boolean;
+  left: boolean;
+  right: boolean;
+  hazard: boolean;
+  headlights: boolean;
+}
+
+export interface CarLightReadings {
+  tail: number;
+  reverse: number;
+  head: number;
+  amberLeft: number;
+  amberRight: number;
+  blinkOn: boolean;
+}
+
+const BLINK_HALF_PERIOD = 0.42; // on for 0.42 s, off for 0.42 s
+
+/**
+ * Head lights, brake lights, reverse lights and turn signals. Everything is
+ * driven from the simulation state (brake pedal, gear, indicator selection),
+ * never from a static material.
+ */
+export class CarLights {
+  readonly group = new THREE.Group();
+
+  private readonly headMat: THREE.MeshStandardMaterial;
+  private readonly tailMat: THREE.MeshStandardMaterial;
+  private readonly reverseMat: THREE.MeshStandardMaterial;
+  private readonly amberLeftMat: THREE.MeshStandardMaterial;
+  private readonly amberRightMat: THREE.MeshStandardMaterial;
+
+  private readonly spots: THREE.SpotLight[] = [];
+  private readonly spotTargets: THREE.Object3D[] = [];
+
+  private tailIntensity = 0.6;
+  private spotIntensity = 0;
+  private blinkTimer = 0;
+  private blinkPhaseOn = true;
+  private wasLeft = false;
+  private wasRight = false;
+
+  constructor(parent: THREE.Object3D, cfg: VehicleConfig, detail: boolean) {
+    const L = cfg.halfLength;
+    const lampMat = (
+      color: number,
+      emissive: number,
+      intensity: number,
+    ) =>
+      new THREE.MeshStandardMaterial({
+        color,
+        emissive,
+        emissiveIntensity: intensity,
+        roughness: 0.28,
+        metalness: 0.15,
+      });
+
+    this.headMat = lampMat(0xdfe4ea, 0xfff4d6, 0.2);
+    this.tailMat = lampMat(0x330603, 0xff1508, 0.6);
+    this.reverseMat = lampMat(0xcdd4db, 0xeef4ff, 0);
+    this.amberLeftMat = lampMat(0x3a1c00, 0xff7a0a, 0);
+    this.amberRightMat = lampMat(0x3a1c00, 0xff7a0a, 0);
+
+    const add = (
+      w: number,
+      h: number,
+      d: number,
+      x: number,
+      y: number,
+      z: number,
+      mat: THREE.Material,
+    ) => {
+      const mesh = roundedBox(w, h, d, 0.02, mat);
+      mesh.position.set(x, y, z);
+      this.group.add(mesh);
+      return mesh;
+    };
+
+    // head lamps + front indicators
+    for (const side of [-1, 1]) {
+      add(0.4, 0.13, 0.07, side * 0.52, 0.1, L + 0.045, this.headMat);
+      add(0.13, 0.07, 0.075, side * 0.79, 0.0, L + 0.05, side < 0 ? this.amberLeftMat : this.amberRightMat);
+      // tail lamps, reverse lamps + rear indicators
+      add(0.44, 0.14, 0.075, side * 0.56, 0.16, -L - 0.055, this.tailMat);
+      add(0.13, 0.09, 0.075, side * 0.76, 0.02, -L - 0.05, this.reverseMat);
+      add(0.11, 0.09, 0.075, side * 0.8, 0.11, -L - 0.05, side < 0 ? this.amberLeftMat : this.amberRightMat);
+    }
+
+    if (detail) {
+      for (const side of [-1, 1]) {
+        const spot = new THREE.SpotLight(0xfff3d8, 0, 60, 0.45, 0.5, 1.3);
+        spot.position.set(side * 0.52, 0.12, L + 0.08);
+        spot.target.position.set(side * 0.52, -0.6, L + 16);
+        spot.castShadow = false;
+        this.spots.push(spot);
+        this.spotTargets.push(spot.target);
+        this.group.add(spot, spot.target);
+      }
+    }
+
+    parent.add(this.group);
+  }
+
+  update(dt: number, state: CarLightState) {
+    /* brake lights: bright when the pedal is pressed, dim tail otherwise */
+    const tailTarget = THREE.MathUtils.clamp(state.brake, 0, 1) > 0.05 ? 3.6 : 0.6;
+    this.tailIntensity += (tailTarget - this.tailIntensity) * Math.min(1, dt * 14);
+    this.tailMat.emissiveIntensity = this.tailIntensity;
+
+    /* reverse lamp follows the manual gear */
+    this.reverseMat.emissiveIntensity = state.reverse ? 2.6 : 0;
+
+    /* head lamps + spot lights */
+    this.headMat.emissiveIntensity = state.headlights ? 3.2 : 0.2;
+    const spotTarget = state.headlights ? 260 : 0;
+    this.spotIntensity += (spotTarget - this.spotIntensity) * Math.min(1, dt * 6);
+    for (const spot of this.spots) spot.intensity = this.spotIntensity;
+
+    /* indicators: restarted instantly when the selection changes */
+    const wantLeft = state.hazard || state.left;
+    const wantRight = state.hazard || state.right;
+    if (wantLeft !== this.wasLeft || wantRight !== this.wasRight) {
+      this.blinkTimer = 0;
+      this.blinkPhaseOn = true;
+      this.wasLeft = wantLeft;
+      this.wasRight = wantRight;
+    } else {
+      this.blinkTimer += dt;
+      if (this.blinkTimer >= BLINK_HALF_PERIOD) {
+        this.blinkTimer -= BLINK_HALF_PERIOD;
+        this.blinkPhaseOn = !this.blinkPhaseOn;
+      }
+    }
+
+    const amber = this.blinkPhaseOn ? 3.6 : 0;
+    this.amberLeftMat.emissiveIntensity = wantLeft ? amber : 0;
+    this.amberRightMat.emissiveIntensity = wantRight ? amber : 0;
+  }
+
+  /** Exposed for the browser regression check. */
+  get readings(): CarLightReadings {
+    return {
+      tail: this.tailMat.emissiveIntensity,
+      reverse: this.reverseMat.emissiveIntensity,
+      head: this.headMat.emissiveIntensity,
+      amberLeft: this.amberLeftMat.emissiveIntensity,
+      amberRight: this.amberRightMat.emissiveIntensity,
+      blinkOn: this.blinkPhaseOn,
+    };
+  }
+}

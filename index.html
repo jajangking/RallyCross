@@ -24,13 +24,18 @@
         <span id="unit">km/h</span>
       </div>
       <div id="gear">N</div>
+      <div id="lamps">
+        <span id="ind-left" class="ind">◀</span>
+        <span id="ind-right" class="ind">▶</span>
+        <span id="ind-beam" class="ind beam">◐</span>
+      </div>
       <div id="bars"></div>
       <div id="telem"></div>
     </div>
 
     <div id="help">
-      <b>W/↑</b> gas · <b>S/↓</b> rem · <b>A/D ←→</b> setir progresif · <b>Q</b> gigi D/R ·
-      <b>Space</b> handbrake · <b>R</b> reset · <b>C</b> kamera · <b>G</b> panel
+      <b>W/↑</b> gas · <b>S/↓</b> rem · <b>A/D ←→</b> setir · <b>Q</b> gigi D/R · <b>Z/X</b> sein ·
+      <b>H</b> hazard · <b>L</b> lampu · <b>Space</b> handbrake · <b>R</b> reset · <b>C</b> kamera · <b>G</b> panel
     </div>
 
     <div id="touch">
@@ -52,6 +57,13 @@
           <button data-k="hand" class="hb" aria-label="handbrake">HB</button>
         </div>
       </div>
+    </div>
+
+    <div id="lampbar">
+      <button data-lamp="left" aria-label="sein kiri" aria-pressed="false">◀</button>
+      <button data-lamp="right" aria-label="sein kanan" aria-pressed="false">▶</button>
+      <button data-lamp="hazard" aria-label="hazard" aria-pressed="false">!</button>
+      <button data-lamp="beam" aria-label="lampu utama" aria-pressed="false">◐</button>
     </div>
 
     <div id="boot">Menyiapkan fisika…</div>

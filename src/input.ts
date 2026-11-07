@@ -111,15 +111,26 @@ class TouchSlider {
 
 type TouchKey = 'hand';
 
+export interface LightControls {
+  left: boolean;
+  right: boolean;
+  hazard: boolean;
+  headlights: boolean;
+}
+
 export class Input {
   /** Analogue throughout: throttle/brake 0..1, steer -1..1, gear D/R. */
   readonly state: VehicleInput = { throttle: 0, brake: 0, steer: 0, handbrake: false, gear: 1 };
   readonly isTouch: boolean;
 
+  /** Sein kiri/kanan, hazard, dan lampu utama — tidak menyentuh fisika. */
+  readonly lights: LightControls = { left: false, right: false, hazard: false, headlights: false };
+
   private readonly keys = new Set<string>();
   private readonly touch: Record<TouchKey, boolean> = { hand: false };
   private gearBtn: HTMLButtonElement | null = null;
   private gearShown: GearDirection | null = null;
+  private lampButtons: HTMLButtonElement[] = [];
 
   private steer: TouchSlider | null = null;
   private gas: TouchSlider | null = null;
@@ -138,6 +149,7 @@ export class Input {
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
     window.addEventListener('blur', () => this.clear());
     this.bindTouch();
+    this.bindLamps();
     this.syncGearButton();
   }
 
@@ -154,6 +166,56 @@ export class Input {
   setGear(gear: GearDirection) {
     this.state.gear = gear;
     this.syncGearButton();
+  }
+
+  toggleSignal(side: 'left' | 'right') {
+    const on = !this.lights[side];
+    this.lights.left = side === 'left' ? on : false;
+    this.lights.right = side === 'right' ? on : false;
+    this.syncLamps();
+  }
+
+  toggleHazard() {
+    this.lights.hazard = !this.lights.hazard;
+    this.syncLamps();
+  }
+
+  toggleHeadlights() {
+    this.lights.headlights = !this.lights.headlights;
+    this.syncLamps();
+  }
+
+  private bindLamps() {
+    this.lampButtons = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('#lampbar button[data-lamp]'),
+    );
+    for (const btn of this.lampButtons) {
+      btn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        if (btn.dataset.lamp === 'left') this.toggleSignal('left');
+        else if (btn.dataset.lamp === 'right') this.toggleSignal('right');
+        else if (btn.dataset.lamp === 'hazard') this.toggleHazard();
+        else this.toggleHeadlights();
+      });
+      btn.addEventListener('contextmenu', (e) => e.preventDefault());
+    }
+    this.syncLamps();
+  }
+
+  private syncLamps() {
+    for (const btn of this.lampButtons) {
+      const key = btn.dataset.lamp;
+      const on =
+        key === 'left'
+          ? this.lights.left
+          : key === 'right'
+            ? this.lights.right
+            : key === 'hazard'
+              ? this.lights.hazard
+              : this.lights.headlights;
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-pressed', String(on));
+    }
   }
 
   private syncGearButton() {
@@ -183,6 +245,18 @@ export class Input {
         break;
       case 'KeyQ':
         this.toggleGear();
+        break;
+      case 'KeyZ':
+        this.toggleSignal('left');
+        break;
+      case 'KeyX':
+        this.toggleSignal('right');
+        break;
+      case 'KeyH':
+        this.toggleHazard();
+        break;
+      case 'KeyL':
+        this.toggleHeadlights();
         break;
     }
   }

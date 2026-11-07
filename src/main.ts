@@ -7,6 +7,8 @@ import { buildTrack } from './world/track';
 import { Input } from './input';
 import { Hud } from './hud';
 import { CameraRig } from './camera';
+import type { CarLightState } from './vehicle/CarLights';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
 const FIXED_DT = 1 / 60;
 const MAX_SUBSTEPS = 5;
@@ -47,6 +49,16 @@ async function boot() {
   scene.background = new THREE.Color(0x121820);
   scene.fog = new THREE.Fog(0x121820, 90, 420);
 
+  // A tiny procedural environment map is what makes the paint, glass and
+  // mirrors read as real materials instead of flat colours.
+  if (!lowQuality) {
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const room = new RoomEnvironment();
+    scene.environment = pmrem.fromScene(room, 0.04).texture;
+    room.dispose();
+    pmrem.dispose();
+  }
+
   const hemi = new THREE.HemisphereLight(0xb7d2ef, 0x2b2419, 1.15);
   scene.add(hemi);
 
@@ -72,7 +84,7 @@ async function boot() {
   buildTrack(world, scene);
 
   const car = new VehiclePhysics(world, defaultConfig, new THREE.Vector3(0, 0.95, 0));
-  const carVisual = new CarVisual(scene, car);
+  const carVisual = new CarVisual(scene, car, { detail: !lowQuality });
 
   /* ---------------- camera / input / hud ---------------- */
   const cameraRig = new CameraRig(window.innerWidth / window.innerHeight);
@@ -204,6 +216,15 @@ async function boot() {
   refresh();
 
   /* ---------------- loop ---------------- */
+  const lightState: CarLightState = {
+    brake: 0,
+    reverse: false,
+    left: false,
+    right: false,
+    hazard: false,
+    headlights: false,
+  };
+
   const timer = new THREE.Timer();
   timer.connect(document);
   let accumulator = 0;
@@ -231,9 +252,18 @@ async function boot() {
     if (steps === MAX_SUBSTEPS) accumulator = 0;
 
     car.sync();
-    carVisual.update(car);
+
+    lightState.brake = input.state.brake;
+    lightState.reverse = car.gear === -1;
+    lightState.left = input.lights.left;
+    lightState.right = input.lights.right;
+    lightState.hazard = input.lights.hazard;
+    lightState.headlights = input.lights.headlights;
+
+    carVisual.update(car, raw, lightState);
     cameraRig.update(raw, car);
     hud.update(car, raw);
+    hud.setLamps(lightState);
     followSun();
 
     renderer.render(scene, cameraRig.camera);
@@ -249,6 +279,7 @@ async function boot() {
   /* ---------------- debug handle ---------------- */
   (window as unknown as Record<string, unknown>).rc = {
     car,
+    carVisual,
     world,
     cfg,
     input,

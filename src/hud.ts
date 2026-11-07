@@ -8,6 +8,9 @@ export class Hud {
   private readonly speedEl = document.getElementById('speed')!;
   private readonly gearEl = document.getElementById('gear')!;
   private readonly telemEl = document.getElementById('telem')!;
+  private readonly indLeft = document.getElementById('ind-left');
+  private readonly indRight = document.getElementById('ind-right');
+  private readonly indBeam = document.getElementById('ind-beam');
   private readonly bars: Array<{ root: HTMLElement; fill: HTMLElement }> = [];
   private readonly maxLoad: number;
   private accum = 0;
@@ -23,6 +26,15 @@ export class Hud {
       this.bars.push({ root, fill });
     }
     this.maxLoad = ((mass * 9.81) / 4) * 3.2;
+  }
+
+  /** Turn-signal / hazard / head-light repeaters. */
+  setLamps(state: { left: boolean; right: boolean; hazard: boolean; headlights: boolean }) {
+    const left = state.hazard || state.left;
+    const right = state.hazard || state.right;
+    this.indLeft?.classList.toggle('on', left);
+    this.indRight?.classList.toggle('on', right);
+    this.indBeam?.classList.toggle('on', state.headlights);
   }
 
   update(phys: VehiclePhysics, dt: number) {

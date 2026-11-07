@@ -311,6 +311,81 @@ try {
   check(zAfterBrake >= zAtRest - 0.1, 'brake alone does not reverse', `Δz=${(zAfterBrake - zAtRest).toFixed(2)} m`);
   await new Promise((r) => setTimeout(r, 300));
 
+  console.log('\n— lights & body detail —');
+
+  const lightRead = () => page.evaluate(() => window.rc.carVisual.lights.readings);
+  const peak = async (key, ms = 1200) => {
+    let max = 0;
+    const start = Date.now();
+    while (Date.now() - start < ms) {
+      const v = (await lightRead())[key];
+      if (v > max) max = v;
+      await new Promise((r) => setTimeout(r, 80));
+    }
+    return max;
+  };
+
+  await page.evaluate(() => window.rc.car.reset());
+  await new Promise((r) => setTimeout(r, 400));
+  const tailOff = await lightRead();
+  await press('brake', 1, 600);
+  const tailOn = await lightRead();
+  await release('brake');
+  check(
+    tailOn.tail > tailOff.tail + 1.5,
+    'brake light brightens when braking',
+    `${tailOff.tail.toFixed(2)} → ${tailOn.tail.toFixed(2)}`,
+  );
+
+  await page.keyboard.press('KeyZ');
+  const leftPeak = await peak('amberLeft');
+  const rightPeak = await peak('amberRight', 600);
+  const repeater = await page.evaluate(() =>
+    document.getElementById('ind-left')?.classList.contains('on'),
+  );
+  check(leftPeak > 2, 'left indicator blinks', `peak=${leftPeak.toFixed(1)}`);
+  check(rightPeak === 0, 'right indicator stays off', `peak=${rightPeak.toFixed(1)}`);
+  check(repeater === true, 'HUD repeater lights up');
+  await page.keyboard.press('KeyZ');
+
+  await page.keyboard.press('KeyL');
+  await new Promise((r) => setTimeout(r, 200));
+  const beams = await lightRead();
+  check(beams.head > 2, 'head lights turn on', `head=${beams.head.toFixed(1)}`);
+  await page.keyboard.press('KeyL');
+
+  // reverse lamp follows the gear
+  await page.evaluate(() => window.rc.car.reset());
+  await new Promise((r) => setTimeout(r, 300));
+  await tapGear();
+  await new Promise((r) => setTimeout(r, 300));
+  const reverseLamp = await lightRead();
+  check(reverseLamp.reverse > 2, 'reverse lamp on in R', `reverse=${reverseLamp.reverse.toFixed(1)}`);
+  await tapGear();
+  await new Promise((r) => setTimeout(r, 300));
+
+  // per-wheel suspension + steering wheel animation
+  const chassis = await page.evaluate(() => ({
+    hubs: window.rc.carVisual.hubHeights,
+  }));
+  check(chassis.hubs.length === 4, 'four suspension corners', chassis.hubs.join(', '));
+  check(
+    chassis.hubs.every((y) => y < -0.3 && y > -0.9),
+    'hubs sit inside the wheel travel',
+    chassis.hubs.map((y) => y.toFixed(2)).join(', '),
+  );
+
+  await page.keyboard.down('KeyD');
+  await new Promise((r) => setTimeout(r, 400));
+  const steering = await page.evaluate(() => ({
+    wheel: window.rc.carVisual.steeringWheelAngle,
+    hub: window.rc.carVisual.hubHeights[0],
+  }));
+  await page.keyboard.up('KeyD');
+  check(Math.abs(steering.wheel) > 0.05, 'steering wheel turns', `${steering.wheel.toFixed(2)} rad`);
+
+  await new Promise((r) => setTimeout(r, 300));
+
   check(errors.length === 0, 'no console errors', errors.slice(0, 3).join(' | '));
 } finally {
   await browser.close();

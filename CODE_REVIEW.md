@@ -210,3 +210,33 @@ determinisme berbasis hash posisi/kecepatan setelah N step.
 - `src/world/track.ts`: collider & visual dipisah, layout data, barrier keliling, material di-cache.
 - `scripts/smoke.ts` (+35 check), `scripts/browser-check.mjs`, `.github/workflows/ci.yml`.
 - `README.md` diperbarui (kontrol, gigi manual, model fisika, verifikasi), `CODE_REVIEW.md` ini.
+
+## Iterasi 2 — detail visual mobil (2026-11-07)
+
+Permintaan: mobil yang jauh lebih detail — suspensi per roda, lampu rem, lampu sein, kaca, spion, dll.
+Fisika tidak diubah; semua tambahan ada di lapisan visual.
+
+**Yang dibangun**
+
+| Bagian | Isi |
+|---|---|
+| Bodi | Dua `ExtrudeGeometry` dari profil samping (bodi bawah + greenhouse) dengan bevel, fender flare, skirt, splitter, diffuser, sayap belakang bertumpu di bagasi, scoop atap, mud flap, knalpot, tow hook, plat, grille, handle |
+| Kaca | Windshield, rear glass, dua jendela samping per sisi — semua di-offset melewati bevel bodi supaya tidak tenggelam |
+| Spion | Rumah + kaca reflektif (`metalness 1`, `roughness 0.05`) + tangkai, di luar lebar bodi |
+| Interior | Dashboard, jok, roll cage di dalam kabin, setir yang berputar 5× sudut setir |
+| Suspensi | Per roda: lower + upper wishbone, tie rod, coilover (pegas helical + body damper + shaft), knuckle, disc brake + caliper; semua titik dihitung ulang dari `suspLength` tiap frame, camber bertambah saat kompresi, cakram berpijar saat rem |
+| Lampu | Rem (lerp 14/s), posisi redup, mundur putih di gigi R, sein kiri/kanan + hazard dengan blink 0.42 s, lampu utama (lensa emissive + 2 `SpotLight`), repeater di HUD |
+| Material | `PMREMGenerator` + `RoomEnvironment` untuk cat clearcoat, kaca, spion (dimatikan di `?quality=low`) |
+
+**Verifikasi**
+
+- `tsc --noEmit` bersih, `npm run smoke` **35/35** tetap hijau (fisika tidak tersentuh), `npm run build` sukses.
+- Model diuji headless tanpa GPU: dibuat dengan `THREE.Scene` nyata lalu dirender dengan software rasterizer sementara (painter's algorithm + PNG encoder) dari 4 sudut, sehingga bentuk bodi, kaca, spion, sayap, dan lampu bisa diperiksa visual. Dari situ ditemukan & diperbaiki: sayap melayang (stay tidak menyentuh bagasi), kaca tenggelam di dalam bevel bodi, spion berada di dalam bodi, roll cage menembus atap, dan center cap roda berwarna oranye mencolok.
+- Uji gerak: saat pengereman + belok, tinggi hub keempat roda berbeda (`-0.551 / -0.488 / -0.651 / -0.588`), membuktikan suspensi visual benar-benar mengikuti raycast.
+- Ukuran: **132 mesh / ±37 ribu triangle** (high), lebih sedikit di `?quality=low`.
+- `scripts/browser-check.mjs` ditambah 8 check: lampu rem menguat, sein kiri berkedip (kanan tetap mati), repeater HUD, lampu utama, lampu mundur di R, 4 hub di rentang travel, dan setir berputar.
+
+**Catatan**
+
+- Karena badan mobil kini turun sampai `y ≈ -0.62` (visual) sementara collider tetap 0.68 m, bagian bawah bodi bisa terlihat sedikit menembus tanjakan/obstacle. Collider sengaja tidak diubah supaya handling tetap sama.
+- Renderer software itu hanya alat bantu verifikasi sementara dan tidak ikut di-commit (repo tetap bersih dari artefak).

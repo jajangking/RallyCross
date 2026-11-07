@@ -27,6 +27,9 @@ Semua input **analog/proporsional** — bukan tombol on/off:
 | Rem (bukaan 0–100 %) | `S` / `↓` | slider vertikal REM |
 | Setir (1:1) | `A` `D` / `←` `→` (di-ramp) | slider horizontal SETIR |
 | Gigi maju/mundur (D ⇄ R) | `Q` | tombol D/R |
+| Sein kiri / kanan | `Z` / `X` | tombol ◀ ▶ |
+| Hazard | `H` | tombol ! |
+| Lampu utama | `L` | tombol ◐ |
 | Handbrake | `Space` | HB |
 | Reset mobil | `R` | — |
 | Ganti kamera (chase/hood) | `C` | — |
@@ -52,12 +55,15 @@ src/
 ├─ main.ts                  # renderer, scene, loop tetap 60 Hz, GUI, presets
 ├─ vehicle/
 │  ├─ VehiclePhysics.ts     # SEMUA fisika kendaraan (tidak butuh DOM)
-│  └─ CarVisual.ts          # mesh chassis + 4 roda (visual saja)
+│  ├─ CarVisual.ts          # bodi, kaca, spion, interior, perakitan
+│  ├─ CarSuspension.ts      # per roda: wishbone, tie rod, coilover, rem
+│  ├─ CarLights.ts          # lampu rem, sein, mundur, lampu utama
+│  └─ carParts.ts           # material + helper geometri (link, pegas)
 ├─ world/track.ts
 │  ├─ buildTrackColliders() # ground, ramp, cone, gravel, ice — tanpa DOM
 │  └─ buildTrackVisuals()   # mesh + tekstur canvas — hanya browser
 ├─ camera.ts                # chase / hood cam + FOV dinamis
-├─ input.ts                 # slider setir/gas/rem analog + keyboard + gigi D/R
+├─ input.ts                 # slider setir/gas/rem analog + gigi D/R + sein/lampu
 ├─ hud.ts                   # speedo, gear D/R, beban per roda, drift
 └─ style.css
 scripts/
@@ -93,6 +99,31 @@ scripts/
 
 **Aero**
 - Drag `0.55·v²`, downforce `1.2·v²` di titik COM.
+
+## Mobil & detail visual
+
+Visual mobil sekarang dibangun prosedural (tanpa file model), semuanya mengikuti state fisika:
+
+**Bodi & kabin**
+- Dua `ExtrudeGeometry` dari profil samping (counter-clockwise, jadi normal menghadap keluar): bodi bawah dengan hidung/buntut membulat + greenhouse terpisah, keduanya ber-bevel.
+- Kaca terpisah: windshield, rear glass (diposisikan keluar dari bevel bodi), dan dua jendela samping per sisi.
+- Spion (rumah + kaca reflektif + tangkai), fender flare di 4 lubang roda, side skirt, splitter, diffuser, sayap belakang yang menempel di bagasi lewat dua stay, scoop atap, mud flap, knalpot, tow hook, plat nomor, grille, handle pintu.
+- Interior: dashboard, dua jok, roll cage di dalam kabin, dan setir yang berputar mengikuti sudut setir (rasio 5:1).
+
+**Suspensi per roda (kelihatan bekerja)**
+- Tiap sudut punya lower & upper wishbone, tie rod kemudi, dan coilover: pegas helical (`TubeGeometry`) + body damper + shaft.
+- Semua titik pangkal dihitung ulang tiap frame dari `wheel.suspLength` hasil raycast, jadi saat kompresi pegas memendek, lengan berayun, roda ikut bergerak; camber bertambah sedikit saat suspensi terkompresi.
+- Roda: ban, rim barel + bibir + 5 spoke, center cap, disc brake (ikut berputar) + caliper (menempel di upright, berwarna kontras), dan cakram yang berpijar halus saat rem dipakai.
+
+**Lampu (semua dinamis)**
+- Lampu rem menyala terang mengikuti pedal rem (lerp 14/s), lampu posisi redup saat tidak ngerem.
+- Lampu mundur putih menyala otomatis saat gigi R.
+- Sein kiri/kanan + hazard: kedip 0.42 s nyala / 0.42 s mati, langsung restart saat pilihan berubah, plus repeater ◀ ▶ ◐ di HUD yang ikut berkedip.
+- Lampu utama: lensa emissive + dua `SpotLight` (dimatikan di `?quality=low`).
+
+**Material & performa**
+- `PMREMGenerator` + `RoomEnvironment` memberi environment map untuk cat (clearcoat), kaca, dan spion; dilewati di `?quality=low`.
+- Versi detail: **132 mesh / ±37 ribu triangle**; mode low memakai segmen lebih sedikit, tanpa roll cage dan tanpa spot light.
 
 **Loop**
 - Fisika fixed **1/60 s** + accumulator (maks 5 substep), render interpolasi pose setelah `world.step()`.
@@ -132,7 +163,7 @@ Preset ada di panel GUI; `Copy config` menyalin JSON config ke clipboard untuk d
 - determinisme: dua run identik → state akhir identik
 - `buildTrackColliders()` jalan tanpa DOM, ramp melontarkan mobil lalu mendarat tegak
 
-`npm run check:browser` (opsional, perlu Chromium) menambah cek UI: bukaan gas/rem 1:1 (50 %, 85 %, 70 %), gas dan rem saling independen, rem tidak menambah throttle, semuanya menutup saat dilepas, slider setir balik ke tengah, tombol D/R memindah gigi + HUD menampilkan `R` saat mundur, rem tidak membalikkan mobil, dan arah setir cocok dengan layar.
+`npm run check:browser` (opsional, perlu Chromium) menambah cek UI: bukaan gas/rem 1:1 (50 %, 85 %, 70 %), gas dan rem saling independen, rem tidak menambah throttle, semuanya menutup saat dilepas, slider setir balik ke tengah, tombol D/R memindah gigi + HUD menampilkan `R` saat mundur, rem tidak membalikkan mobil, dan arah setir cocok dengan layar. Untuk detail visual: lampu rem menguat saat pedal ditekan, sein kiri berkedip sementara kanan tetap mati, repeater HUD menyala, lampu utama menyala, lampu mundur menyala di gigi R, empat hub suspensi berada di rentang travel, dan setir berputar.
 
 Status terakhir: **semua lolos**.
 
