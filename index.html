@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#0b0d10" />
+    <title>RallyCross — Vehicle Physics Prototype</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <div id="hud">
+      <div id="speedo">
+        <span id="speed">0</span>
+        <span id="unit">km/h</span>
+      </div>
+      <div id="gear">N</div>
+      <div id="bars"></div>
+      <div id="telem"></div>
+    </div>
+
+    <div id="help">
+      <b>W/↑</b> gas · <b>S/↓</b> rem/mundur · <b>A/D ←→</b> setir progresif ·
+      <b>Space</b> handbrake · <b>R</b> reset · <b>C</b> kamera · <b>G</b> panel
+    </div>
+
+    <div id="touch">
+      <div class="ctl steer" data-ctl="steer">
+        <span class="tag">setir</span>
+        <div class="track"><div class="knob"></div></div>
+      </div>
+      <div class="pad right">
+        <div class="ctl pedal" data-ctl="brake">
+          <span class="tag">rem</span>
+          <div class="track"><div class="fill"></div><div class="knob"></div></div>
+        </div>
+        <div class="ctl pedal" data-ctl="gas">
+          <span class="tag">gas</span>
+          <div class="track"><div class="fill"></div><div class="knob"></div></div>
+        </div>
+        <button data-k="hand" class="hb" aria-label="handbrake">HB</button>
+      </div>
+    </div>
+
+    <div id="boot">Menyiapkan fisika…</div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

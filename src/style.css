@@ -1,0 +1,348 @@
+:root {
+  --bg: #0b0d10;
+  --fg: #e8eef6;
+  --dim: #7f8b99;
+  --accent: #ffb02e;
+  --hot: #ff5a3c;
+  --ok: #57d68d;
+  --panel: rgba(12, 15, 19, 0.72);
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  overscroll-behavior: none;
+  touch-action: none;
+  user-select: none;
+}
+
+#app,
+#app canvas {
+  position: fixed;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---------- HUD ---------- */
+
+#hud {
+  position: fixed;
+  left: max(16px, env(safe-area-inset-left));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  pointer-events: none;
+  display: grid;
+  gap: 6px;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.65);
+}
+
+#speedo {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+#speed {
+  font-size: 54px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 0.9;
+}
+
+#unit {
+  font-size: 13px;
+  color: var(--dim);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+#gear {
+  position: absolute;
+  left: 0;
+  transform: translateY(-76px);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  color: var(--accent);
+}
+
+#bars {
+  display: flex;
+  gap: 5px;
+  margin-top: 2px;
+}
+
+.bar {
+  width: 42px;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.bar > i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--ok);
+  transition: width 90ms linear, background 120ms linear;
+}
+
+.bar.air > i {
+  background: #46525f;
+}
+
+#telem {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  white-space: pre;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+/* ---------- help ---------- */
+
+#help {
+  position: fixed;
+  top: max(12px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(8px);
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+#help b {
+  color: var(--fg);
+  font-weight: 700;
+}
+
+/* ---------- touch ---------- */
+
+#touch {
+  position: fixed;
+  inset: auto 0 max(12px, env(safe-area-inset-bottom)) 0;
+  display: none;
+  align-items: flex-end;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 0 max(14px, env(safe-area-inset-right)) 0 max(14px, env(safe-area-inset-left));
+  pointer-events: none;
+}
+
+body.is-touch #touch {
+  display: flex;
+}
+
+body.is-touch #help {
+  display: none;
+}
+
+/* lift the HUD above the touch controls */
+body.is-touch #hud {
+  bottom: calc(max(16px, env(safe-area-inset-bottom)) + 84px);
+}
+
+#touch .pad {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  pointer-events: auto;
+}
+
+/* ---------- analogue touch controls ---------- */
+
+#touch .ctl {
+  --v: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+#touch .ctl .tag {
+  font-size: 9px;
+  line-height: 1;
+  letter-spacing: 0.16em;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--dim);
+  pointer-events: none;
+}
+
+#touch .ctl .track {
+  position: relative;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(18, 22, 28, 0.66);
+  backdrop-filter: blur(10px);
+  overflow: hidden;
+}
+
+#touch .ctl .knob {
+  position: absolute;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: 2px solid rgba(0, 0, 0, 0.35);
+  background: radial-gradient(circle at 35% 30%, #ffd479, #ffb02e 62%, #d9820f);
+  box-shadow: 0 4px 18px rgba(255, 176, 46, 0.35);
+  pointer-events: none;
+}
+
+#touch .ctl.on .knob {
+  box-shadow: 0 0 0 4px rgba(255, 176, 46, 0.22), 0 4px 18px rgba(255, 176, 46, 0.45);
+}
+
+/* steering: horizontal, -1 left .. +1 right */
+#touch .ctl.steer {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 54vw;
+}
+
+#touch .ctl.steer .track {
+  width: 100%;
+  height: 56px;
+}
+
+/* centre notch */
+#touch .ctl.steer .track::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 2px;
+  height: 20px;
+  margin: -10px 0 0 -1px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.3);
+  pointer-events: none;
+}
+
+#touch .ctl.steer .knob {
+  top: 50%;
+  left: calc(50% + var(--v) * (50% - 26px));
+  transform: translate(-50%, -50%);
+}
+
+/* pedals: vertical, 0 closed .. 1 fully open (bottom -> top) */
+#touch .ctl.pedal .track {
+  width: 58px;
+  height: 128px;
+}
+
+#touch .ctl.pedal .fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(var(--v) * 100%);
+  border-radius: 999px;
+  background: linear-gradient(to top, rgba(255, 176, 46, 0.66), rgba(255, 176, 46, 0.22));
+  pointer-events: none;
+}
+
+#touch .ctl.pedal .knob {
+  left: 50%;
+  top: calc(50% - var(--v) * (50% - 26px));
+  transform: translate(-50%, -50%);
+}
+
+/* handbrake */
+
+#touch button {
+  width: 56px;
+  height: 56px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(18, 22, 28, 0.66);
+  backdrop-filter: blur(10px);
+  color: var(--fg);
+  font-size: 14px;
+  font-weight: 800;
+  touch-action: none;
+  transition: background 90ms linear, border-color 90ms linear, transform 90ms linear;
+}
+
+#touch button:active,
+#touch button.on {
+  transform: scale(0.94);
+}
+
+#touch button.hb {
+  color: var(--hot);
+}
+
+#touch button.hb:active,
+#touch button.hb.on {
+  background: rgba(255, 90, 60, 0.5);
+  border-color: rgba(255, 90, 60, 0.85);
+}
+
+/* ---------- boot ---------- */
+
+#boot {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  color: var(--dim);
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  transition: opacity 320ms ease;
+  z-index: 10;
+}
+
+#boot.done {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* lil-gui tweaks so it doesn't fight the HUD on phones */
+.lil-gui {
+  --width: 268px;
+  --background-color: rgba(12, 15, 19, 0.88);
+  --widget-color: #232a33;
+  --focus-color: #2e3742;
+  --number-color: #ffb02e;
+  --string-color: #57d68d;
+  z-index: 5 !important;
+}
+
+@media (max-width: 720px) {
+  #speed {
+    font-size: 42px;
+  }
+  #help {
+    font-size: 10px;
+    max-width: 92vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
