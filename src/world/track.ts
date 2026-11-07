@@ -96,6 +96,7 @@ const JOKER_WALLS = (() => {
   return out;
 })();
 
+
 /* ------------------------------------------------------------------ */
 /* colliders                                                           */
 /* ------------------------------------------------------------------ */
@@ -134,6 +135,8 @@ export function buildTrackColliders(world: RAPIER.World) {
   addTrimesh(world, MAIN_ROAD.gravel, SURFACE_MU.gravel);
   addTrimesh(world, JOKER_ROAD.gravel, SURFACE_MU.gravel);
   addTrimesh(world, VERGE, GRASS_MU);
+  // Apron pit = aspal sungguhan, bukan rumput: ban mencengkeram saat servis.
+  addTrimesh(world, PIT.apron, SURFACE_MU.tarmac);
   addTrimesh(world, JOKER_VERGE, GRASS_MU);
 
   // The barrier is solid all the way up to the top of the catch fencing, so a
@@ -688,6 +691,69 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
     const mesh = new THREE.Mesh(ribbonGeometry(ribbon), kerbMat);
     mesh.receiveShadow = true;
     scene.add(mesh);
+  }
+
+  /* ---------------- pit / service area ---------------- */
+  {
+    const apronMat = toon({ color: 0x565e68, side: THREE.DoubleSide });
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(PIT.apron.positions, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(PIT.apron.uvs, 2));
+    geometry.setIndex(PIT.apron.indices);
+    geometry.computeVertexNormals();
+    const apron = new THREE.Mesh(geometry, apronMat);
+    apron.receiveShadow = detail;
+    scene.add(apron);
+
+    // Garis kotak servis: satu LineSegments untuk keenam kotak (murah).
+    const linePoints: number[] = [];
+    const push = (x: number, z: number) => linePoints.push(x, PIT.y + 0.004, z);
+    for (const box of PIT.boxes) {
+      const fwd = new THREE.Vector3(Math.sin(box.yaw), 0, Math.cos(box.yaw));
+      const right = new THREE.Vector3(fwd.z, 0, -fwd.x);
+      const corners = [
+        [-1.6, -2.4],
+        [1.6, -2.4],
+        [1.6, 2.4],
+        [-1.6, 2.4],
+      ].map(([r, f]) => box.position.clone().addScaledVector(right, r).addScaledVector(fwd, f));
+      for (let i = 0; i < corners.length; i++) {
+        const a = corners[i];
+        const b = corners[(i + 1) % corners.length];
+        push(a.x, a.z);
+        push(b.x, b.z);
+      }
+    }
+    const lineGeo = new THREE.BufferGeometry();
+    lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(linePoints, 3));
+    scene.add(new THREE.LineSegments(lineGeo, new THREE.LineBasicMaterial({ color: PALETTE.kerbWhite })));
+
+    // Kanopi servis + papan tim di belakang tiap kotak.
+    const postMat = toon({ color: 0x8f99a3 });
+    const roofMat = toon({ color: 0x545f6b });
+    const boardMats = [0xd8402f, 0x2d7ce0, 0xf2c53d, 0x3fbf7f, 0xb56cff, 0xe8eef6].map((color) =>
+      toon({ color }),
+    );
+    for (const box of PIT.boxes) {
+      const fwd = new THREE.Vector3(Math.sin(box.yaw), 0, Math.cos(box.yaw));
+      const right = new THREE.Vector3(fwd.z, 0, -fwd.x);
+      // Kanopi digeser sedikit ke luar dari kotak (bukan 3.4 m): kalau terlalu
+      // jauh, atapnya menggantung di atas rumput, bukan di atas apron.
+      const back = box.position.clone().addScaledVector(right, 2.2);
+      const roof = new THREE.Mesh(new THREE.BoxGeometry(4.8, 0.16, 5.4), roofMat);
+      roof.position.copy(back).setY(2.55);
+      roof.castShadow = detail;
+      scene.add(roof);
+      for (const side of [-1, 1]) {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.5, 0.12), postMat);
+        post.position.copy(back).addScaledVector(fwd, side * 2.3).setY(1.25);
+        scene.add(post);
+      }
+      // Dinding belakang bernuansa warna tim, jadi tiap kotak bisa dikenali.
+      const board = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.5, 4.4), boardMats[box.index % boardMats.length]);
+      board.position.copy(back).addScaledVector(right, 0.9).setY(0.95);
+      scene.add(board);
+    }
   }
 
   /* ---------------- crash barrier + catch fencing ---------------- */
@@ -1396,3 +1462,91 @@ export const TRACK = {
     };
   },
 };
+
+/* ------------------------------------------------------------------ */
+/* pit / service area                                                  */
+/* ------------------------------------------------------------------ */
+
+/** Pit lane: aspal servis di sisi dalam trek, sejajar garis start. */
+const PIT_FROM = START_DIST - 40;
+const PIT_TO = START_DIST + 24;
+/** Jarak dari tepi aspal balap ke bibir dalam apron, meter. */
+const PIT_INNER = 0.4;
+/** Lebar apron, meter. */
+const PIT_OUTER = 10.6;
+/** Berapa kotak servis yang tersedia (pemain + lima lawan). */
+export const PIT_BOX_COUNT = 6;
+
+export interface PitBoxPose {
+  index: number;
+  /** Titik tengah kotak servis. */
+  position: THREE.Vector3;
+  yaw: number;
+  /** Jarak lap tempat kotak ini berada (untuk masuk/keluar jalur). */
+  distance: number;
+}
+
+/** Pita aspal datar: dua tepi (dalam/luar) mengikuti garis trek. */
+function apronRibbon(from: number, to: number, inner: number, outer: number, y: number) {
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const distances: number[] = [];
+  const indices: number[] = [];
+  const samples = MAIN.filter((s) => s.distance >= from && s.distance <= to);
+  for (const s of samples) {
+    for (const off of [inner, outer]) {
+      const p = s.pos.clone().addScaledVector(s.side, s.halfWidth + off);
+      positions.push(p.x, y, p.z);
+      uvs.push(s.distance * 0.12, off * 0.15);
+      distances.push(s.distance);
+    }
+  }
+  for (let k = 0; k < samples.length - 1; k++) {
+    const i = k * 2;
+    indices.push(i, i + 1, i + 3, i, i + 3, i + 2);
+  }
+  return { positions, uvs, distances, indices };
+}
+
+/**
+ * Area servis (pit) — satu kotak per mobil. Bentuknya apron aspal yang
+ * menempel di sisi dalam lintasan lurus start, jadi mobil bisa masuk dan keluar
+ * tanpa gerbang: persis seperti service park rallycross.
+ */
+/** Pose di area servis: `distance` pada jalur balap, `lateral` meter dari tepi aspal. */
+export function pitPose(distance: number, lateral: number): { position: THREE.Vector3; yaw: number } {
+  const s = pointAt(MAIN, distance);
+  const pos = s.pos.clone().addScaledVector(s.side, s.halfWidth + lateral);
+  return {
+    position: new THREE.Vector3(pos.x, ROAD_LIFT + 0.012, pos.z),
+    yaw: Math.atan2(s.tangent.x, s.tangent.z),
+  };
+}
+
+export const PIT = (() => {
+  const y = ROAD_LIFT + 0.012;
+  const apron = apronRibbon(PIT_FROM, PIT_TO, PIT_INNER, PIT_OUTER, y);
+  const boxes: PitBoxPose[] = [];
+  for (let i = 0; i < PIT_BOX_COUNT; i++) {
+    const distance = PIT_FROM + 15 + i * 7.4;
+    const s = pointAt(MAIN, distance);
+    const pos = s.pos.clone().addScaledVector(s.side, s.halfWidth + 5.8);
+    boxes.push({
+      index: i,
+      position: new THREE.Vector3(pos.x, y, pos.z),
+      yaw: Math.atan2(s.tangent.x, s.tangent.z),
+      distance,
+    });
+  }
+  return {
+    from: PIT_FROM,
+    to: PIT_TO,
+    y,
+    apron,
+    boxes,
+    /** Titik di garis balap tempat mobil kembali setelah servis. */
+    rejoin: pointAt(MAIN, PIT_TO - 8),
+    /** Titik di garis balap sebelum apron: awal jalur masuk. */
+    approach: pointAt(MAIN, PIT_FROM - 14),
+  };
+})();

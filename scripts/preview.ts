@@ -406,6 +406,28 @@ const main = async () => {
     );
   }
 
+  if (what === 'pit' || what === 'all') {
+    const { buildTrackVisuals, PIT, pitPose } = await import('../src/world/track');
+    const scene = new THREE.Scene();
+    buildTrackVisuals(scene, true);
+    const look = pitPose(PIT.from + 30, 5).position;
+    // Dua sudut: dari udara (tata letak) dan dari pinggir trek (tampilan pemain).
+    render(
+      scene,
+      { eye: new THREE.Vector3(look.x - 4, 42, look.z - 26), target: new THREE.Vector3(look.x, 0, look.z), fov: 50 },
+      SKY,
+      'shots/pit.png',
+    );
+    const eye2 = pitPose(PIT.from + 2, 22).position;
+    const look2 = pitPose(PIT.from + 40, 3).position;
+    render(
+      scene,
+      { eye: new THREE.Vector3(eye2.x, 7.5, eye2.z), target: new THREE.Vector3(look2.x, 1.4, look2.z), fov: 55 },
+      SKY,
+      'shots/pit-ground.png',
+    );
+  }
+
   if (what === 'arena' || what === 'all') {
     const { buildTrackVisuals, TRACK } = await import('../src/world/track');
     const scene = new THREE.Scene();

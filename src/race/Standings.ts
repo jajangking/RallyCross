@@ -114,7 +114,8 @@ export class LapRecords {
   }
 }
 
-function defaultStorage(): RecordStorage {
+/** Storage yang aman dipakai (null kalau tidak ada / diblokir). */
+export function defaultStorage(): RecordStorage {
   try {
     if (typeof localStorage === 'undefined') return null;
     // Sentuh sekali: Safari mode privat melempar error saat ditulis.

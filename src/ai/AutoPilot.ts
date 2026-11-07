@@ -62,6 +62,22 @@ export interface AutoPilotOptions {
   lineCut: number;
   /** Mau menyalip? Kalau tidak, AI hanya mengikuti mobil di depan. */
   overtake: boolean;
+  /** Ngejar mobil di depan: berani sedikit lebih cepat saat lurus. */
+  chase: boolean;
+  /** Tambahan target kecepatan saat mengejar, fraksi (0,05 = +5 %). */
+  chaseBoost: number;
+  /** Seberapa dekat menempel saat mengejar (0 = tidak berubah, 1 = paling dekat). */
+  chaseTighten: number;
+  /** Seberapa cepat celah ditutup saat mengejar (0 = seperti biasa). */
+  chaseRate: number;
+  /** Tambahan asumsi grip/rem (fraksi) saat memburu, mis. 0,02 = +2 %. */
+  chaseGrip: number;
+  /** Kelengkungan maksimum di depan yang masih boleh dipakai untuk memburu. */
+  chaseCornerLimit: number;
+  /** Menutup sisi dalam tikungan kalau ada mobil menempel di belakang. */
+  defend: boolean;
+  /** Kelengkungan maksimum di depan yang masih boleh dipakai untuk menyalip. */
+  overtakeCornerLimit: number;
   /** Ambil joker lap? */
   useJoker: boolean;
 }
@@ -103,6 +119,14 @@ export const defaultPilotOptions: AutoPilotOptions = {
   pedalRate: 11,
   lineCut: 0.03,
   overtake: true,
+  chase: true,
+  chaseBoost: 0,
+  chaseTighten: 0,
+  chaseRate: 0,
+  chaseGrip: 0.03,
+  chaseCornerLimit: 0.03,
+  defend: false,
+  overtakeCornerLimit: 0.013,
   useJoker: true,
 };
 
@@ -185,8 +209,11 @@ export class AutoPilot {
   /** Jarak lateral dari garis tengah, meter (positif = ke sisi `+side`). */
   lateral = 0;
 
-  private readonly plain: PathSample[];
-  private readonly withJoker: PathSample[];
+  /** Garis asli sebelum digeser; disimpan supaya lajur bisa diubah saat balapan. */
+  private readonly rawMain: PathSample[];
+  private readonly rawJoker: PathSample[];
+  private plain: PathSample[];
+  private withJoker: PathSample[];
   private path: PathSample[];
   /** Jarak antar sample berurutan, sudah termasuk sambungan akhir→awal. */
   private readonly steps: number[] = [];
@@ -211,9 +238,23 @@ export class AutoPilot {
   private laneShift = 0;
   /** Ke sisi mana sedang menyalip: -1 kiri, +1 kanan, 0 tidak menyalip. */
   overtakeSide = 0;
+  /** Geseran lajur yang sedang dipakai (negatif = sisi `-side`). */
+  laneShiftValue = 0;
+  /** Sedang mengejar mobil di depan? (HUD/debug) */
+  chasing = false;
+  /** Sedang menutup garis karena dikejar? (HUD/debug) */
+  defendingLine = false;
+  /** Jarak ke mobil yang sedang diburu, meter (`Infinity` kalau sendirian). */
+  chaseGapValue = Infinity;
+  /** Kecepatan mobil yang diburu, m/s. */
+  chaseSpeedValue = 0;
+  /** 0..1: seberapa keras sedang memburu (dipakai perencana kecepatan). */
+  private chasePush = 0;
 
   constructor(main: PathSample[], joker: PathSample[], options: Partial<AutoPilotOptions> = {}) {
     this.options = { ...defaultPilotOptions, ...options };
+    this.rawMain = main;
+    this.rawJoker = joker;
     this.plain = shiftPath(lapPath(main, joker, false), this.options.laneOffset);
     this.withJoker = shiftPath(lapPath(main, joker, true), this.options.laneOffset);
     this.path = this.options.useJoker ? this.withJoker : this.plain;
@@ -279,6 +320,90 @@ export class AutoPilot {
     return this.drive(dt, car, s, yaw, speed, others);
   }
 
+  /**
+   * Setir ke **satu titik** (bukan mengikuti jalur balap). Dipakai mobil masuk
+   * pit, safety car keluar-masuk, dan ambulans menuju lokasi kecelakaan.
+   * Tidak menyentuh index/lap jalur, jadi begitu selesai cukup panggil
+   * `reset(pos)` untuk kembali balapan.
+   */
+  driveTo(
+    dt: number,
+    car: PilotCar,
+    target: THREE.Vector3,
+    opts: { maxSpeed?: number; stopDistance?: number } = {},
+  ): VehicleInput {
+    const o = this.options;
+    const fwd = tmpFwd.set(0, 0, 1).applyQuaternion(car.quaternion);
+    const yaw = Math.atan2(fwd.x, fwd.z);
+    const speed = Math.hypot(car.velocity.x, car.velocity.z);
+    const dx = target.x - car.position.x;
+    const dz = target.z - car.position.z;
+    const dist = Math.hypot(dx, dz);
+    const alpha = wrapAngle(Math.atan2(dx, dz) - yaw);
+    const stop = opts.stopDistance ?? 1;
+    const maxSpeed = opts.maxSpeed ?? 20;
+
+    // Merapat (di bawah 14 m) pakai kemudi langsung ke arah titik: pure pursuit
+    // dengan titik sedekat itu membuat mobil berputar-putar di sekitar target.
+    const docking = dist < 14;
+    let want: number;
+    let wanted: number;
+    if (docking) {
+      // Pelan, makin dekat makin pelan, dan **makin menyudut makin pelan**:
+      // kalau targetnya 90° di samping, menambah gas hanya membuat mobil
+      // berputar mengelilingi kotak (understeer) — yang dibutuhkan justru
+      // pelan supaya bisa memutar.
+      const absA = Math.abs(alpha);
+      if (absA > 1.1) {
+        // Target jauh di samping/belakang: mobil tidak bisa memutar di tempat,
+        // jadi maju pelan dengan setir penuh (busur) sampai target di depan.
+        want = Math.min(2.8, Math.max(1.6, dist * 0.3));
+      } else {
+        const turnFactor = Math.max(0.3, Math.cos(absA));
+        want = Math.min(maxSpeed, Math.max(0, (dist - stop) * 1.3)) * turnFactor;
+        if (dist < stop + 0.4) want = 0;
+      }
+      wanted = clamp(-alpha * 1.9 + car.angularVelocity.y * o.steerDamping, -1, 1);
+    } else {
+      // Rencanakan berhenti tepat di titik: v = √(2·a·s), a = 6 m/s².
+      const allowed = Math.sqrt(Math.max(0, 2 * 6 * Math.max(0, dist - stop)));
+      want = Math.min(maxSpeed, allowed);
+      let curvature = 0;
+      if (dist > 0.6) {
+        const reach = Math.min(Math.max(dist, 4), 16);
+        curvature = (2 * Math.sin(alpha) * o.steerGain) / reach;
+        if (Math.abs(alpha) > Math.PI * 0.5) {
+          curvature = Math.sign(alpha) * Math.max(Math.abs(curvature), 1.2);
+        }
+      }
+      const maxSteerRad = THREE.MathUtils.degToRad(o.maxSteerDeg);
+      const steerRoom =
+        maxSteerRad * Math.max(0.3, 1 - o.steerFalloff * Math.min(1, speed / o.topSpeed));
+      wanted = clamp(
+        -Math.atan(curvature * o.wheelbase) / steerRoom + car.angularVelocity.y * o.steerDamping,
+        -1,
+        1,
+      );
+    }
+    // Titik sudah di belakang mobil: jangan sampai berputar balik di tempat.
+    if (!docking && Math.abs(alpha) > Math.PI * 0.62) want = Math.min(want, 2.5);
+    const step = Math.max(o.steerRate, 0.5) * dt;
+    this.steerCmd = clamp(wanted, this.steerCmd - step, this.steerCmd + step);
+    const steer = this.steerCmd;
+
+    let throttle = 0;
+    let brake = 0;
+    if (speed < want - 0.6) throttle = clamp((want - speed) / 5 + 0.35, 0.2, 1);
+    else if (speed > want + 0.8) brake = clamp((speed - want) / 3, 0.15, 1);
+    const blend = clamp(dt * Math.max(o.pedalRate, 1), 0, 1);
+    this.throttleCmd += (throttle - this.throttleCmd) * blend;
+    this.brakeCmd += (brake - this.brakeCmd) * blend;
+    throttle = this.throttleCmd < 0.04 ? 0 : this.throttleCmd;
+    brake = this.brakeCmd < 0.04 ? 0 : this.brakeCmd;
+    if (brake > 0.05) throttle = 0;
+    return { throttle, brake, steer, handbrake: false, gear: 1 };
+  }
+
   /** Lupakan status balap (dipakai setelah mobil di-reset). */
   reset(at?: THREE.Vector3) {
     this.mode = 'drive';
@@ -293,6 +418,24 @@ export class AutoPilot {
     this.index = this.nearest(this.path, at ?? new THREE.Vector3(0, 0, 0), this.index);
     this.prevIndex = this.index;
     this.rebuildSteps();
+  }
+
+  /**
+   * Pindahkan lajur balap (meter). Dipakai "nalar AI": makin berpengalaman,
+   * makin kecil geserannya — dia balik ke garis tercepat dan hanya bergeser
+   * kalau sedang menyalip. Jalur dihitung ulang penuh (tangent, side,
+   * kelengkungan), jadi kecepatan tikungannya tetap benar.
+   */
+  setLaneOffset(metres: number) {
+    if (Math.abs(this.options.laneOffset - metres) < 0.005) return;
+    this.options.laneOffset = metres;
+    const at = this.sample.pos.clone();
+    this.plain = shiftPath(lapPath(this.rawMain, this.rawJoker, false), metres);
+    this.withJoker = shiftPath(lapPath(this.rawMain, this.rawJoker, true), metres);
+    this.path = this.options.useJoker ? this.withJoker : this.plain;
+    this.rebuildSteps();
+    this.index = this.nearest(this.path, at, 0);
+    this.prevIndex = this.index;
   }
 
   /** Pindah antara jalur joker dan jalur utama tanpa salah posisi. */
@@ -336,6 +479,11 @@ export class AutoPilot {
     let blockerGap = Infinity;
     let blockerSpeed = 0;
     let blockerSide = 0;
+    /** Mobil terdekat di depan (lajur dilihat lebih lebar): yang kita kejar. */
+    let chaseGap = Infinity;
+    let chaseSpeed = 0;
+    /** Jarak mobil terdekat yang menempel DI BELAKANG kita. */
+    let chaserGap = Infinity;
     /** Mobil yang sedang tepat di samping kita (tidak boleh digeser ke sana). */
     let besideSide = 0;
     for (const other of others) {
@@ -347,8 +495,19 @@ export class AutoPilot {
       // Posisi mobil lain di kiri/kanan garis kita: hanya mobil yang benar-benar
       // di jalur kita yang dianggap menghalangi.
       const lateral = ox * s.side.x + oz * s.side.z;
+      // "Mobil yang kita kejar" dilihat dengan lajur lebih lebar (4,5 m):
+      // lawan di lajur sebelah tetap dianggap lawan yang harus dikejar, bukan
+      // mobil di trek lain. Ini yang membuat mereka saling memburu.
+      if (ahead / dist > 0.55 && Math.abs(lateral) < 4.5 && dist < chaseGap) {
+        chaseGap = dist;
+        chaseSpeed = other.speed;
+      }
       if (Math.abs(ahead) < 5.5 && Math.abs(lateral) < 3.0) {
         besideSide = lateral >= 0 ? 1 : -1;
+      }
+      // Ada yang menempel di belakang: dipakai untuk menutup garis (defend).
+      if (ahead / dist < -0.7 && Math.abs(lateral) < 2.6 && dist < 20) {
+        chaserGap = Math.min(chaserGap, dist);
       }
       if (ahead / dist < 0.8) continue;
       if (Math.abs(lateral) > 2.4) continue;
@@ -364,6 +523,7 @@ export class AutoPilot {
     // arah dengan radius yang sama sekali berbeda. Jadi geseran lajur hanya
     // dipakai di lurus dan tikungan landai.
     let cornerAhead = 0;
+    let cornerCurv = 0;
     {
       const n = this.path.length;
       let k = this.index;
@@ -372,15 +532,37 @@ export class AutoPilot {
         travelled += this.steps[k];
         k = (k + 1) % n;
         const curv = Math.abs(this.path[k].curvature);
-        if (curv > cornerAhead) cornerAhead = curv;
+        if (curv > cornerAhead) {
+          cornerAhead = curv;
+          cornerCurv = this.path[k].curvature;
+        }
       }
     }
-    const cornerSoon = cornerAhead > 0.013;
+    const cornerSoon = cornerAhead > o.overtakeCornerLimit;
+    // Seberapa keras sedang memburu mobil di depan (0..1).
+    const chaseWeight =
+      o.chase &&
+      chaseGap < 24 &&
+      chaseGap > 7 &&
+      cornerAhead < o.chaseCornerLimit &&
+      wide < 0.6 &&
+      besideSide === 0
+        ? clamp((24 - chaseGap) / 17, 0, 1)
+        : 0;
+    this.chasing = chaseWeight > 0;
+    this.chaseGapValue = chaseGap;
+    this.chaseSpeedValue = chaseSpeed;
+    // Dipakai `speedTarget()` di frame berikutnya: pemburu berani memakai
+    // batas grip yang sedikit lebih tinggi (diperhitungkan di tikungan, bukan
+    // sekadar menambah gas), jadi dia konsisten lebih cepat — bukan melebar.
+    this.chasePush = chaseWeight;
     // Kembali ke garis lebih cepat kalau tikungan sudah dekat.
     const recentre = cornerSoon ? dt * 6 : dt * 2.4;
 
     if (blockerGap < Infinity) {
       const slower = blockerSpeed < speed + 1.5;
+      // Saat memburu, penyusulan disiapkan lebih awal (16 m, bukan 12 m):
+      // pemburu keluar dari slipstream dan memilih sisi sebelum terlalu dekat.
       const close = blockerGap < 12;
       // Mau menyalip kalau yang di depan lebih lambat, kita sudah dekat, dan
       // kecepatannya sudah cukup untuk pindah lajur dengan aman. Kalau tidak,
@@ -422,13 +604,29 @@ export class AutoPilot {
         this.overtakeSide = 0;
         this.laneShift += clamp(-this.laneShift, -recentre, recentre);
         // Jarak ~6 m dipakai sebagai "ikuti dia", makin jauh batasnya longgar.
-        target = Math.min(target, Math.max(0, blockerSpeed + (blockerGap - 6) * 1.6));
+        // Catatan: menempel lebih dekat dari ini terbukti membuat yang belakang
+        // mengerem di tengah tikungan dan melebar keluar — jadi jaraknya tetap,
+        // dan "mengejar" dilakukan lewat batas grip di perencana kecepatan.
+        const followGap = 6 - 1.5 * chaseWeight * o.chaseTighten;
+        const followRate = 1.6 + 0.4 * chaseWeight * o.chaseRate;
+        target = Math.min(target, Math.max(0, blockerSpeed + (blockerGap - followGap) * followRate));
       }
     } else {
       this.overtakeSide = 0;
-      this.laneShift += clamp(-this.laneShift, -recentre, recentre);
+      // DEFEND: ada mobil menempel di belakang dan tikungan sudah dekat →
+      // ambil sisi dalam tikungan supaya tidak bisa disalip di dalam.
+      const danger = o.defend && chaserGap < 14 && cornerAhead > 0.007 && besideSide === 0;
+      this.defendingLine = danger;
+      const hold = danger ? -Math.sign(cornerCurv) * 0.6 : 0;
+      this.laneShift += clamp(hold - this.laneShift, -recentre, recentre);
     }
     target *= o.pace;
+
+    // NGEJAR: mobil di depan masih 8–22 m dan jalannya lurus → berani sedikit
+    // lebih cepat (maks +5 %) supaya benar-benar menempel dan mencoba menyalip,
+    // bukan berhenti di belakang bemper sepanjang lurus. Di tikungan tetap
+    // batas grip yang berlaku: mengejar bukan alasan keluar trek.
+    if (chaseWeight > 0) target *= 1 + o.chaseBoost * chaseWeight;
 
     // --- setir: pure pursuit murni (radius tikungan, bukan gain sudut) ---
     // Menghitung lengkung yang dibutuhkan lalu menerjemahkannya ke sudut roda
@@ -471,6 +669,7 @@ export class AutoPilot {
     // Geseran menyalip: hanya dipakai kalau mobil masih di dalam trek, dan
     // tidak pernah lebih lebar dari ruang yang tersisa di sisi itu.
     const passRoom = Math.max(0.8, s.halfWidth - Math.abs(o.laneOffset) - 1.8);
+    this.laneShiftValue = this.laneShift;
     const pass = recover ? 0 : clamp(this.laneShift, -passRoom, passRoom);
     // Tarik titik tujuan sedikit ke arah posisi mobil sekarang (filter dulu
     // supaya tidak bergetar saat sample terdekat berpindah) agar koreksi besar
@@ -599,6 +798,10 @@ export class AutoPilot {
   private speedTarget(from: number, speed: number): number {
     const o = this.options;
     const n = this.path.length;
+    // Sedang memburu: rencanakan dengan grip & rem sedikit lebih tinggi. Ini
+    // sama seperti "menaikkan nyali": titik rem ikut bergeser, jadi mobil
+    // tidak menabrak batas grip-nya sendiri.
+    const push = 1 + (o.chaseGrip > 0 ? o.chaseGrip : 0) * this.chasePush;
     const horizon = Math.max(25, Math.min(o.horizon, 16 + speed * 2.4));
     let target = 1e3;
     let travelled = 0;
@@ -609,8 +812,8 @@ export class AutoPilot {
       const sample = this.path[i];
       const curv = Math.max(Math.abs(sample.curvature), 1e-4);
       const gravel = sample.surface === 'gravel';
-      const grip = gravel ? o.gripGravel : o.gripTarmac;
-      const brake = gravel ? o.brakeGravel : o.brakeTarmac;
+      const grip = (gravel ? o.gripGravel : o.gripTarmac) * push;
+      const brake = (gravel ? o.brakeGravel : o.brakeTarmac) * push;
       // Lompatan: tanjakan curam butuh kecepatan yang wajar, bukan flat out.
       const ramp = sample.distance !== undefined && this.grade[i] > 0.09;
       const corner = ramp ? o.jumpSpeed : Math.sqrt(grip / curv);

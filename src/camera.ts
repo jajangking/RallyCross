@@ -129,7 +129,14 @@ export class CameraRig {
    * potongannya ke **helikopter** — gambar udara yang mengikuti mobil dari atas,
    * seperti siaran rallycross sungguhan.
    */
-  updateBroadcast(dt: number, focus: THREE.Vector3, trackDistance: number, lapLength: number) {
+  updateBroadcast(
+    dt: number,
+    focus: THREE.Vector3,
+    trackDistance: number,
+    lapLength: number,
+    /** true = sasaran berganti, jadi gambar harus dipotong (bukan ditarik). */
+    focusCut = false,
+  ) {
     // Arah gerak mobil (untuk menaruh mobil di bawah frame + melihat ke depan).
     if (!this.hasFocus) {
       this.prevFocus.copy(focus);
@@ -167,8 +174,9 @@ export class CameraRig {
 
     if (!spot) return;
 
-    // Kembali dari helikopter: langsung potong ke kamera darat terpilih.
-    const cut = (director?.takeCut() ?? false) || wasAerial;
+    // Kembali dari helikopter (atau sasaran baru): langsung potong ke kamera
+    // darat terpilih — jangan menarik lensa melintasi trek.
+    const cut = (director?.takeCut() ?? false) || wasAerial || focusCut;
     if (cut) {
       this.pos.copy(spot.position);
       this.look.copy(focus);

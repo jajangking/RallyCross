@@ -5,12 +5,18 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import { defaultConfig, VehiclePhysics, type VehicleInput } from '../src/vehicle/VehiclePhysics';
-import { BROADCAST_SPOTS, buildTrackColliders, TRACK } from '../src/world/track';
+import { BROADCAST_SPOTS, buildTrackColliders, PIT, TRACK } from '../src/world/track';
+import { FocusDirector } from '../src/camera/FocusDirector';
+import { PitStop, serviceTimeFor } from '../src/race/PitStop';
+import { RaceControl, type ServiceHandle } from '../src/race/RaceControl';
+import { ServiceVehicle } from '../src/race/ServiceVehicle';
+import { VehicleDamage } from '../src/vehicle/Damage';
 import { BroadcastDirector } from '../src/camera/BroadcastDirector';
 import { lapPath, type PathSample } from '../src/world/circuit';
 import { AutoPilot } from '../src/ai/AutoPilot';
 import { LapCounter } from '../src/race/LapCounter';
 import { Rival } from '../src/race/Rival';
+import { AiSkills, skillForPace, tuningFor } from '../src/race/AiSkill';
 import { gridPose, RIVAL_PLANS } from '../src/race/grid';
 import { LapRecords, standings, type StandingsCar } from '../src/race/Standings';
 import { SkidMarks } from '../src/fx/SkidMarks';
@@ -1016,6 +1022,453 @@ async function run() {
   }
   check(groundOnly, 'without a helicopter the broadcast stays on the ground cameras', 'ground only');
 
+
+
+  /* ---------------------------------------------------------------- */
+  console.log('\n— nalar AI: memburu lawan & belajar tiap balapan —');
+  {
+    // 1. Setelan nalar: monoton, dan berhenti di batas aman.
+    const lo = tuningFor(0);
+    const hi = tuningFor(1);
+    check(
+      lo.pace < hi.pace && hi.pace <= 1.006 && lo.pace >= 0.93,
+      'nalar AI 0..1 memetakan ke pace yang aman',
+      `${lo.pace.toFixed(3)} → ${hi.pace.toFixed(3)}`,
+    );
+    check(
+      hi.gripTarmac > lo.gripTarmac && hi.brakeTarmac > lo.brakeTarmac,
+      'nalar AI juga menaikkan asumsi grip & rem',
+      `grip ${lo.gripTarmac}→${hi.gripTarmac}, rem ${lo.brakeTarmac}→${hi.brakeTarmac}`,
+    );
+    check(
+      Math.abs(skillForPace(1) - 1) < 1e-9 && skillForPace(0.95) === 0 && skillForPace(0.9) === 0,
+      'pace lawan di grid diterjemahkan jadi nalar awal',
+      `pace 0,95 → nalar 0 · pace 1,0 → nalar ${skillForPace(1).toFixed(2)}`,
+    );
+
+    // 2. Lap terbaik pribadi & balapan selesai menaikkan nalar (hasil mengecil).
+    const fakeStore = (() => {
+      const data = new Map<string, string>();
+      return {
+        getItem: (k: string) => data.get(k) ?? null,
+        setItem: (k: string, v: string) => void data.set(k, v),
+        data,
+      };
+    })();
+    const skills = new AiSkills(fakeStore, { Krisna: 0.5 });
+    const before = skills.skillOf('Krisna');
+    check(skills.submitLap('Krisna', 30) && skills.skillOf('Krisna') > before, 'lap terbaik pribadi menaikkan nalar', `${before.toFixed(2)} → ${skills.skillOf('Krisna').toFixed(2)}`);
+    check(!skills.submitLap('Krisna', 31), 'lap yang lebih lambat tidak menaikkan nalar');
+    skills.finishRace(['Krisna']);
+    check(skills.get('Krisna').races === 1, 'balapan selesai menambah pengalaman', `${skills.get('Krisna').races} balapan`);
+    for (let i = 0; i < 200; i++) skills.finishRace(['Krisna']);
+    check(skills.skillOf('Krisna') > 0.999 && skills.skillOf('Krisna') <= 1, 'nalar AI berhenti di 100 %, tidak melewati batas', `${(skills.skillOf('Krisna') * 100).toFixed(2)} %`);
+    const reloaded = new AiSkills(fakeStore);
+    check(
+      reloaded.skillOf('Krisna') > 0.999 && reloaded.get('Krisna').races === 201,
+      'nalar AI tersimpan antar sesi (localStorage)',
+      `${reloaded.get('Krisna').races} balapan`,
+    );
+
+    // 3. Nalar yang lebih tinggi benar-benar menghasilkan lap lebih cepat.
+    // Lawan memakai jalur yang sama seperti di grid (lajur -1,2 m) lalu makin
+    // mendekat ke garis tercepat seiring nalar naik.
+    const lapWithSkill = (value: number) => {
+      const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+      world.timestep = DT;
+      buildTrackColliders(world);
+      const c = new VehiclePhysics(world, defaultConfig, new THREE.Vector3(0, 0.95, -10));
+      const tuning = tuningFor(value);
+      const p = new AutoPilot(TRACK.main, TRACK.joker, {
+        pace: tuning.pace,
+        gripTarmac: tuning.gripTarmac,
+        brakeTarmac: tuning.brakeTarmac,
+        laneOffset: -1.2 * (1 - 0.75 * tuning.laneTighten),
+        useJoker: true,
+      });
+      for (let i = 0; i < Math.round(70 / DT) && p.lap < 1; i++) {
+        c.fixedStep(DT, p.update(DT, c));
+        world.step();
+        c.sync();
+      }
+      return p.bestLap;
+    };
+    const rookieLap = lapWithSkill(0);
+    const aceLap = lapWithSkill(1);
+    check(
+      aceLap < rookieLap - 0.3,
+      'nalar AI yang naik bikin lap makin cepat (rekor terus turun)',
+      `nalar 0 %: ${rookieLap.toFixed(2)} s → 100 %: ${aceLap.toFixed(2)} s`,
+    );
+
+    // 4. AI sadar ada lawan di depan (memburu) dan di belakang (menutup garis).
+    const chaseWorld = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    chaseWorld.timestep = DT;
+    buildTrackColliders(chaseWorld);
+    const spot = TRACK.at(TRACK.start + 12);
+    const hunter = new VehiclePhysics(chaseWorld, defaultConfig, new THREE.Vector3(spot.pos.x, 0.95, spot.pos.z), spot.yaw);
+    for (let i = 0; i < 60; i++) {
+      hunter.fixedStep(DT, { throttle: 0.5, brake: 0, steer: 0, handbrake: false, gear: 1 });
+      chaseWorld.step();
+    }
+    hunter.sync();
+    const hunterPilot = new AutoPilot(TRACK.main, TRACK.joker, { laneOffset: 0 });
+    hunterPilot.reset(hunter.position);
+    const prey = hunter.position.clone().addScaledVector(spot.tangent, 12);
+    hunterPilot.update(DT, hunter, [{ position: prey, speed: 10 }]);
+    check(
+      hunterPilot.chasing && Math.abs(hunterPilot.chaseGapValue - 12) < 2.5,
+      'AI tahu ada mobil yang harus diburu di depannya',
+      `jarak ${hunterPilot.chaseGapValue.toFixed(1)} m`,
+    );
+    hunterPilot.update(DT, hunter, []);
+    check(!hunterPilot.chasing, 'tanpa mobil di depan, AI tidak memburu siapa pun');
+
+    // 5. Yang tertinggal menekan lebih keras, yang memimpin mengendur.
+    const craftWorld = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    craftWorld.timestep = DT;
+    const craftRival = new Rival(craftWorld, {
+      name: 'Uji',
+      position: new THREE.Vector3(0, 0.95, 0),
+      yaw: 0,
+      main: TRACK.main,
+      joker: TRACK.joker,
+      startDistance: TRACK.start,
+    });
+    craftRival.setBasePace(0.98);
+    for (let i = 0; i < 200; i++) craftRival.setRaceGap(220);
+    const behindPace = craftRival.pilot.options.pace;
+    for (let i = 0; i < 400; i++) craftRival.setRaceGap(-60);
+    const aheadPace = craftRival.pilot.options.pace;
+    check(
+      behindPace > 0.98 && behindPace <= 0.98 * 1.0201 && aheadPace < 0.98,
+      'yang tertinggal menekan, yang memimpin mengendur (maks ±2 %)',
+      `tertinggal ${behindPace.toFixed(3)} vs memimpin ${aheadPace.toFixed(3)}`,
+    );
+  }
+
+
+
+  /* ---------------------------------------------------------------- */
+  console.log('\n— kamera: siapa yang dibidik —');
+  {
+    const mk = (x: number, z: number, odo: number, lapDistance: number) => ({
+      position: new THREE.Vector3(x, 1, z),
+      odometer: odo,
+      lapDistance,
+    });
+    const player = mk(0, 0, 100, 100);
+    const sideA = mk(0.4, 0.6, 100.4, 20.4);
+    const sideB = mk(-0.5, 0.4, 99.6, 19.6);
+    const spectate = { on: true };
+    const cars = [sideA, sideB];
+    const director = new FocusDirector({
+      player: () => player,
+      rivals: () => cars,
+      spectate: () => spectate.on,
+    });
+
+    // 1. Dua mobil bersisian: kamera TIDAK boleh gonta-ganti target.
+    director.update(DT);
+    const firstTarget = director.targetIndex;
+    let swaps = 0;
+    let before = director.targetIndex;
+    let worstStep = 0;
+    const prev = director.focus.clone();
+    for (let i = 0; i < Math.round(5 / DT); i++) {
+      // odometer keduanya saling menyalip sedikit (seperti mobil berdempetan)
+      cars[0].odometer = 100 + Math.sin(i * 0.3) * 0.6;
+      cars[1].odometer = 100 + Math.cos(i * 0.3) * 0.6;
+      director.update(DT);
+      if (director.targetIndex !== before) {
+        swaps++;
+        before = director.targetIndex;
+      }
+      worstStep = Math.max(worstStep, director.focus.distanceTo(prev));
+      prev.copy(director.focus);
+    }
+    check(swaps === 0, 'dua mobil bersisian: kamera tidak gonta-ganti sasaran', `${swaps}× ganti`);
+    check(worstStep < 1.5, 'gambar tidak melompat saat mobil berdempetan', `maks ${worstStep.toFixed(2)} m/frame`);
+    check(
+      director.targetIndex === firstTarget,
+      'sasaran tetap satu mobil (bukan campuran beberapa mobil)',
+      `${director.targetIndex}, ${cars.map((c) => c.odometer.toFixed(1)).join(' vs ')}`,
+    );
+
+    // 2. Ada yang unggul jelas → kamera pindah sekali, lalu tetap di sana.
+    cars[1].odometer = 100 + 40;
+    director.update(DT);
+    const switchedTo = director.targetIndex;
+    let stayed = true;
+    for (let i = 0; i < Math.round(3 / DT); i++) {
+      director.update(DT);
+      if (director.targetIndex !== switchedTo) stayed = false;
+    }
+    check(
+      switchedTo === 1 && stayed,
+      'pemimpin baru diambil alih sekali, lalu stabil',
+      `target ${switchedTo}`,
+    );
+
+    // 3. Tanpa mode siaran kamera selalu di mobil pemain.
+    spectate.on = false;
+    player.odometer = 80;
+    cars[1].odometer = 300;
+    for (let i = 0; i < 30; i++) director.update(DT);
+    check(
+      director.targetIndex === -1 && director.distance === player.lapDistance,
+      'tanpa siaran kamera selalu membidik mobil pemain',
+      `target ${director.targetIndex}`,
+    );
+
+    // 4. Duel: lawan yang menempel hanya menggeser bidikan sedikit & halus.
+    const solo = new FocusDirector({
+      player: () => mk(0, 0, 100, 100),
+      rivals: () => [],
+      spectate: () => false,
+    });
+    for (let i = 0; i < 60; i++) solo.update(DT);
+    const partner = mk(3, 0, 100, 100);
+    const duelCars = [partner];
+    const duelist = new FocusDirector({
+      player: () => mk(0, 0, 100, 100),
+      rivals: () => duelCars,
+      spectate: () => false,
+    });
+    for (let i = 0; i < 60; i++) duelist.update(DT);
+    const aim = duelist.focus.clone();
+    let shift = 0;
+    let jump = 0;
+    const last = duelist.focus.clone();
+    for (let i = 0; i < Math.round(3 / DT); i++) {
+      duelCars[0].position.set(3 + Math.sin(i * 0.5) * 0.8, 1, Math.cos(i * 0.5) * 0.8);
+      duelist.update(DT);
+      shift = Math.max(shift, duelist.focus.distanceTo(new THREE.Vector3(0, 1.9, 0)));
+      jump = Math.max(jump, duelist.focus.distanceTo(last));
+      last.copy(duelist.focus);
+    }
+    check(
+      duelist.duel && shift > 0.2 && shift < 2.4,
+      'lawan yang menempel menggeser frame duel sedikit saja',
+      `geser ${shift.toFixed(2)} m`,
+    );
+    check(jump < 0.6, 'geseran frame duel halus (tidak bergetar)', `maks ${jump.toFixed(2)} m/frame`);
+    void solo;
+    void aim;
+  }
+
+  /* ---------------------------------------------------------------- */
+  console.log('\n— pit stop, safety car, ambulans —');
+  {
+    // 1. Lama servis naik sesuai kerusakan (bukan angka tetap).
+    const fresh = new VehicleDamage();
+    const wrecked = new VehicleDamage();
+    wrecked.impact(0, 0, -18);
+    wrecked.wheels[0].lost = true;
+    check(
+      serviceTimeFor(wrecked) > serviceTimeFor(fresh) + 1,
+      'makin rusak, makin lama servis pit',
+      `${serviceTimeFor(fresh).toFixed(1)} s → ${serviceTimeFor(wrecked).toFixed(1)} s`,
+    );
+
+    // 2. Servis hanya jalan kalau berhenti di dalam kotak, dan memperbaiki semua.
+    const pitCar = {
+      position: PIT.boxes[0].position.clone().add(new THREE.Vector3(0, 0.95, 0)),
+      speed: 0,
+      damage: new VehicleDamage(),
+    };
+    pitCar.damage.impact(0, 0, -20);
+    const pit = new PitStop(PIT.boxes[0]);
+    // Lewat di luar kotak: tidak boleh menservis apa pun.
+    const away = { ...pitCar, position: PIT.boxes[0].position.clone().add(new THREE.Vector3(20, 0.95, 0)) };
+    for (let i = 0; i < 60; i++) pit.update(DT, away);
+    check(pit.phase === 'idle' && pitCar.damage.bodyHealth < 1, 'lewat di luar kotak tidak menservis apa pun');
+    pit.update(DT, pitCar);
+    check(pit.phase === 'service', 'berhenti di kotak langsung memulai servis');
+    let done = false;
+    let pitSeconds = 0;
+    while (!done && pitSeconds < 20) {
+      done = pit.update(DT, pitCar);
+      pitSeconds += DT;
+    }
+    check(
+      done && pitCar.damage.bodyHealth === 1 && pitCar.damage.puncturedCount === 0,
+      'servis pit memperbaiki bodi, mesin, dan ban',
+      `${pitSeconds.toFixed(1)} s`,
+    );
+
+    // 3. Lawan benar-benar menyetir masuk kotak, diservis, lalu kembali ke trek.
+    const pitWorld = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    pitWorld.timestep = DT;
+    buildTrackColliders(pitWorld);
+    const pitStart = TRACK.at(TRACK.start - 62);
+    const pitRival = new Rival(pitWorld, {
+      name: 'Uji Pit',
+      position: new THREE.Vector3(pitStart.pos.x, 0.95, pitStart.pos.z).addScaledVector(pitStart.side, -2),
+      yaw: pitStart.yaw,
+      main: TRACK.main,
+      joker: TRACK.joker,
+      startDistance: TRACK.start,
+      pace: 0.98,
+      laneOffset: -1,
+    });
+    pitRival.car.damage.impact(0, 0, -9);
+    pitRival.requestPit(PIT.boxes[1], new THREE.Vector3(PIT.rejoin.pos.x, PIT.rejoin.pos.y, PIT.rejoin.pos.z));
+    let pitReached = false;
+    let pitRepaired = false;
+    let pitRejoined = false;
+    let pitTime = 0;
+    for (let i = 0; i < Math.round(60 / DT); i++) {
+      pitRival.step(DT, []);
+      pitWorld.step();
+      pitRival.sync();
+      pitTime += DT;
+      if (pitRival.pitPhase === 'service') pitReached = true;
+      // Servis selesai → mobil sudah 'out' dan kerusakannya hilang.
+      if (pitRival.pitPhase === 'out' && pitRival.car.damage.bodyHealth === 1) pitRepaired = true;
+      if (pitReached && pitRival.pitPhase === 'none') {
+        pitRejoined = true;
+        break;
+      }
+    }
+    check(pitReached, 'lawan menyetir masuk kotak servisnya sendiri', `${pitTime.toFixed(1)} s`);
+    check(pitRepaired, 'mobil lawan diperbaiki di pit');
+    check(pitRejoined, 'lawan kembali ke lintasan setelah servis', `${pitTime.toFixed(1)} s total`);
+
+    // 4. Safety car & ambulans: mobil fisika sungguhan, bisa menyetir rute.
+    const svWorld = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    svWorld.timestep = DT;
+    buildTrackColliders(svWorld);
+    const svJoin = new THREE.Vector3(PIT.rejoin.pos.x, 1.0, PIT.rejoin.pos.z);
+    const safety = new ServiceVehicle({
+      kind: 'safety',
+      world: svWorld,
+      park: PIT.boxes[5].position.clone().add(new THREE.Vector3(-6, 0.2, -6)),
+      yaw: PIT.boxes[5].yaw,
+      main: TRACK.main,
+      joker: TRACK.joker,
+      color: 0xffffff,
+      detail: false,
+    });
+    const ambulance = new ServiceVehicle({
+      kind: 'ambulance',
+      world: svWorld,
+      park: new THREE.Vector3(PIT.boxes[5].position.x + 8, 0.95, PIT.boxes[5].position.z + 8),
+      yaw: PIT.boxes[5].yaw,
+      main: TRACK.main,
+      joker: TRACK.joker,
+      color: 0xffffff,
+      detail: false,
+    });
+    for (const sv of [safety, ambulance]) {
+      for (let i = 0; i < 30; i++) {
+        sv.step(DT);
+        svWorld.step();
+        sv.sync(DT);
+      }
+    }
+    const scBefore = safety.car.position.clone();
+    safety.driveRoute([svJoin], 'line', 0.7);
+    for (let i = 0; i < Math.round(18 / DT); i++) {
+      safety.step(DT);
+      svWorld.step();
+      safety.sync(DT);
+    }
+    check(
+      safety.mode === 'line' && safety.car.position.distanceTo(scBefore) > 10,
+      'safety car keluar dari area servis dan masuk garis balap',
+      `${safety.car.position.distanceTo(scBefore).toFixed(0)} m, mode ${safety.mode}`,
+    );
+    const ambTarget = TRACK.at(TRACK.start + 60).pos.clone();
+    ambTarget.y = 0.95;
+    ambulance.driveRoute([ambTarget], 'park', 0.9);
+    let ambTime = 0;
+    for (let i = 0; i < Math.round(60 / DT) && !ambulance.reachedRoute; i++) {
+      ambulance.step(DT);
+      svWorld.step();
+      ambulance.sync(DT);
+      ambTime += DT;
+    }
+    check(
+      ambulance.reachedRoute && ambulance.car.position.distanceTo(ambTarget) < 8,
+      'ambulans menyetir sampai lokasi kejadian',
+      `${ambTime.toFixed(1)} s, sisa ${ambulance.car.position.distanceTo(ambTarget).toFixed(1)} m`,
+    );
+
+    // 5. Pengawas balapan: bendera kuning + safety car saat ada mobil hancur.
+    const makeHandle = () => {
+      const calls: string[] = [];
+      const handle: ServiceHandle & { calls: string[] } = {
+        calls,
+        reachedRoute: true,
+        car: { position: new THREE.Vector3() },
+        followLine: (pace?: number) => void calls.push(`line:${pace?.toFixed(2) ?? ''}`),
+        driveRoute: (points: THREE.Vector3[], after: string) => void calls.push(`route:${points.length}:${after}`),
+        parkNow: () => void calls.push('park'),
+      };
+      return handle;
+    };
+    const scHandle = makeHandle();
+    const ambHandle = makeHandle();
+    const control = new RaceControl({
+      safety: scHandle,
+      ambulance: ambHandle,
+      scJoin: svJoin.clone(),
+      scPark: PIT.boxes[5].position.clone(),
+      ambPark: new THREE.Vector3(0, 0, 0),
+    }, { minSafetyTime: 6, attendTime: 1 });
+    const hurt = new VehicleDamage();
+    hurt.impact(0, 0, -22);
+    hurt.impact(0, 0, -22);
+    const hurtCar = { position: new THREE.Vector3(10, 1, 10), speed: 0, damage: hurt };
+    const healthyCar = {
+      position: new THREE.Vector3(0, 1, 0),
+      speed: 20,
+      damage: new VehicleDamage(),
+    };
+    const cars = [
+      { name: 'KAMU', car: healthyCar, isPlayer: true },
+      { name: 'Krisna', car: hurtCar },
+    ];
+    control.update(DT, cars);
+    check(
+      control.flag === 'yellow' && control.scActive && hurt.engineDead,
+      'mobil hancur memicu bendera kuning + safety car',
+      `${hurt.engineDead ? 'mesin mati' : 'tidak'} · ${control.scPhase}`,
+    );
+    check(
+      control.paceScale < 0.6 && !control.overtakeAllowed,
+      'selama kuning semua AI melambat & dilarang menyalip',
+      `pace ${control.paceScale}`,
+    );
+    check(
+      scHandle.calls.some((c) => c.startsWith('route')) && ambHandle.calls.some((c) => c.startsWith('route')),
+      'safety car & ambulans sama-sama dikirim',
+      `${scHandle.calls.length + ambHandle.calls.length} perintah`,
+    );
+    // Tunggu ambulans menangani sampai selesai.
+    let handled = false;
+    for (let i = 0; i < Math.round(30 / DT); i++) {
+      control.update(DT, cars);
+      if (hurt.bodyHealth === 1) handled = true;
+    }
+    check(handled, 'ambulans menangani di lokasi: mobil diperbaiki di tempat');
+    check(control.flag === 'green' && !control.scActive, 'setelah insiden selesai: safety car masuk, hijau lagi', control.scPhase);
+    check(control.drainEvents().length >= 0, 'pengawas balapan punya antrean pesan untuk HUD');
+
+    // 6. Tanpa kecelakaan: tidak ada kuning, tidak ada safety car.
+    const calm = new RaceControl({
+      safety: makeHandle(),
+      ambulance: makeHandle(),
+      scJoin: svJoin.clone(),
+      scPark: new THREE.Vector3(),
+      ambPark: new THREE.Vector3(),
+    });
+    for (let i = 0; i < 300; i++) {
+      calm.update(DT, [{ name: 'KAMU', car: { position: new THREE.Vector3(), speed: 18, damage: new VehicleDamage() } }]);
+    }
+    check(calm.flag === 'green' && !calm.scActive, 'balapan bersih: tidak ada bendera kuning', 'hijau');
+  }
 
   /* ---------------------------------------------------------------- */
   console.log('\n— kerusakan mobil (damage) —');

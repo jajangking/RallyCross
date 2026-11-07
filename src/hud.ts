@@ -18,6 +18,11 @@ export class Hud {
   private readonly boardEl = document.getElementById('board');
   private readonly standingsEl = document.getElementById('standings');
   private readonly recordEl = document.getElementById('record');
+  private readonly aiLevelEl = document.getElementById('ailevel');
+  private readonly flagEl = document.getElementById('flag');
+  private readonly noticeEl = document.getElementById('notice');
+  private readonly pitEl = document.getElementById('pit');
+  private noticeUntil = 0;
   private readonly rows: HTMLElement[] = [];
   private readonly finishEl = document.getElementById('finish');
   private readonly tvEl = document.getElementById('tv');
@@ -137,6 +142,57 @@ export class Hud {
     if (live && el.textContent !== text) el.textContent = text;
   }
 
+  /**
+   * Bendera pengawas balapan: kuning + safety car di trek. Selama ini menyala,
+   * HUD juga memberi tahu bahwa menyalip dilarang.
+   */
+  setFlag(flag: 'green' | 'yellow', safetyCar: boolean) {
+    const el = this.flagEl;
+    if (!el) return;
+    const yellow = flag === 'yellow';
+    el.classList.toggle('hide', !yellow);
+    if (!yellow) return;
+    const label = safetyCar ? 'SAFETY CAR' : 'KUNING';
+    const text = safetyCar ? 'KUNING · DILARANG MENYALIP' : 'HATI-HATI · ADA INSIDEN';
+    const title = el.querySelector('b');
+    const sub = el.querySelector('span');
+    if (title && title.textContent !== label) title.textContent = label;
+    if (sub && sub.textContent !== text) sub.textContent = text;
+  }
+
+  /** Pesan singkat di atas layar (pit, ambulans, hijau lagi). */
+  announce(text: string, tone: 'green' | 'yellow' | 'info' = 'info') {
+    const el = this.noticeEl;
+    if (!el) return;
+    el.textContent = text;
+    el.className = tone === 'info' ? '' : tone;
+    el.classList.remove('hide');
+    this.noticeUntil = performance.now() + 2600;
+  }
+
+  /** Hitung mundur servis pit; `null` menyembunyikannya. */
+  setPit(state: { label: string; progress: number } | null) {
+    const el = this.pitEl;
+    if (!el) return;
+    el.classList.toggle('hide', !state);
+    if (!state) return;
+    el.innerHTML =
+      `<span>${state.label}</span>` +
+      `<span class="pit-bar"><i style="width:${(state.progress * 100).toFixed(0)}%"></i></span>`;
+  }
+
+  /**
+   * Nalar AI yang sedang dipakai (0..1) + berapa balapan yang sudah dipakai
+   * untuk "belajar". Angkanya naik tiap balapan, jadi pemain bisa lihat lawannya
+   * benar-benar makin pintar.
+   */
+  setLeague(level: number, races: number) {
+    const el = this.aiLevelEl;
+    if (!el) return;
+    const text = `NALAR AI ${Math.round(level * 100)}% · ${races} balapan`;
+    if (el.textContent !== text) el.textContent = text;
+  }
+
   /** Banner hasil balapan; `null` menyembunyikannya. */
   setFinish(text: string | null) {
     const el = this.finishEl;
@@ -207,6 +263,10 @@ export class Hud {
   }
 
   update(phys: VehiclePhysics, dt: number) {
+    if (this.noticeUntil && performance.now() > this.noticeUntil) {
+      this.noticeEl?.classList.add('hide');
+      this.noticeUntil = 0;
+    }
     this.accum += dt;
     if (this.accum < 1 / 15) return;
     this.accum = 0;
