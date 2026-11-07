@@ -8,6 +8,11 @@ import { buildTrack, BROADCAST_SPOTS, TRACK } from './world/track';
 import { AutoPilot, type TrafficCar } from './ai/AutoPilot';
 import { Rival } from './race/Rival';
 import { LapCounter } from './race/LapCounter';
+import { gridPose, RIVAL_PLANS } from './race/grid';
+import { standings, LapRecords } from './race/Standings';
+import { SkidMarks } from './fx/SkidMarks';
+import { SmokePuffs } from './fx/Smoke';
+import { CarEffects } from './fx/CarEffects';
 import { Input } from './input';
 import { Hud } from './hud';
 import { CameraRig } from './camera';
@@ -16,6 +21,8 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 
 const FIXED_DT = 1 / 60;
 const MAX_SUBSTEPS = 5;
+/** Jam yang selalu ada, baik di browser maupun saat diuji headless. */
+const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 type PresetName = 'tarmac' | 'gravel' | 'ice';
 
@@ -90,6 +97,16 @@ async function boot() {
   // first grid slot, ten metres behind the start/finish line
   const car = new VehiclePhysics(world, defaultConfig, new THREE.Vector3(0, 0.95, -10));
 
+  // Jejak ban dan asap dipakai bersama semua mobil: satu mesh jejak + satu
+  // kolam partikel, jadi enam mobil tetap murah.
+  const skidMarks = new SkidMarks(lowQuality ? 2600 : 6000);
+  skidMarks.mesh.visible = true;
+  scene.add(skidMarks.mesh);
+  const smoke = new SmokePuffs(lowQuality ? 220 : 480);
+  smoke.setPixelRatio(renderer.getPixelRatio());
+  scene.add(smoke.points);
+  const playerEffects = new CarEffects(car, skidMarks, smoke);
+
   // The hand-built body is only a stand-in: the detailed GLB in `public/models`
   // replaces it as soon as it is decoded (and stays if the download fails).
   const proceduralCar = new CarVisual(scene, car, { detail: !lowQuality });
@@ -103,43 +120,82 @@ async function boot() {
     carVisual = model;
   });
 
-  /* ---------------- lawan (mobil kedua, disetir AI) ---------------- */
-  // Same physics, same tyres: the rival only knows the racing line better and
-  // starts one grid row back, with its own lane so the two cars do not fight
-  // for the same piece of tarmac.
-  const gridRow = TRACK.at(TRACK.start - 20);
-  const rival = new Rival(world, {
-    position: new THREE.Vector3(gridRow.pos.x, 0.95, gridRow.pos.z).addScaledVector(gridRow.side, -3.8),
-    yaw: gridRow.yaw,
-    main: TRACK.main,
-    joker: TRACK.joker,
-    startDistance: TRACK.start,
-    pace: 0.94,
-    laneOffset: -2,
-  });
-  const rivalProcedural = new CarVisual(scene, rival.car, { detail: !lowQuality });
-  let rivalVisual: CarVisual | CarModelVisual = rivalProcedural;
-  void CarModelVisual.load(scene, rival.car, new URL('models/honda-civic-eg6.glb', document.baseURI).href, {
-    detail: !lowQuality,
-    paint: 0xc22a1c,
-  }).then((model) => {
-    if (!model) return;
-    rivalProcedural.dispose();
-    rivalVisual = model;
-    // keep it hidden if the player already switched the rival off
-    model.root.visible = race.rival;
+  /* ---------------- lima lawan AI (grid 6 mobil) ---------------- */
+  // Fisika, ban, dan lompatannya sama persis dengan mobil pemain; lawan hanya
+  // tahu garis balap lebih baik. Tiap mobil punya lajur, kecepatan, dan warna
+  // sendiri supaya balapannya tidak jadi barisan rapi.
+  const rivals = RIVAL_PLANS.map((plan) => {
+    const pose = gridPose(plan);
+    const rival = new Rival(world, {
+      name: plan.name,
+      position: pose.position,
+      yaw: pose.yaw,
+      main: TRACK.main,
+      joker: TRACK.joker,
+      startDistance: TRACK.start,
+      pace: plan.pace,
+      laneOffset: plan.laneOffset,
+      jokerEachLap: plan.jokerEachLap,
+    });
+    const procedural = new CarVisual(scene, rival.car, { detail: !lowQuality, paint: plan.color });
+    let visual: CarVisual | CarModelVisual = procedural;
+    void CarModelVisual.load(scene, rival.car, new URL('models/honda-civic-eg6.glb', document.baseURI).href, {
+      detail: !lowQuality,
+      paint: plan.color,
+    }).then((model) => {
+      if (!model) return;
+      procedural.dispose();
+      visual = model;
+      model.root.visible = race.rivals;
+    });
+    return {
+      plan,
+      rival,
+      procedural,
+      get visual() {
+        return visual;
+      },
+      effects: new CarEffects(rival.car, skidMarks, smoke),
+      /** Lap terbaik yang sudah dikirim ke papan rekor. */
+      lastBest: Infinity,
+      /** Perintah terakhir: efek ban butuh tahu gas/rem/handbrake. */
+      lastCommand: undefined as VehicleInput | undefined,
+      lights: {
+        brake: 0,
+        reverse: false,
+        left: false,
+        right: false,
+        hazard: false,
+        headlights: true,
+      } as CarLightState,
+    };
   });
 
   const playerLaps = new LapCounter(TRACK.main, TRACK.start, car.position);
   const race = {
     laps: 3,
-    rival: true,
-    pace: rival.pilot.options.pace,
+    rivals: true,
+    // Pengali kecepatan semua lawan (1 = sesuai rencana di `grid.ts`).
+    pace: 1,
     winner: null as null | 'player' | 'rival',
+    winnerName: '',
   };
-  // Preallocated "what is around me" lists for the two pilots.
-  const rivalAround: TrafficCar[] = [{ position: rival.car.position, speed: 0 }];
-  const playerAround: TrafficCar[] = [{ position: car.position, speed: 0 }];
+  /** Papan rekor lap (antarmobil, disimpan di localStorage kalau ada). */
+  const records = new LapRecords();
+  /** Urutan finis, untuk banner hasil. */
+  const finishOrder: Array<{ name: string; player: boolean }> = [];
+  /** Sampai kapan spanduk "REKOR BARU" ditampilkan (ms). */
+  let newRecordUntil = 0;
+  /** Lap terbaik pemain yang sudah dikirim ke papan rekor. */
+  let playerBestSubmitted = Infinity;
+
+  // Daftar "siapa saja di sekitar" dipakai semua AI. Isinya referensi posisi
+  // (bukan salinan), jadi cukup diperbarui sekali per frame; mobil itu sendiri
+  // otomatis dilewati AutoPilot (jarak 0).
+  const traffic: TrafficCar[] = [
+    { position: car.position, speed: 0 },
+    ...rivals.map((r) => ({ position: r.rival.car.position, speed: 0 })),
+  ];
 
   /* ---------------- autopilot ---------------- */
   // The pilot drives the very same `VehicleInput` interface as the keyboard,
@@ -181,18 +237,29 @@ async function boot() {
     input.setGear(1);
     pilot.reset(car.position);
     playerLaps.reset(car.position);
-    if (race.rival) rival.resetToGrid();
-    rivalVisual.root.visible = race.rival;
+    playerEffects.reset();
+    if (race.rivals) for (const r of rivals) r.rival.resetToGrid();
+    for (const r of rivals) {
+      r.visual.root.visible = race.rivals;
+      r.effects.reset();
+    }
+    finishOrder.length = 0;
     race.winner = null;
+    race.winnerName = '';
   };
 
-  const setRival = (on: boolean) => {
-    race.rival = on;
-    rivalVisual.root.visible = on;
-    if (on) rival.resetToGrid();
-    else rival.park();
+  const setRivals = (on: boolean) => {
+    race.rivals = on;
+    for (const r of rivals) {
+      r.visual.root.visible = on;
+      r.effects.reset();
+      if (on) r.rival.resetToGrid();
+      else r.rival.park();
+    }
     playerLaps.reset(car.position);
+    finishOrder.length = 0;
     race.winner = null;
+    race.winnerName = '';
     rivalToggle?.updateDisplay();
   };
 
@@ -359,14 +426,16 @@ async function boot() {
     });
 
   const fRival = gui.addFolder('Lawan');
-  rivalToggle = fRival.add(race, 'rival').name('lawan AI').onChange((v: boolean) => setRival(v));
+  rivalToggle = fRival.add(race, 'rivals').name('5 lawan AI').onChange((v: boolean) => setRivals(v));
   fRival
     .add(race, 'pace', 0.8, 1.05, 0.01)
     .name('kecepatan lawan')
     .onChange((v: number) => {
-      rival.pilot.options.pace = v;
+      // Skala semua lawan, tapi urutannya tetap: yang paling cepat tetap di depan.
+      for (const r of rivals) r.rival.pilot.options.pace = r.plan.pace * v;
     });
   fRival.add(race, 'laps', 1, 9, 1).name('jumlah lap');
+  fRival.add({ clear: () => skidMarks.clear() }, 'clear').name('hapus jejak ban');
 
   const fPreset = gui.addFolder('Presets');
   fPreset.add(actions, 'Tarmac');
@@ -393,25 +462,27 @@ async function boot() {
    *  kalau mereka sedang berdekatan — seperti siaran yang menjaga duel tetap
    *  dalam satu frame. */
   const updateCamFocus = () => {
-    const rivalLive = race.rival && !rival.isParked;
-    const leaderIsRival =
-      rivalLive && spectate.on && rival.odometer > playerLaps.odometer;
-    camFocus.copy(leaderIsRival ? rival.car.position : car.position);
-    camFocusDistance = leaderIsRival ? rival.counter.lapDistance : playerLaps.lapDistance;
-    if (rivalLive) {
-      const gap = Math.abs(rival.odometer - playerLaps.odometer);
-      if (gap < 30) camFocus.lerp(leaderIsRival ? car.position : rival.car.position, 0.42);
+    // Pemimpin balapan = odometer terjauh. Di TV mode kamera mengikuti dia,
+    // dan kalau ada mobil lain dalam 30 m, frame-nya melebar sedikit supaya
+    // duelnya ikut terlihat.
+    const live = race.rivals ? rivals.filter((r) => !r.rival.isParked) : [];
+    let leaderPos = car.position;
+    let leaderOdo = playerLaps.odometer;
+    let leaderDist = playerLaps.lapDistance;
+    for (const r of live) {
+      if (spectate.on && r.rival.odometer > leaderOdo) {
+        leaderOdo = r.rival.odometer;
+        leaderPos = r.rival.car.position;
+        leaderDist = r.rival.counter.lapDistance;
+      }
+    }
+    camFocus.copy(leaderPos);
+    camFocusDistance = leaderDist;
+    for (const r of live) {
+      const gap = Math.abs(r.rival.odometer - leaderOdo);
+      if (gap < 30) camFocus.lerp(r.rival.car.position, 0.22);
     }
     camFocus.y += 0.9;
-  };
-
-  const rivalLights: CarLightState = {
-    brake: 0,
-    reverse: false,
-    left: false,
-    right: false,
-    hazard: false,
-    headlights: true,
   };
 
   const timer = new THREE.Timer();
@@ -433,19 +504,25 @@ async function boot() {
 
     let steps = 0;
     while (accumulator >= FIXED_DT && steps < MAX_SUBSTEPS) {
-      rivalAround[0].speed = rival.car.speed;
-      playerAround[0].speed = car.speed;
+      // Kecepatan semua mobil di daftar lalu lintas; posisinya sudah referensi.
+      traffic[0].speed = car.speed;
+      for (let i = 0; i < rivals.length; i++) traffic[i + 1].speed = rivals[i].rival.car.speed;
       if (auto.enabled) {
         // fresh transform each substep: the pilot is a closed loop
         car.sync();
-        command = pilot.update(FIXED_DT, car, rivalAround);
+        command = pilot.update(FIXED_DT, car, traffic);
       } else {
         command = input.state;
       }
       car.fixedStep(FIXED_DT, command);
-      if (race.rival) {
-        const rivalCommand = rival.step(FIXED_DT, playerAround);
-        if (rivalCommand) rivalLights.brake = rivalCommand.brake;
+      if (race.rivals) {
+        for (const r of rivals) {
+          const rivalCommand = r.rival.step(FIXED_DT, traffic);
+          if (rivalCommand) {
+            r.lights.brake = rivalCommand.brake;
+            r.lastCommand = rivalCommand;
+          }
+        }
       }
       world.step();
       accumulator -= FIXED_DT;
@@ -458,14 +535,40 @@ async function boot() {
     if (steps === MAX_SUBSTEPS) accumulator = 0;
 
     car.sync();
-    if (race.rival) {
-      rival.sync();
-      rivalLights.reverse = rival.car.gear === -1;
+    if (race.rivals) {
+      for (const r of rivals) {
+        r.rival.sync();
+        r.lights.reverse = r.rival.car.gear === -1;
+      }
     }
     playerLaps.update(car.position);
-    if (!race.winner) {
-      if (playerLaps.lap >= race.laps) race.winner = 'player';
-      else if (race.rival && rival.lap >= race.laps) race.winner = 'rival';
+
+    // Rekor lap: setiap kali ada mobil mencatat lap tercepat baru, angka itu
+    // masuk papan rekor (dan disimpan untuk sesi berikutnya).
+    if (auto.enabled && pilot.bestLap < playerBestSubmitted - 0.001) {
+      playerBestSubmitted = pilot.bestLap;
+      if (records.submit(pilot.bestLap, 'KAMU')) newRecordUntil = now() + 3200;
+    }
+    for (const r of rivals) {
+      const best = r.rival.bestLap;
+      if (best < r.lastBest - 0.001) {
+        r.lastBest = best;
+        if (records.submit(best, r.plan.name)) newRecordUntil = now() + 3200;
+      }
+    }
+
+    // Posisi finis: mobil pertama yang menembus jumlah lap.
+    if (playerLaps.lap >= race.laps && !finishOrder.some((f) => f.player)) {
+      finishOrder.push({ name: 'KAMU', player: true });
+    }
+    for (const r of rivals) {
+      if (r.rival.lap >= race.laps && !finishOrder.some((f) => f.name === r.plan.name)) {
+        finishOrder.push({ name: r.plan.name, player: false });
+      }
+    }
+    if (!race.winner && finishOrder.length > 0) {
+      race.winner = finishOrder[0].player ? 'player' : 'rival';
+      race.winnerName = finishOrder[0].name;
     }
 
     lightState.brake = command.brake;
@@ -477,7 +580,17 @@ async function boot() {
 
     track.update(raw);
     carVisual.update(car, raw, lightState);
-    if (race.rival) rivalVisual.update(rival.car, raw, rivalLights);
+    playerEffects.update(raw, command);
+    if (race.rivals) {
+      for (const r of rivals) {
+        r.visual.update(r.rival.car, raw, r.lights);
+        r.effects.update(raw, r.lastCommand);
+      }
+    }
+    // Jejak ban + asap di-upload sekali per frame, setelah semua mobil menulis.
+    skidMarks.flush();
+    smoke.update(raw);
+
     if (cameraRig.modeName === 'tv') {
       updateCamFocus();
       cameraRig.updateBroadcast(raw, camFocus, camFocusDistance, TRACK.length);
@@ -487,19 +600,37 @@ async function boot() {
     hud.update(car, raw);
     hud.setLamps(lightState);
     hud.setAutopilot(auto.enabled, pilot.lap, auto.enabled ? pilot.lapTime : 0, pilot.bestLap);
-    hud.setRival(
-      race.rival,
-      rival.lap,
-      race.laps,
-      race.rival ? rival.odometer - playerLaps.odometer : 0,
+    hud.setStandings(
+      standings([
+        {
+          name: 'KAMU',
+          color: 0xd8402f,
+          lap: playerLaps.lap,
+          odometer: playerLaps.odometer,
+          bestLap: pilot.bestLap,
+          laps: race.laps,
+          isPlayer: true,
+        },
+        ...rivals.map((r) => ({
+          name: r.plan.name,
+          color: r.plan.color,
+          lap: r.rival.lap,
+          odometer: r.rival.odometer,
+          bestLap: r.rival.bestLap,
+          laps: race.laps,
+        })),
+      ]),
+      race.rivals,
+      records,
+      now() < newRecordUntil,
     );
     hud.setCamera(cameraRig.modeName === 'tv', cameraRig.broadcastName);
     hud.setFinish(
       race.winner === null
         ? null
         : race.winner === 'player'
-          ? `finish · kamu menang · ${race.laps} lap`
-          : `finish · lawan menang · ${race.laps} lap`,
+          ? `finish · P1 KAMU · ${race.laps} lap`
+          : `finish · P1 ${race.winnerName} · ${race.laps} lap`,
     );
     followSun();
 
@@ -510,6 +641,7 @@ async function boot() {
   window.addEventListener('resize', () => {
     renderer.setPixelRatio(maxPixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
+    smoke.setPixelRatio(maxPixelRatio);
     cameraRig.resize(window.innerWidth / window.innerHeight);
   });
 
@@ -526,12 +658,15 @@ async function boot() {
     pilot,
     auto,
     setAutopilot,
-    rival,
     race,
     spectate,
     setSpectate,
     playerLaps,
-    setRival,
+    setRivals,
+    rivals: rivals.map((r) => r.rival),
+    records,
+    skidMarks,
+    smoke,
     cameraRig,
     renderer,
     scene,

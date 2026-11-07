@@ -171,27 +171,127 @@ body {
   background: rgba(255, 255, 255, 0.07);
 }
 
-#rival {
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  font-weight: 700;
-  padding: 3px 7px;
-  border-radius: 4px;
-  justify-self: start;
-  color: var(--dim);
-  background: rgba(255, 255, 255, 0.07);
+/* ---------- papan klasemen ---------- */
+
+#board {
+  position: fixed;
+  top: max(12px, env(safe-area-inset-top));
+  right: max(14px, env(safe-area-inset-right));
+  min-width: 178px;
+  padding: 7px 9px 8px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  backdrop-filter: blur(9px);
   font-variant-numeric: tabular-nums;
-  transition: background 0.2s ease, color 0.2s ease;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
 }
 
-#rival.ahead {
-  color: #0d1117;
-  background: rgba(87, 214, 141, 0.85);
+#board.hide {
+  opacity: 0;
 }
 
-#rival.behind {
+#board-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 2px 5px;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+#record {
+  color: var(--accent);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  transition: color 0.2s ease, text-shadow 0.2s ease;
+}
+
+#record.fresh {
   color: #fff;
-  background: rgba(224, 74, 60, 0.85);
+  text-shadow: 0 0 12px rgba(255, 176, 46, 0.9);
+}
+
+#standings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1px;
+}
+
+#standings .row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 3px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: rgba(232, 238, 246, 0.86);
+}
+
+#standings .row.hide {
+  display: none;
+}
+
+#standings .row.lead {
+  color: #fff;
+}
+
+#standings .row.me {
+  background: rgba(255, 176, 46, 0.16);
+  color: #fff;
+  font-weight: 700;
+}
+
+#standings .who::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 2px;
+  background: var(--dot, #fff);
+  vertical-align: 1px;
+}
+
+#standings .time {
+  font-size: 9.5px;
+  color: var(--dim);
+}
+
+#standings .row.me .time {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+/* Di ponsel: papan dipindah ke bawah pil siaran TV dan diringkas jadi
+   posisi + nama saja, supaya tidak menutupi jalan atau tombol sentuh. */
+body.is-touch #board {
+  min-width: 118px;
+  padding: 4px 6px 5px;
+  top: calc(max(12px, env(safe-area-inset-top)) + 78px);
+  right: max(10px, env(safe-area-inset-right));
+  opacity: 0.92;
+}
+
+body.is-touch #standings .row {
+  font-size: 9.5px;
+  padding: 1px 2px;
+}
+
+body.is-touch #standings .time {
+  display: none;
+}
+
+body.is-touch #board-head {
+  font-size: 8px;
+  padding-bottom: 3px;
 }
 
 #lampbar button[data-tv] {

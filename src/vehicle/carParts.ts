@@ -69,10 +69,10 @@ export interface CarMaterials {
   plate: THREE.MeshStandardMaterial;
 }
 
-export function createCarMaterials(detail: boolean): CarMaterials {
+export function createCarMaterials(detail: boolean, paint = 0xd8402f): CarMaterials {
   return {
     paint: new THREE.MeshPhysicalMaterial({
-      color: 0xd8402f,
+      color: paint,
       metalness: 0.45,
       roughness: 0.3,
       clearcoat: 1,

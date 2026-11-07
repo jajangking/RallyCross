@@ -8,6 +8,8 @@ import { LapCounter } from './LapCounter';
 const RESPAWN_LIFT = 0.95;
 
 export interface RivalSetup {
+  /** Nama pembalap, dipakai papan klasemen + rekor lap. */
+  name?: string;
   /** Kotak start di sebelah mobil pemain. */
   position: THREE.Vector3;
   yaw: number;
@@ -31,15 +33,31 @@ export interface RivalSetup {
  * grid, supaya balapan tidak jadi kacau.
  */
 export class Rival {
+  readonly name: string;
   readonly car: VehiclePhysics;
   readonly pilot: AutoPilot;
   readonly counter: LapCounter;
 
+  /** Lap tercepat yang pernah dicatat mobil ini, detik. */
+  get bestLap(): number {
+    return this.pilot.bestLap;
+  }
+
+  /** Sudah finis? Dipakai papan klasemen. */
+  get odometer(): number {
+    return this.counter.odometer;
+  }
+
   private readonly grid: THREE.Vector3;
   private readonly gridYaw: number;
   private parked = false;
+  /** Sudah berapa lama mobil ini nyangkut di luar trek. */
+  private stuckTime = 0;
+  /** Berapa kali mobil ini harus diselamatkan ke garis balap. */
+  rescues = 0;
 
   constructor(world: RAPIER.World, setup: RivalSetup) {
+    this.name = setup.name ?? 'Lawan';
     this.grid = setup.position.clone();
     this.gridYaw = setup.yaw;
     this.car = new VehiclePhysics(world, defaultConfig, setup.position, setup.yaw);
@@ -56,18 +74,20 @@ export class Rival {
     return this.counter.lap;
   }
 
-  /** Jarak ke garis start pada putaran berjalan, meter. */
-  get odometer(): number {
-    return this.counter.odometer;
-  }
-
   /**
    * Satu langkah fisika. Panggil di dalam loop substep, sebelum `world.step()`.
    * `others` dipakai supaya lawan tidak menabrak mobil pemain dari belakang.
    */
   step(dt: number, others: ReadonlyArray<TrafficCar> = []): VehicleInput | null {
     if (this.parked) return null;
-    if (this.pilot.needsReset || this.car.position.y < -20) this.respawn();
+    if (this.pilot.needsReset || this.car.position.y < -20) this.rescue();
+    // Jaring penyelamat: mobil yang keluar trek lalu berhenti (nabrak pagar,
+    // nyangkut di gravel) tidak boleh jadi tontonan selama sisa balapan. Kalau
+    // 3 detik tidak bisa keluar sendiri, kembalikan ke garis balap.
+    const excess = Math.abs(this.pilot.lateral) - this.pilot.sample.halfWidth;
+    if (excess > 1.2 && this.car.speed < 4.5) this.stuckTime += dt;
+    else this.stuckTime = Math.max(0, this.stuckTime - dt * 1.5);
+    if (this.stuckTime > 3) this.rescue();
     const command = this.pilot.update(dt, this.car, others);
     this.car.fixedStep(dt, command);
     return command;
@@ -83,6 +103,8 @@ export class Rival {
   /** Balapan diulang: kembali ke kotak start. */
   resetToGrid() {
     this.parked = false;
+    this.stuckTime = 0;
+    this.rescues = 0;
     this.car.placeAt(this.grid, this.gridYaw);
     this.pilot.reset(this.car.position);
     this.counter.reset(this.car.position);
@@ -96,6 +118,13 @@ export class Rival {
 
   get isParked(): boolean {
     return this.parked;
+  }
+
+  /** Selamatkan mobil (dihitung untuk HUD/debug). */
+  private rescue() {
+    this.rescues++;
+    this.stuckTime = 0;
+    this.respawn();
   }
 
   /** Kembalikan mobil ke garis balap, tegak, menghadap arah putaran. */

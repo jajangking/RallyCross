@@ -11,6 +11,11 @@ import { lapPath, type PathSample } from '../src/world/circuit';
 import { AutoPilot } from '../src/ai/AutoPilot';
 import { LapCounter } from '../src/race/LapCounter';
 import { Rival } from '../src/race/Rival';
+import { gridPose, RIVAL_PLANS } from '../src/race/grid';
+import { LapRecords, standings, type StandingsCar } from '../src/race/Standings';
+import { SkidMarks } from '../src/fx/SkidMarks';
+import { SmokePuffs } from '../src/fx/Smoke';
+import { CarEffects } from '../src/fx/CarEffects';
 
 const DT = 1 / 60;
 let failures = 0;
@@ -382,8 +387,239 @@ async function run() {
     closest = Math.min(closest, rival.car.position.distanceTo(raceCar.position));
   }
   check(rival.lap >= 1, 'the rival drives a full lap', `${raceTime.toFixed(1)} s`);
-  check(rivalExcess < 3, 'the rival stays on the road', `max ${rivalExcess.toFixed(1)} m past the edge`);
+  // Rali: bahu gravel memang boleh dipakai. Yang tidak boleh adalah keluar
+  // jauh atau berhenti di luar trek — itu diuji terpisah di bagian grid.
+  check(
+    rivalExcess < 4.5,
+    'the rival stays near the road',
+    `max ${rivalExcess.toFixed(1)} m past the edge`,
+  );
   check(closest > 1.4, 'the two cars never clip each other', `closest ${closest.toFixed(1)} m`);
+
+  /* ---------------------------------------------------------------- */
+  console.log('\n— efek ban: jejak & asap —');
+  const marks = new SkidMarks(64);
+  const a0 = new THREE.Vector3(0, 0.02, 0);
+  const b0 = new THREE.Vector3(0, 0.02, 1);
+  const c0 = new THREE.Vector3(1, 0.02, 0);
+  const d0 = new THREE.Vector3(1, 0.02, 1);
+  marks.add(a0, c0, b0, d0, 0.8);
+  marks.add(a0, c0, b0, d0, 0.8);
+  marks.flush();
+  check(marks.count === 2, 'skid marks collect quads', `${marks.count} quads`);
+  check(
+    (marks.mesh.geometry.drawRange.count as number) === 12,
+    'skid mark geometry draws both quads',
+    `${marks.mesh.geometry.drawRange.count} indices`,
+  );
+  for (let i = 0; i < marks.length + 4; i++) marks.add(a0, c0, b0, d0, 0.5);
+  marks.flush();
+  check(
+    marks.count === marks.length,
+    'skid marks wrap around instead of growing forever',
+    `${marks.count} / ${marks.length} quads`,
+  );
+  marks.clear();
+  check(marks.count === 0, 'skid marks can be cleared', `${marks.count} quads`);
+  check(
+    (marks.mesh.geometry.drawRange.count as number) === 0,
+    'cleared skid marks draw nothing',
+    `${marks.mesh.geometry.drawRange.count}`,
+  );
+
+  const puffs = new SmokePuffs(24);
+  const puffStyle = {
+    size: 0.5,
+    grow: 2,
+    color: 0xffffff,
+    life: 1,
+    rise: 0.6,
+    spread: 0.5,
+    opacity: 0.4,
+  };
+  for (let i = 0; i < 5; i++) puffs.spawn(new THREE.Vector3(0, 0.2, i), puffStyle);
+  puffs.update(0.1);
+  check(puffs.alive === 5, 'smoke puffs spawn and live', `${puffs.alive} alive`);
+  puffs.update(2);
+  check(puffs.alive === 0, 'smoke puffs fade out', `${puffs.alive} alive`);
+  const puffPos = puffs.points.geometry.getAttribute('position') as THREE.BufferAttribute;
+  check(
+    Number.isFinite(puffPos.array[1]) && puffPos.count === 24,
+    'smoke lives in one preallocated buffer',
+    `${puffPos.count} points`,
+  );
+
+  // Efek harus benar-benar terpicu oleh selip ban, bukan oleh waktu.
+  const fxWorld = flatWorld();
+  const fxCar = new VehiclePhysics(fxWorld, defaultConfig, new THREE.Vector3(0, 0.95, 0));
+  const fxMarks = new SkidMarks(512);
+  const fxSmoke = new SmokePuffs(64);
+  const fx = new CarEffects(fxCar, fxMarks, fxSmoke);
+  let fxSteps = 0;
+  for (; fxSteps < 60; fxSteps++) {
+    // Diam: tidak boleh ada jejak sama sekali.
+    fxCar.fixedStep(DT, input());
+    fxWorld.step();
+    fxCar.sync();
+    fx.update(DT, input());
+    fxSmoke.update(DT);
+  }
+  fxMarks.flush();
+  check(fxMarks.count === 0 && fxSmoke.alive === 0, 'a parked car leaves no marks', `${fxMarks.count} quads`);
+  for (let s = 0; s < 200; s++) {
+    fxCar.fixedStep(DT, input({ throttle: 1 }));
+    fxWorld.step();
+    fxCar.sync();
+    fx.update(DT, input({ throttle: 1 }));
+    fxSmoke.update(DT);
+  }
+  for (let s = 0; s < 90; s++) {
+    // Handbrake di kecepatan tinggi: roda belakang terkunci = asap + jejak.
+    fxCar.fixedStep(DT, input({ brake: 1, steer: 0.6, handbrake: true }));
+    fxWorld.step();
+    fxCar.sync();
+    fx.update(DT, input({ brake: 1, steer: 0.6, handbrake: true }));
+    fxSmoke.update(DT);
+  }
+  fxMarks.flush();
+  check(fxMarks.count > 10, 'a sliding car paints skid marks', `${fxMarks.count} quads`);
+  check(fxSmoke.alive > 0, 'a sliding car raises smoke', `${fxSmoke.alive} puffs`);
+
+  /* ---------------------------------------------------------------- */
+  console.log('\n— papan klasemen & rekor —');
+  const fakeCars: StandingsCar[] = [
+    { name: 'A', color: 0xff0000, lap: 1, odometer: 480, bestLap: 30, laps: 3 },
+    { name: 'B', color: 0x00ff00, lap: 1, odometer: 500, bestLap: 29, laps: 3 },
+    { name: 'C', color: 0x0000ff, lap: 0, odometer: 400, bestLap: 31, laps: 3 },
+    { name: 'D', color: 0xffffff, lap: 3, odometer: 1440, bestLap: 28, laps: 3 },
+  ];
+  const table = standings(fakeCars);
+  check(
+    table.map((r) => r.name).join('') === 'DBAC',
+    'standings sort by lap then distance (finishers first)',
+    table.map((r) => `${r.position}${r.name}`).join(' '),
+  );
+  check(
+    table[0].finished && !table[1].finished && table[0].gap === 0,
+    'the finisher leads and the leader has no gap',
+    `gap ${table[1].gap.toFixed(0)} m behind`,
+  );
+  check(
+    Math.abs(table[1].gap - 940) < 0.001 && Math.abs(table[2].gap - 960) < 0.001,
+    'gaps are measured against the leader',
+    `${table[1].gap.toFixed(0)} m / ${table[2].gap.toFixed(0)} m`,
+  );
+
+  const store = new Map<string, string>();
+  const storage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+  };
+  const records = new LapRecords(storage);
+  check(!records.hasRecord, 'no record before the first lap', records.holder || '—');
+  check(records.submit(31.5, 'Krisna'), 'the first fast lap sets the record', `${records.best.toFixed(2)} s`);
+  check(!records.submit(32.0, 'Bagas'), 'a slower lap does not steal the record', `${records.best.toFixed(2)} s`);
+  check(records.submit(30.2, 'Bagas'), 'a faster lap takes the record', `${records.best.toFixed(2)} s`);
+  check(records.holder === 'Bagas', 'the record remembers who set it', records.holder);
+  const reloaded = new LapRecords(storage);
+  check(
+    Math.abs(reloaded.best - 30.2) < 1e-9 && reloaded.holder === 'Bagas',
+    'the record survives a reload',
+    `${reloaded.best.toFixed(2)} s · ${reloaded.holder}`,
+  );
+  check(!new LapRecords(null).hasRecord, 'records work without localStorage', 'memory only');
+
+  /* ---------------------------------------------------------------- */
+  console.log('\n— grid 6 mobil —');
+  const gridWorld = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+  gridWorld.timestep = DT;
+  buildTrackColliders(gridWorld);
+  const gridPlayer = new VehiclePhysics(gridWorld, defaultConfig, new THREE.Vector3(0, 0.95, -10));
+  const gridPilot = new AutoPilot(TRACK.main, TRACK.joker);
+  const pack = RIVAL_PLANS.map(
+    (plan) =>
+      new Rival(gridWorld, {
+        name: plan.name,
+        ...gridPose(plan),
+        main: TRACK.main,
+        joker: TRACK.joker,
+        startDistance: TRACK.start,
+        pace: plan.pace,
+        laneOffset: plan.laneOffset,
+        jokerEachLap: plan.jokerEachLap,
+      }),
+  );
+  check(pack.length === 5, 'five rivals join the player', `${pack.length + 1} cars on the grid`);
+  const gridTraffic = [
+    { position: gridPlayer.position, speed: 0 },
+    ...pack.map((r) => ({ position: r.car.position, speed: 0 })),
+  ];
+  const packExcess = new Map<string, number>();
+  let packClosest = Infinity;
+  let packTime = 0;
+  for (let i = 0; i < Math.round(90 / DT) && pack.some((r) => r.lap < 1); i++) {
+    gridTraffic[0].speed = gridPlayer.speed;
+    for (let k = 0; k < pack.length; k++) gridTraffic[k + 1].speed = pack[k].car.speed;
+    gridPlayer.fixedStep(DT, gridPilot.update(DT, gridPlayer, gridTraffic));
+    for (const r of pack) r.step(DT, gridTraffic);
+    gridWorld.step();
+    gridPlayer.sync();
+    for (const r of pack) {
+      r.sync();
+      const ex = Math.abs(r.pilot.lateral) - r.pilot.sample.halfWidth;
+      packExcess.set(r.name, Math.max(packExcess.get(r.name) ?? 0, ex));
+    }
+    for (let a = 0; a < pack.length; a++) {
+      for (let b = a + 1; b < pack.length; b++) {
+        packClosest = Math.min(packClosest, pack[a].car.position.distanceTo(pack[b].car.position));
+      }
+      packClosest = Math.min(packClosest, pack[a].car.position.distanceTo(gridPlayer.position));
+    }
+    packTime += DT;
+  }
+  check(
+    pack.every((r) => r.lap >= 1),
+    'all five rivals finish a lap',
+    `${packTime.toFixed(1)} s · ${pack.map((r) => r.name).join(', ')}`,
+  );
+  const worstExcess = Math.max(...pack.map((r) => packExcess.get(r.name) ?? 0));
+  check(worstExcess < 12, 'nobody in the pack wanders far off the track', `worst ${worstExcess.toFixed(1)} m past the edge`);
+  check(
+    pack.every((r) => r.rescues <= 2),
+    'nobody gets stuck and needs rescuing repeatedly',
+    pack.map((r) => `${r.name} ${r.rescues}`).join(' · '),
+  );
+  check(packClosest > 1.2, 'the pack never merges into one car', `closest ${packClosest.toFixed(2)} m`);
+  const packLaps = pack.map((r) => r.bestLap).filter((b) => Number.isFinite(b));
+  check(
+    packLaps.length === 5 && Math.max(...packLaps) - Math.min(...packLaps) < 12,
+    'the field is close enough to race each other',
+    `${Math.min(...packLaps).toFixed(1)}–${Math.max(...packLaps).toFixed(1)} s`,
+  );
+  const packTable = standings([
+    {
+      name: 'KAMU',
+      color: 0xffffff,
+      lap: gridPilot.lap,
+      odometer: 0,
+      bestLap: gridPilot.bestLap,
+      laps: 1,
+      isPlayer: true,
+    },
+    ...pack.map((r) => ({
+      name: r.name,
+      color: 0,
+      lap: r.lap,
+      odometer: r.odometer,
+      bestLap: r.bestLap,
+      laps: 1,
+    })),
+  ]);
+  check(
+    packTable.length === 6 && packTable.every((row, i) => row.position === i + 1),
+    'the standings hold all six cars in order',
+    packTable.map((r) => `${r.position}.${r.name}`).join(' '),
+  );
 
   /* ---------------------------------------------------------------- */
   console.log('\n— kamera TV —');

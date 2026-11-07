@@ -1,6 +1,6 @@
 # RallyCross — Vehicle Physics Prototype
 
-Prototipe **mobil rally 3D di web** (three.js + Rapier): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **satu lawan AI** yang balapan 3 lap melawan kamu, dan **9 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI. Belum ada multiplayer.
+Prototipe **mobil rally 3D di web** (three.js + Rapier): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **grid 6 mobil** (kamu + 5 lawan AI) yang balapan 3 lap, **jejak ban + asap/debu** dari ban yang benar-benar selip, papan klasemen langsung, dan **9 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI. Belum ada multiplayer.
 
 ## Jalanin
 
@@ -33,7 +33,7 @@ Semua input **analog/proporsional** — bukan tombol on/off:
 | Handbrake | `Space` | HB |
 | Reset mobil | `R` | — |
 | Ganti kamera (chase → kap → TV) | `C` | — |
-| Tonton **AI vs AI** (kamera TV) | `V` | tombol **TV** (kiri atas) |
+| Tonton **AI vs AI** — 6 mobil, kamera TV | `V` | tombol **TV** (kiri atas) |
 | Panel tuning | `G` | tombol **⚙** (kiri atas) |
 | **AI autopilot on/off** | `P` | tombol **AI** (kiri atas) |
 | Ulangi balapan (grid + lap) | `R` | — |
@@ -63,17 +63,25 @@ src/
 │  ├─ CarSuspension.ts      # per roda: wishbone, tie rod, coilover, rem
 │  ├─ CarLights.ts          # lampu rem, sein, mundur, lampu utama
 │  └─ carParts.ts           # material + helper geometri (link, pegas)
-├─ world/circuit.ts         # geometri sirkuit: node, sampling, ribbon (tanpa DOM)
-├─ world/track.ts           # arena rallycross
-│  ├─ buildTrackColliders() # permukaan + barrier + joker — tanpa DOM
-│  └─ ...
-│ src/race/                # LapCounter (odometer) + Rival (mobil AI kedua)
-│ src/camera/              # BroadcastDirector: sutradara kamera TV
-│ src/ai/AutoPilot.ts      # pure pursuit + speed profile + pemulihan
-│  └─ buildTrackVisuals()   # mesh, tekstur canvas, gantry, stand — hanya browser
+├─ world/
+│  ├─ circuit.ts            # geometri sirkuit: node, sampling, ribbon (tanpa DOM)
+│  └─ track.ts              # arena rallycross
+│     ├─ buildTrackColliders() # permukaan + barrier + joker — tanpa DOM
+│     └─ buildTrackVisuals()   # mesh, tekstur canvas, gantry, stand — hanya browser
+├─ race/
+│  ├─ LapCounter.ts         # odometer + lap (tanpa DOM)
+│  ├─ Rival.ts              # mobil AI: pilot + fisika + rescue kalau macet
+│  ├─ grid.ts               # lima rencana lawan + posisi grid
+│  └─ Standings.ts          # klasemen + papan rekor lap (localStorage)
+├─ ai/AutoPilot.ts          # pure pursuit + profil kecepatan + menyalip + pemulihan
+├─ fx/
+│  ├─ SkidMarks.ts          # jejak ban (satu mesh, ring buffer)
+│  ├─ Smoke.ts              # asap & debu (satu Points, kolam tetap)
+│  └─ CarEffects.ts         # pemicu efek dari state ban
+├─ camera/                  # BroadcastDirector: sutradara kamera TV
 ├─ camera.ts                # chase / hood cam + FOV dinamis
 ├─ input.ts                 # slider setir/gas/rem analog + gigi D/R + sein/lampu
-├─ hud.ts                   # speedo, gear D/R, beban per roda, drift
+├─ hud.ts                   # speedo, gear D/R, beban per roda, klasemen, rekor
 └─ style.css
 public/models/
 ├─ honda-civic-eg6.glb      # model bodi mobil (CC BY 4.0, lihat CREDITS.md)
@@ -214,12 +222,14 @@ Cara kerjanya (`src/ai/AutoPilot.ts`, murni matematika, tanpa DOM):
 - **Jarak pandang menyesuaikan tikungan** — kalau 30-an meter ke depan ada tikungan tajam, titik tujuan didekatkan (sampai 45 %). Titik pandang yang jauh pada tikungan sempit membuat garis lurus memotong tikungan: mobil masuk terlalu lebar, lalu panik mengoreksi — inilah yang dulu terasa kaku.
 - **Setir diputar bertahap** — perintah setir dibatasi `steerRate` (4,5 putaran penuh per detik), jadi roda tidak melompat dari lock kiri ke kanan.
 - **Menangkap selip** — kalau hidung mobil sudah menyimpang > 30° dari arah jalannya, AI berhenti menjejalkan setir ke titik tujuan (itu justru mempercepat putaran) dan mengarahkan roda ke arah mobil benar-benar meluncur, sambil mengangkat gas. Tanpa ini AI berputar-donat lalu melesat keluar trek.
-- **Kecepatan** — per sample di depan (horizon sampai 110 m) dihitung batas `√(grip / κ)` menurut permukaan (aspal 8,4 m/s², gravel 5,4 m/s²), lalu tiap batas dikonversi jadi "kecepatan sekarang yang masih bisa berhenti di sana" (`√(v² + 2·a·s)`). Nilai terkecil yang dipakai. Tanjakan > 9 % dianggap lompatan dan dibatasi `jumpSpeed` (19 m/s).
+- **Kecepatan** — per sample di depan (horizon sampai 110 m) dihitung batas `√(grip / κ)` menurut permukaan (aspal 8,4 m/s², gravel 5,0 m/s²), lalu tiap batas dikonversi jadi "kecepatan sekarang yang masih bisa berhenti di sana" (`√(v² + 2·a·s)`). Nilai terkecil yang dipakai. Tanjakan > 9 % dianggap lompatan dan dibatasi `jumpSpeed` (19 m/s).
 - **Gas & rem proporsional** — gas mengikuti selisih ke target (bukan on/off), pedalnya dilembutkan (`pedalRate`), dan rem tidak pernah dipijak penuh saat mobil sudah di luar trek.
 - **Di udara** — roda tidak menyentuh tanah, jadi AI melepas gas: roda yang berputar di udara menyentak saat mendarat dan memelintir mobil.
 - **Garis balap** — di tikungan, titik tujuan digeser sedikit ke sisi dalam (`lineCut`, 10 % lebar trek) supaya jalurnya terlihat seperti pembalap yang mencari apex. Mobil lawan tidak ikut memotong karena lajurnya sudah digeser `laneOffset`.
 - **Melebar** — di luar > 60 % lebar trek target kecepatan dipotong; kalau sudah keluar trek, titik tujuan justru didekatkan dan tarikan garis dimatikan supaya mobil benar-benar berbelok kembali ke garis (titik jauh membuat sudutnya kecil dan mobil malah jalan lurus makin jauh).
-- **Macet / terbalik** — diam < 1,2 m/s selama 1,6 s → mundur sebentar lalu maju lagi; terbalik (up < 0,35) selama 2,5 s → minta reset.
+- **Menyalip** — kalau ada mobil lebih lambat < 12 m di depan dan jalurnya sudah cukup cepat, AI menggeser **seluruh garisnya** ke sisi yang lapang (maks. selebar ruang yang tersisa), lalu kembali ke garis. Geseran itu dihitung ulang frame-nya: kalau hanya posisi yang digeser, kecepatan tikungan tetap dihitung dari radius garis lama dan mobil keluar trek.
+- **Tidak menyalip di tikungan sempit** — kalau lengkung 45 m ke depan > 0,013 (radius < 77 m), AI batal menggeser lajur dan (kalau sedang bergeser) kembali ke garis 2,5× lebih cepat. Pindah lajur sambil berbelok berarti radius yang harus dilalui berubah; di uji 6 mobil inilah penyebab satu-satunya mobil yang keluar trek lalu perlu di-rescue. Setelah aturan ini: **0 rescue, 0 tabrakan, seluruh grid finis**.
+- **Macet / terbalik** — diam < 1,2 m/s selama 1,6 s → mundur sebentar lalu maju lagi; terbalik (up < 0,35) selama 2,5 s → minta reset. Jaring pengaman terakhir: di luar trek > 1,2 m dengan kecepatan < 4,5 m/s selama 3 s → mobil dikembalikan ke garis (dihitung di kolom `rescues`).
 - **Joker** — pilihan joker dievaluasi ulang tiap putaran (checkbox *joker lap*), dan HUD menampilkan status AI + lap + waktu lap/best.
 
 Hasil uji headless dengan fisika asli: **satu putaran 29,9 s**, tidak pernah keluar tepi trek, 0 reset, dan stabil di 6 putaran berturut-turut (aspal & gravel, dengan/tanpa joker). Diuji juga dari 30 titik start berbeda (offset ±3 m): semuanya menyelesaikan putaran.
@@ -239,19 +249,29 @@ Cara sutradaranya bekerja (`src/camera/BroadcastDirector.ts`):
 - Overlay **`● LIVE · T3`** muncul saat kamera siaran aktif. Mau lihat semua sudutnya? Panel → *Camera* → **kamera berikutnya** (sutradara otomatis berhenti 6 detik, lalu jalan lagi).
 - Di mode tontonan, kamera mengikuti **pemimpin balapan**; kalau kedua mobil berdekatan (< 30 m), titik bidiknya digeser ke tengah supaya duelnya tetap satu frame.
 
-## Lawan AI (1 mobil)
+## Grid 6 mobil (5 lawan AI)
 
-Di grid selalu ada **mobil kedua berwarna merah** yang kamu lawan balapan **3 lap** (jumlahnya bisa diubah di panel → *Lawan*). Lawan memakai `VehiclePhysics` yang sama — ban, suspensi, lompatan, dan tabrakan diperlakukan sama seperti mobilmu, jadi tidak ada hax:
+Di grid ada **enam mobil**: punyamu + **lima lawan AI** dengan nama dan warna sendiri (Krisna, Bagas, Sari, Damar, Nadia). Balapan **3 lap** (bisa diubah di panel → *Lawan*), dan semuanya memakai `VehiclePhysics` yang sama — ban, suspensi, lompatan, dan tabrakan diperlakukan sama seperti mobilmu, jadi tidak ada hax. Yang berbeda cuma pengetahuan garis balap: lajur (`laneOffset` ±0,6/±1,2 m), jarak di grid (18–32 m), dan `pace` 0,97–1,0.
 
-- **Garis sendiri.** `AutoPilot` bisa menggeser seluruh garis balapnya ke samping (`laneOffset`), bukan cuma titik tujuannya. Lawan mengambil lajur kiri 2 m, jadi dua mobil tidak berebut potongan aspal yang sama.
-- **Tidak menabrak dari belakang.** Kalau ada mobil < 18 m di depan dalam kerucut pandang, target kecepatannya dipotong mengikuti kecepatan mobil itu (`kecepatan lawan + (jarak − 6) × 1,6`). Lawan yang mengejar mobil yang sedang berhenti berhenti sendiri, bukan menabrak.
-- **Putaran dihitung di garis start**, bukan di ujung data spline: `LapCounter` memakai odometer yang tidak pernah wrap, jadi mobil yang mundur melewati garis tidak menambah/mengurangi lap secara salah.
-- **Terbalik / terlempar** → kembali ke garis balap (bukan ke grid) menghadap arah putaran.
-- Badge **LAWAN** di HUD menunjukkan lap dan selisih jarak (hijau = kamu di depan, merah = lawan di depan). Selesai 3 lap → banner `FINISH · KAMU MENANG` / `LAWAN MENANG`; `R` mengulang dari grid.
+- **Garis sendiri.** `AutoPilot` menggeser *seluruh* garis balap ke samping (`laneOffset`), bukan cuma titik tujuannya, jadi enam mobil tidak berebut potongan aspal yang sama. Garis yang sudah digeser dihitung ulang penuh (tangent, side, dan kelengkungan 7-tap) — tanpa itu, kecepatan tikungan dihitung dari radius garis lama.
+- **Saling melihat.** Semua mobil berbagi satu daftar `traffic` (referensi posisi, bukan salinan) yang diperbarui tiap frame. Mobil yang lebih lambat < 12 m di depan memotong target kecepatan (`kecepatan dia + (jarak − 6) × 1,6`), dan mobil sejajar di sisi tujuan menyalip membuat AI memilih sisi lain atau menunggu.
+- **Tidak menabrak dari belakang.** Lawan yang mengejar mobil yang sedang berhenti berhenti sendiri, bukan menabrak.
+- **Papan klasemen.** HUD kanan atas menampilkan 6 baris: posisi, nama, lap (atau selisih meter terhadap pemimpin), dan lap terbaik. Baris pemain disorot. Urutannya: yang finis dulu, lalu lap, lalu odometer.
+- **Rekor lap.** Setiap kali ada mobil (termasuk kamu) mencatat lap tercepat baru, angka itu masuk papan rekor, disimpan di `localStorage` (`rallycross.recordLap.v1`), dan baris **REKOR BARU 30,92s · Bagas** menyala emas selama ~3 detik. Jadi AI memang saling menciptakan rekor, bukan cuma kamu.
+- **Putaran dihitung di garis start**, bukan di ujung spline: `LapCounter` memakai odometer yang tidak pernah wrap.
+- **Terbalik / terlempar** → kembali ke garis balap menghadap arah putaran (bukan ke grid).
+- Selesai 3 lap → banner `FINISH · P1 KAMU` / `FINISH · P1 <nama>`; `R` mengulang dari grid.
 
-Hasil uji headless: lawan menyelesaikan putaran **33,2 s** (kamu 31,1 s), tidak pernah keluar trek, dan jarak terdekat dua mobil sepanjang balapan **8,7 m** (tidak pernah saling tembus).
+Hasil uji headless 6 mobil di trek asli (`LAPS=3`, fisika penuh): **seluruh grid finis dalam 102 s**, jarak terdekat **1,84 m** (0 tabrakan, 0 rescue), lap terbaik 29,92–31,70 s — selisih pemimpin–pemburu cuma 1,8 s. Hasilnya deterministik (dua run identik).
 
-Agar AI bisa secepat itu, tepi trek juga diperbaiki: bahu jalan sekarang punya **bahu datar 2,6 m** di ketinggian aspal sebelum turun ke rumput, jadi roda yang melebar di bibir lompatan tidak lagi menghantam "tebing" dan berhenti mendadak. Joker juga keluar-masuk secara tangensial (bukan kink 40°) supaya mobil tidak terlempar ke pagar saat menyatu kembali.
+## Efek ban
+
+Untuk setiap mobil (`src/fx/`):
+
+- **Jejak ban** (`SkidMarks.ts`) — satu mesh untuk seluruh arena, buffer quad dipakai bergiliran (6000 potong; 2600 di `?quality=low`). Tiap potong ditarik dari tepi tapak ban frame sebelumnya ke frame sekarang, jadi hasilnya strip kontinu yang mengikuti arah ban — bukan decal yang ditempel per titik. Alpha per titik: di aspal pekat, di gravel/rumput tipis dan berwarna debu. Kalau buffer penuh, potongan tertua yang ditimpa (jejak lama memudar sendiri, tanpa biaya per frame). Upload ke GPU dibatasi ke rentang yang berubah saja.
+- **Asap & debu** (`Smoke.ts`) — satu `Points` dengan kolam partikel tetap (480; 220 di low). Partikel lahir dari titik kontak ban, membesar, naik, dan memudar; warna mengikuti jenis permukaan (aspal = asap kelabu, gravel = debu coklat, rumput = debu kehijauan).
+- **Pemicunya fisika, bukan animasi** (`CarEffects.ts`) — semuanya dibaca dari `WheelState`: `vLat` (selip lateral), `slipAngle`, `traction` (ban berputar di tempat saat start), `handbrake`, `surfaceMu`, dan `contactPoint`. Jadi handbrake di aspal mengasapi ban belakang, mobil yang melebar ke gravel menyemburkan debu walau tidak selip, dan pendaratan setelah lompatan mengepulkan debu sesuai lama melayang.
+- **Anggaran per mobil** (2 kepulan/frame) menjamin enam mobil drifting sekaligus tidak membanjiri kolam partikel. Panel → *Lawan* → **hapus jejak ban** membersihkan sisa goresan.
 
 ## Verifikasi
 
@@ -271,8 +291,12 @@ Agar AI bisa secepat itu, tepi trek juga diperbaiki: bahu jalan sekarang punya *
 - `buildTrackColliders()` jalan tanpa DOM, ramp melontarkan mobil lalu mendarat tegak
 - jalur lap (utama + joker) punya jarak yang monoton dan joker memang lebih pendek
 - **AI menyelesaikan satu putaran sendiri** (30 s), tidak keluar tepi trek, tanpa reset
+- jejak ban: quad terkumpul, buffer berputar (tidak tumbuh selamanya), bisa dibersihkan, dan mobil yang diam tidak meninggalkan jejak sama sekali; mobil yang selip + handbrake menghasilkan >10 potong jejak dan asap
+- asap: partikel lahir, hidup, dan habis sesuai umurnya, semuanya di satu buffer tetap
+- papan klasemen: urut finis → lap → odometer, selisih diukur ke pemimpin; papan rekor: lap pertama jadi rekor, lap lebih lambat tidak mencuri rekor, rekor bertahan setelah reload, dan tetap jalan tanpa `localStorage`
+- **grid 6 mobil**: lima lawan finis satu putaran, tidak ada yang melebar > 12 m, tidak ada yang perlu rescue > 2×, jarak terdekat > 1,2 m, dan papan klasemen memuat keenam mobil berurutan
 - penghitung lap menambah tepat satu lap per putaran, odometer cocok dengan panjang trek
-- **lawan AI menyelesaikan putaran** (33 s), tetap di trek, dan dua mobil tidak saling menembus
+- **lawan AI menyelesaikan putaran** (35–38 s), tetap di dekat trek, dan dua mobil tidak saling menembus
 - 9 kamera TV berdiri di luar trek, sutradara memakai ≥5 kamera berbeda, tidak ada shot < 1,6 s, dan mobil yang dibidik tidak pernah lebih dari 220 m
 
 `npm run check:browser` (opsional, perlu Chromium) menambah cek UI: bukaan gas/rem 1:1 (50 %, 85 %, 70 %), gas dan rem saling independen, rem tidak menambah throttle, semuanya menutup saat dilepas, slider setir balik ke tengah, tombol D/R memindah gigi + HUD menampilkan `R` saat mundur, rem tidak membalikkan mobil, dan arah setir cocok dengan layar. Untuk detail visual: lampu rem menguat saat pedal ditekan, sein kiri berkedip sementara kanan tetap mati, repeater HUD menyala, lampu utama menyala, lampu mundur menyala di gigi R, empat hub suspensi berada di rentang travel, dan setir berputar.
@@ -282,8 +306,8 @@ Status terakhir: **semua lolos**.
 ## Batasan / langkah berikutnya
 
 1. **Track sungguhan** — heightmap/trimesh + spline, bukan plane datar (layout-nya sekarang sudah berupa data, jadi tinggal ganti sumbernya).
-2. **Efek** — debu, skidmark, suara mesin (WebAudio), kamera shake.
-3. **AI lawan** — beberapa mobil sekaligus (autopilot-nya sudah ada; tinggal `AutoPilot` + `VehiclePhysics` per mobil, plus logika menyalip).
+2. **Suara** — mesin, ban, tabrakan (WebAudio), plus kamera shake.
+3. **AI** — strategi joker per lap (sudah ada, belum dioptimalkan), dan menyalip di tikungan sempit (sekarang sengaja dihindari).
 4. **Multiplayer** — Rapier headless di server (kode fisika sudah DOM-free).
 5. **Optimasi mobile** — instancing, LOD, KTX2, shadow hanya untuk mobil.
 

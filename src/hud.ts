@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { VehiclePhysics } from './vehicle/VehiclePhysics';
+import type { LapRecords, StandingsRow } from './race/Standings';
 
 const RAD2DEG = 180 / Math.PI;
 const fwd = new THREE.Vector3();
@@ -9,7 +10,10 @@ export class Hud {
   private readonly gearEl = document.getElementById('gear')!;
   private readonly telemEl = document.getElementById('telem')!;
   private readonly autoEl = document.getElementById('auto');
-  private readonly rivalEl = document.getElementById('rival');
+  private readonly boardEl = document.getElementById('board');
+  private readonly standingsEl = document.getElementById('standings');
+  private readonly recordEl = document.getElementById('record');
+  private readonly rows: HTMLElement[] = [];
   private readonly finishEl = document.getElementById('finish');
   private readonly tvEl = document.getElementById('tv');
   private readonly indLeft = document.getElementById('ind-left');
@@ -54,17 +58,66 @@ export class Hud {
   }
 
   /**
-   * Baris status lawan. `gap` dalam meter: positif berarti lawan di depan.
+   * Papan klasemen 6 mobil + rekor lap. Barisnya dibuat sekali (DOM tidak
+   * dibuat ulang tiap frame), lalu teks & urutannya dirapikan di tempat.
    */
-  setRival(on: boolean, lap: number, laps: number, gap: number) {
-    const el = this.rivalEl;
-    if (!el) return;
-    el.classList.toggle('ahead', on && gap <= 0);
-    el.classList.toggle('behind', on && gap > 0);
-    const text = !on
-      ? 'LAWAN nonaktif'
-      : `LAWAN · lap ${Math.min(lap + 1, laps)}/${laps} · ${gap > 0 ? '+' : '−'}${Math.abs(gap).toFixed(0)} m`;
-    if (el.textContent !== text) el.textContent = text;
+  setStandings(
+    rows: readonly StandingsRow[],
+    on: boolean,
+    records: LapRecords,
+    flashRecord: boolean,
+  ) {
+    const board = this.boardEl;
+    const list = this.standingsEl;
+    if (!board || !list) return;
+    board.classList.toggle('hide', !on);
+    if (!on) return;
+
+    while (this.rows.length < rows.length) {
+      const li = document.createElement('li');
+      li.className = 'row';
+      const name = document.createElement('span');
+      name.className = 'who';
+      const time = document.createElement('span');
+      time.className = 'time';
+      li.append(name, time);
+      list.appendChild(li);
+      this.rows.push(li);
+    }
+
+    for (let i = 0; i < this.rows.length; i++) {
+      const el = this.rows[i];
+      const row = rows[i];
+      if (!row) {
+        el.classList.add('hide');
+        continue;
+      }
+      el.classList.remove('hide');
+      el.classList.toggle('me', !!row.isPlayer);
+      el.classList.toggle('lead', row.position === 1);
+      el.style.setProperty('--dot', `#${row.color.toString(16).padStart(6, '0')}`);
+      const best = Number.isFinite(row.bestLap) ? row.bestLap.toFixed(1) : '—';
+      const lapText = row.finished ? 'FIN' : `${Math.min(row.lap + 1, row.laps)}/${row.laps}`;
+      const gap = row.position === 1 ? lapText : `+${row.gap.toFixed(0)} m`;
+      const text = `${row.position} ${row.name}`;
+      const detail = `${gap} · ${best}s`;
+      const who = el.firstElementChild as HTMLElement;
+      const tm = el.lastElementChild as HTMLElement;
+      if (who.textContent !== text) who.textContent = text;
+      if (tm.textContent !== detail) tm.textContent = detail;
+    }
+
+    const rec = this.recordEl;
+    if (rec) {
+      // Saat rekor baru dipecahkan, barisnya berubah jadi pengumuman singkat.
+      const text = !records.hasRecord
+        ? 'REKOR —'
+        : flashRecord
+          ? `REKOR BARU ${records.best.toFixed(2)}s · ${records.holder}`
+          : `REKOR ${records.best.toFixed(2)}s · ${records.holder}`;
+      if (rec.textContent !== text) rec.textContent = text;
+      rec.classList.toggle('fresh', flashRecord);
+    }
   }
 
   /** Overlay kamera TV: muncul hanya saat kamera siaran aktif. */

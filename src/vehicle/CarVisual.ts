@@ -13,6 +13,8 @@ import {
 export interface CarVisualOptions {
   /** False on `?quality=low`: fewer springs/spokes, no roll cage or spot lights. */
   detail?: boolean;
+  /** Warna cat bodi; tiap mobil di grid boleh beda. */
+  paint?: number;
 }
 
 /**
@@ -58,7 +60,7 @@ export class CarVisual {
   constructor(scene: THREE.Scene, phys: VehiclePhysics, opts: CarVisualOptions = {}) {
     const cfg = phys.cfg;
     const detail = opts.detail !== false;
-    const mats = createCarMaterials(detail);
+    const mats = createCarMaterials(detail, opts.paint);
 
     const bw = cfg.halfWidth * 2;
     const bl = cfg.halfLength * 2;

@@ -60,13 +60,15 @@ export interface AutoPilotOptions {
   pedalRate: number;
   /** Seberapa banyak AI memotong apex, 0..1 dari lebar trek. */
   lineCut: number;
+  /** Mau menyalip? Kalau tidak, AI hanya mengikuti mobil di depan. */
+  overtake: boolean;
   /** Ambil joker lap? */
   useJoker: boolean;
 }
 
 export const defaultPilotOptions: AutoPilotOptions = {
   gripTarmac: 8.4,
-  gripGravel: 5.4,
+  gripGravel: 5.0,
   brakeTarmac: 7.0,
   brakeGravel: 4.6,
   horizon: 110,
@@ -82,6 +84,7 @@ export const defaultPilotOptions: AutoPilotOptions = {
   steerRate: 4.5,
   pedalRate: 9,
   lineCut: 0.1,
+  overtake: true,
   useJoker: true,
 };
 
@@ -98,9 +101,54 @@ export type PilotMode = 'drive' | 'reverse' | 'align';
  * tujuan) membuat semua perhitungan lain — kelengkungan, lebar trek, deteksi
  * melebar — tetap konsisten, jadi dua mobil bisa punya lajur masing-masing.
  */
+const UP = new THREE.Vector3(0, 1, 0);
+
 function shiftPath(path: PathSample[], metres: number): PathSample[] {
   if (!metres) return path;
-  return path.map((s) => ({ ...s, pos: s.pos.clone().addScaledVector(s.side, metres) }));
+  const out = path.map((s) => ({ ...s, pos: s.pos.clone().addScaledVector(s.side, metres) }));
+  // Tangen, sisi, dan kelengkungan WAJIB dihitung ulang. Lajur yang digeser ke
+  // dalam tikungan radiusnya lebih kecil; kalau angka lama dipakai, AI
+  // merencanakan kecepatan terlalu tinggi dan melebar keluar tikungan.
+  const n = out.length;
+  const closed = n > 1 && out[0].pos.distanceTo(out[n - 1].pos) < 0.01;
+  const count = closed ? n - 1 : n;
+  const dir = new THREE.Vector3();
+  for (let i = 0; i < count; i++) {
+    const a = out[(i - 1 + count) % count];
+    const b = out[(i + 1) % count];
+    dir.subVectors(b.pos, a.pos);
+    dir.y = 0;
+    if (dir.lengthSq() < 1e-8) continue;
+    dir.normalize();
+    out[i].tangent = dir.clone();
+    out[i].side = new THREE.Vector3().crossVectors(UP, dir).normalize();
+  }
+  for (let i = 0; i < count; i++) {
+    const a = out[(i - 1 + count) % count];
+    const b = out[(i + 1) % count];
+    const chord = a.pos.distanceTo(b.pos);
+    if (chord < 1e-4) continue;
+    const turn = Math.atan2(
+      a.tangent.x * b.tangent.z - a.tangent.z * b.tangent.x,
+      a.tangent.x * b.tangent.x + a.tangent.z * b.tangent.z,
+    );
+    out[i].curvature = -turn / chord;
+  }
+  const rawCurv = out.slice(0, count).map((s) => s.curvature);
+  for (let i = 0; i < count; i++) {
+    let sum = 0;
+    for (let k = -3; k <= 3; k++) sum += rawCurv[(i + k + count) % count];
+    out[i].curvature = sum / 7;
+  }
+  if (closed) {
+    out[n - 1] = {
+      ...out[n - 1],
+      tangent: out[0].tangent.clone(),
+      side: out[0].side.clone(),
+      curvature: out[0].curvature,
+    };
+  }
+  return out;
 }
 
 
@@ -143,6 +191,10 @@ export class AutoPilot {
   private lateralSmooth = 0;
   /** Potongan apex yang sudah dilembutkan, meter. */
   private cutSmooth = 0;
+  /** Geseran lajur untuk menyalip mobil di depan, meter. */
+  private laneShift = 0;
+  /** Ke sisi mana sedang menyalip: -1 kiri, +1 kanan, 0 tidak menyalip. */
+  overtakeSide = 0;
 
   constructor(main: PathSample[], joker: PathSample[], options: Partial<AutoPilotOptions> = {}) {
     this.options = { ...defaultPilotOptions, ...options };
@@ -251,20 +303,111 @@ export class AutoPilot {
     // tapi jangan mengerem keras: rem di tengah tikungan justru melewatkan
     // mobil makin jauh ke luar dan bikin gerakannya patah-patah.
     const wide = Math.abs(this.lateral) / Math.max(s.halfWidth, 1);
-    const off = wide > 1;
+    const off = wide > 1.02;
+    // Tepi trek dijaga pagar beton: melebar 1 m saja sudah berarti menabrak.
+    // Jadi mobil mulai "ditarik" ke garis sebelum benar-benar keluar, bukan
+    // sesudahnya.
+    const recover = wide > 0.88;
     if (off) target = Math.min(target, 9);
-    else if (wide > 0.6) target = Math.min(target, 20);
-    // Mobil di depan: jangan sampai menabrak bagian belakangnya. Jarak ~6 m
-    // dipakai sebagai "ikuti dia", makin jauh batasnya makin longgar.
+    else if (recover) target = Math.min(target, 15);
+    else if (wide > 0.62) target = Math.min(target, 20);
+    // --- lalu lintas: cari celah, jangan cuma menempel di bemper ---
     const fx = Math.sin(yaw);
     const fz = Math.cos(yaw);
+    let blockerGap = Infinity;
+    let blockerSpeed = 0;
+    let blockerSide = 0;
+    /** Mobil yang sedang tepat di samping kita (tidak boleh digeser ke sana). */
+    let besideSide = 0;
     for (const other of others) {
       const ox = other.position.x - car.position.x;
       const oz = other.position.z - car.position.z;
       const dist = Math.hypot(ox, oz);
-      if (dist < 0.01 || dist > 18) continue;
-      if ((ox * fx + oz * fz) / dist < 0.8) continue;
-      target = Math.min(target, Math.max(0, other.speed + (dist - 6) * 1.6));
+      if (dist < 0.01 || dist > 22) continue;
+      const ahead = ox * fx + oz * fz;
+      // Posisi mobil lain di kiri/kanan garis kita: hanya mobil yang benar-benar
+      // di jalur kita yang dianggap menghalangi.
+      const lateral = ox * s.side.x + oz * s.side.z;
+      if (Math.abs(ahead) < 5.5 && Math.abs(lateral) < 3.0) {
+        besideSide = lateral >= 0 ? 1 : -1;
+      }
+      if (ahead / dist < 0.8) continue;
+      if (Math.abs(lateral) > 2.4) continue;
+      if (dist < blockerGap) {
+        blockerGap = dist;
+        blockerSpeed = other.speed;
+        blockerSide = lateral;
+      }
+    }
+
+    // Tikungan di depan (~45 m). Menyalip di tikungan sempit adalah cara
+    // tercepat keluar trek: mobil yang sudah bergeser lajur harus mengubah
+    // arah dengan radius yang sama sekali berbeda. Jadi geseran lajur hanya
+    // dipakai di lurus dan tikungan landai.
+    let cornerAhead = 0;
+    {
+      const n = this.path.length;
+      let k = this.index;
+      let travelled = 0;
+      for (let c = 0; c < 120 && travelled < 45; c++) {
+        travelled += this.steps[k];
+        k = (k + 1) % n;
+        const curv = Math.abs(this.path[k].curvature);
+        if (curv > cornerAhead) cornerAhead = curv;
+      }
+    }
+    const cornerSoon = cornerAhead > 0.013;
+    // Kembali ke garis lebih cepat kalau tikungan sudah dekat.
+    const recentre = cornerSoon ? dt * 6 : dt * 2.4;
+
+    if (blockerGap < Infinity) {
+      const slower = blockerSpeed < speed + 1.5;
+      const close = blockerGap < 12;
+      // Mau menyalip kalau yang di depan lebih lambat, kita sudah dekat, dan
+      // kecepatannya sudah cukup untuk pindah lajur dengan aman. Kalau tidak,
+      // cukup jaga jarak (jangan menabrak bagian belakangnya). Di tikungan
+      // sempit kami tidak pindah lajur: radius yang harus dilalui berubah dan
+      // mobil hampir selalu keluar trek. Menyalip terjadi di lurus.
+      const wantOvertake =
+        o.overtake && !cornerSoon && slower && close && speed > 7 && blockerGap > 3.2;
+      if (wantOvertake) {
+        // Pilih sisi yang lapang: kalau dia di sisi + kita, lewat sisi −.
+        const prefer = blockerSide >= 0 ? -1 : 1;
+        // Ruang dihitung dari tepi trek yang sebenarnya: lajur yang sudah
+        // digeser `laneOffset` juga memakan tempat, ditambah setengah lebar
+        // mobil sebagai margin.
+        const fromCentre = o.laneOffset + this.lateral;
+        const roomPos = s.halfWidth - fromCentre - 1.6;
+        const roomNeg = s.halfWidth + fromCentre - 1.6;
+        let side = prefer > 0 ? (roomPos > 1.6 ? 1 : -1) : roomNeg > 1.6 ? -1 : 1;
+        // Jangan menyalip ke sisi tempat sudah ada mobil sejajar.
+        if (besideSide !== 0 && side === besideSide) side = -side;
+        const room = Math.max(0, side > 0 ? roomPos : roomNeg);
+        if (Math.min(roomPos, roomNeg) < 1.6 && besideSide !== 0) {
+          // Sempit dan ada mobil di samping: lebih baik mengikuti dulu.
+          this.overtakeSide = 0;
+          this.laneShift += clamp(-this.laneShift, -recentre, recentre);
+        } else {
+          this.overtakeSide = side;
+          // Di tikungan geserannya dipersempit: pindah lajur sambil berbelok
+          // berarti mengubah radius, dan itu cara tercepat keluar trek.
+          const shift =
+            Math.min(2.4, Math.max(1.4, Math.abs(blockerSide) + 1.5), room) *
+            (cornerSoon ? 1 : 1);
+          this.laneShift += clamp(side * shift - this.laneShift, -dt * 3.2, dt * 3.2);
+        }
+        // Kecepatan tidak dinaikkan: batas tikungan tetap yang berlaku. Yang
+        // dihilangkan hanya "rem karena ada mobil di depan", supaya kita
+        // benar-benar lewat, bukan menempel di belakangnya sepanjang lurus.
+      } else {
+        this.overtakeSide = 0;
+        this.laneShift += clamp(-this.laneShift, -recentre, recentre);
+        // Jarak ~6 m dipakai sebagai "ikuti dia", makin jauh batasnya longgar.
+        target = Math.min(target, Math.max(0, blockerSpeed + (blockerGap - 6) * 1.6));
+      }
+    } else {
+      this.overtakeSide = 0;
+      this.laneShift += clamp(-this.laneShift, -recentre, recentre);
     }
     target *= o.pace;
 
@@ -293,7 +436,7 @@ export class AutoPilot {
     // Di luar trek: jangan mengejar titik jauh ke depan. Titik jauh membuat
     // sudutnya kecil, jadi mobil justru jalan lurus makin jauh. Tuju titik
     // dekat di garis supaya sudutnya besar dan mobil benar-benar kembali.
-    const look = off ? clamp(4 + speed * 0.3, 5, 11) : look0 * (0.45 + 0.55 * tight);
+    const look = recover ? clamp(4 + speed * 0.3, 5, 11) : look0 * (0.45 + 0.55 * tight);
     const aimIndex = this.indexAt(this.index, look);
     const aim = this.path[aimIndex];
     // Garis balap: potong sedikit ke sisi dalam tikungan supaya jalurnya
@@ -305,13 +448,17 @@ export class AutoPilot {
     this.cutSmooth += (cutWanted - this.cutSmooth) * clamp(dt * 3, 0, 1);
     // Lajur yang sudah digeser (mobil rival) tidak ikut memotong apex: dua
     // geseran sekaligus mendorong garisnya keluar trek di tikungan sempit.
-    const cut = off || Math.abs(o.laneOffset) > 0.01 ? 0 : this.cutSmooth;
+    const cut = recover || Math.abs(o.laneOffset) > 0.01 ? 0 : this.cutSmooth;
+    // Geseran menyalip: hanya dipakai kalau mobil masih di dalam trek, dan
+    // tidak pernah lebih lebar dari ruang yang tersisa di sisi itu.
+    const passRoom = Math.max(0.8, s.halfWidth - Math.abs(o.laneOffset) - 1.8);
+    const pass = recover ? 0 : clamp(this.laneShift, -passRoom, passRoom);
     // Tarik titik tujuan sedikit ke arah posisi mobil sekarang (filter dulu
     // supaya tidak bergetar saat sample terdekat berpindah) agar koreksi besar
     // tetap mulus, tidak menyentak setir ke arah sebaliknya. Saat di luar trek
     // tarikan ini dimatikan: yang dibutuhkan justru belok penuh ke garis.
-    const pull = off ? 0 : clamp(this.lateralSmooth, -8, 8) * 0.15;
-    const off2 = pull + cut;
+    const pull = recover ? 0 : clamp(this.lateralSmooth, -8, 8) * 0.15;
+    const off2 = pull + cut + pass;
     const dx = aim.pos.x + aim.side.x * off2 - car.position.x;
     const dz = aim.pos.z + aim.side.z * off2 - car.position.z;
     const reach = Math.hypot(dx, dz);
