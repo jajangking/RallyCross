@@ -33,6 +33,9 @@ export const PALETTE = {
   leafDark: 0x2f6f2c,
 } as const;
 
+/** Arah matahari (dipakai light rig, bayangan, dan sprite matahari). */
+export const SUN_DIRECTION = new THREE.Vector3(45, 66, 26).normalize();
+
 let ramp: THREE.DataTexture | null = null;
 
 /**
@@ -42,7 +45,9 @@ let ramp: THREE.DataTexture | null = null;
  */
 export function toonRamp(): THREE.DataTexture {
   if (ramp) return ramp;
-  const steps = [96, 168, 224, 255];
+  // Lima langkah: cukup posterisasi untuk gaya kartun, tapi tidak "pita" kasar
+  // seperti 3–4 langkah.
+  const steps = [92, 140, 186, 224, 252];
   const data = new Uint8Array(steps.length * 4);
   for (let i = 0; i < steps.length; i++) {
     data[i * 4 + 0] = steps[i];
@@ -123,6 +128,68 @@ export function toonFrom(source: THREE.Material, paint?: THREE.Color): THREE.Mes
   return out;
 }
 
+/**
+ * Rig matahari: satu directional light + satu hemisphere, plus shadow map yang
+ * **mengikuti mobil** (frustum orto sempit ±48 m) supaya bayangan tetap tajam
+ * tanpa harus merender seluruh arena tiap frame.
+ *
+ * Tidak menyentuh DOM, jadi bisa diuji di Node. `follow()` dipanggil tiap frame.
+ */
+export interface SunRig {
+  readonly sun: THREE.DirectionalLight;
+  readonly hemi: THREE.HemisphereLight;
+  /** Shadow map aktif? (di HP lemah sengaja dimatikan.) */
+  readonly shadows: boolean;
+  /** Geser frustum bayangan supaya selalu di sekitar titik fokus. */
+  follow(focus: THREE.Vector3): void;
+}
+
+export function createSunRig(scene: THREE.Scene, lowQuality = false): SunRig {
+  const hemi = new THREE.HemisphereLight(0xdaf0ff, 0x6f7f4a, 0.72);
+  scene.add(hemi);
+
+  const sun = new THREE.DirectionalLight(0xfff2d6, 1.55);
+  const direction = SUN_DIRECTION;
+  sun.position.copy(direction).multiplyScalar(120);
+  scene.add(sun);
+  scene.add(sun.target);
+
+  // Sedikit cahaya pantul dari bawah: bagian gelap tidak menjadi hitam pekat.
+  const bounce = new THREE.DirectionalLight(0x9fd0ff, 0.18);
+  bounce.position.set(-40, 22, -55);
+  scene.add(bounce);
+
+  // Di HP lemah bayangan asli terlalu mahal (satu pass penuh per frame),
+  // jadi di sana tetap pakai bayangan blob.
+  const shadows = !lowQuality;
+  if (shadows) {
+    const size = lowQuality ? 1024 : 2048;
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(size, size);
+    const span = lowQuality ? 34 : 48;
+    sun.shadow.camera.left = -span;
+    sun.shadow.camera.right = span;
+    sun.shadow.camera.top = span;
+    sun.shadow.camera.bottom = -span;
+    sun.shadow.camera.near = 1;
+    sun.shadow.camera.far = 260;
+    // Ukuran texel shadow = 2·span / mapSize ≈ 4,7 cm, jadi normalBias cukup
+    // sebesar itu; lebih besar bikin bayangan "lepas" dari mobil.
+    sun.shadow.bias = -0.0004;
+    sun.shadow.normalBias = 0.06;
+    sun.shadow.camera.updateProjectionMatrix();
+  }
+
+  const follow = (focus: THREE.Vector3) => {
+    // Arah matahari konstan; hanya frustum-nya yang ikut mobil.
+    sun.target.position.copy(focus);
+    sun.target.updateMatrixWorld();
+    sun.position.copy(focus).addScaledVector(direction, 120);
+  };
+
+  return { sun, hemi, shadows, follow };
+}
+
 /** Bayangan mobil versi kartun: lingkaran hitam lembut, bukan shadow map. */
 export function createBlobShadow(radius = 1.45, opacity = 0.34): THREE.Mesh {
   const canvas = document.createElement('canvas');
@@ -154,6 +221,34 @@ export function createBlobShadow(radius = 1.45, opacity = 0.34): THREE.Mesh {
 }
 
 /**
+ * Matahari: satu sprite (selalu menghadap kamera) dengan gradasi radial.
+ * Murah — tidak perlu bloom pass — tapi langsung memberi kesan "ada matahari".
+ */
+export function createSunSprite(radius = 340): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 128;
+  const ctx = canvas.getContext('2d')!;
+  const g = ctx.createRadialGradient(64, 64, 2, 64, 64, 64);
+  g.addColorStop(0, 'rgba(255,255,250,1)');
+  g.addColorStop(0.18, 'rgba(255,250,225,0.95)');
+  g.addColorStop(0.42, 'rgba(255,238,190,0.35)');
+  g.addColorStop(1, 'rgba(255,235,190,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, fog: false }),
+  );
+  sprite.scale.setScalar(radius * 0.16);
+  sprite.position.copy(SUN_DIRECTION).multiplyScalar(radius * 0.82);
+  sprite.name = 'sun';
+  sprite.renderOrder = -1;
+  return sprite;
+}
+
+/**
  * Langit kartun: kubah dengan gradasi dua warna. Satu draw call, tanpa
  * pencahayaan, dan tidak terkena kabut (kalau terkena, horizon jadi abu-abu).
  */
@@ -163,8 +258,11 @@ export function createSky(top: number, horizon: number, radius = 520): THREE.Mes
   canvas.height = 128;
   const ctx = canvas.getContext('2d')!;
   const g = ctx.createLinearGradient(0, 0, 0, 128);
-  g.addColorStop(0, new THREE.Color(top).getStyle());
-  g.addColorStop(0.62, new THREE.Color(top).lerp(new THREE.Color(horizon), 0.55).getStyle());
+  const deep = new THREE.Color(top).multiplyScalar(0.82);
+  g.addColorStop(0, deep.getStyle());
+  g.addColorStop(0.28, new THREE.Color(top).getStyle());
+  g.addColorStop(0.6, new THREE.Color(top).lerp(new THREE.Color(horizon), 0.5).getStyle());
+  g.addColorStop(0.82, new THREE.Color(top).lerp(new THREE.Color(horizon), 0.85).getStyle());
   g.addColorStop(1, new THREE.Color(horizon).getStyle());
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 2, 128);

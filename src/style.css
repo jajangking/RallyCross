@@ -35,7 +35,36 @@ body {
   height: 100%;
 }
 
+/**
+ * "Grade" sinematik di atas canvas: vignette lembut + sedikit hangat di tengah.
+ * Hanya gradien CSS — nol biaya GPU, tapi langsung menghilangkan kesan render
+ * mentah (sudut frame gelap, mata diarahkan ke tengah).
+ */
+#grade {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  background:
+    radial-gradient(115% 95% at 50% 42%, rgba(255, 214, 150, 0.07) 0%, rgba(255, 214, 150, 0) 48%),
+    radial-gradient(125% 105% at 50% 46%, rgba(0, 0, 0, 0) 52%, rgba(4, 9, 16, 0.36) 100%);
+}
+
+body.is-low #grade {
+  display: none;
+}
+
 /* ---------- HUD ---------- */
+
+/* Semua overlay HUD di atas lapisan grade (#grade z-index 1). */
+#hud,
+#board,
+#help,
+#tv,
+#finish,
+#boot {
+  z-index: 4;
+}
 
 #hud {
   position: fixed;

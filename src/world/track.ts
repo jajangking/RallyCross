@@ -186,6 +186,17 @@ function asphaltTexture() {
     for (let i = 0; i < 400; i++) {
       ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
     }
+    // Dua jalur karet ban (kiri/kanan) — dipanggang ke tekstur, jadi tidak ada
+    // mesh tambahan, tidak ada z-fighting, dan ikut menyempit di tikungan.
+    for (const centre of [0.29, 0.71]) {
+      const half = 0.15;
+      const grad = ctx.createLinearGradient((centre - half) * size, 0, (centre + half) * size, 0);
+      grad.addColorStop(0, 'rgba(22,26,31,0)');
+      grad.addColorStop(0.5, 'rgba(22,26,31,0.4)');
+      grad.addColorStop(1, 'rgba(22,26,31,0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect((centre - half) * size, 0, half * 2 * size, size);
+    }
   }, 256, 1);
 }
 
@@ -213,6 +224,8 @@ function gravelTexture() {
 
 function grassTexture() {
   // Rumput: dua garis potong bergantian — pola khas lapangan di game arcade.
+  // `repeat` 28 = satu petak ±30 m di tanah 840 m; tanpa ini garis potongnya
+  // melebar sampai 200 m dan tanahnya terlihat seperti karpet rata.
   return canvasTexture((ctx, size) => {
     ctx.fillStyle = '#74b446';
     ctx.fillRect(0, 0, size, size);
@@ -223,7 +236,7 @@ function grassTexture() {
     for (let i = 0; i < 350; i++) {
       ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
     }
-  }, 256, 1);
+  }, 256, 28);
 }
 
 function kerbTexture() {
@@ -530,8 +543,30 @@ function mergeStaticProps(scene: THREE.Scene) {
     const single = new THREE.Mesh(merged, material);
     single.name = `merged:${material.name || material.type}`;
     single.matrixAutoUpdate = false;
+    // Penting untuk shadow map: hasil gabungan harus tetap membuang/menerima
+    // bayangan seperti mesh asalnya, kalau tidak tribun & gantry kehilangan
+    // bayangannya.
+    single.castShadow = meshes.some((m) => m.castShadow);
+    single.receiveShadow = meshes.some((m) => m.receiveShadow);
     scene.add(single);
   }
+}
+
+/** Geometri penonton (badan + kepala) dipakai bersama oleh semua tribun. */
+let spectatorGeo: THREE.BufferGeometry | null = null;
+const spectatorColors = [0xd94f4f, 0x3f77c9, 0xe8c04a, 0xe8eef5, 0x4fae7a, 0xc76fa8, 0xf08a3c, 0x8f7fd6];
+
+function spectatorGeometry(): THREE.BufferGeometry {
+  if (spectatorGeo) return spectatorGeo;
+  const body = new THREE.BoxGeometry(0.34, 0.46, 0.28);
+  body.translate(0, 0.23, 0);
+  const head = new THREE.SphereGeometry(0.125, 6, 5);
+  head.translate(0, 0.58, 0);
+  const merged = mergeGeometries([body.toNonIndexed(), head.toNonIndexed()], false);
+  body.dispose();
+  head.dispose();
+  spectatorGeo = merged ?? new THREE.BufferGeometry();
+  return spectatorGeo;
 }
 
 export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandle {
@@ -591,7 +626,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   const white = toon({ color: PALETTE.kerbWhite });
   for (const sign of [-1, 1]) {
     const line = stripRibbon(MAIN, (s) => sign * (s.halfWidth - 0.32), 0.16, 0.016);
-    scene.add(new THREE.Mesh(ribbonGeometry(line, false), white));
+    scene.add(new THREE.Mesh(ribbonGeometry(line), white));
   }
 
   /* ---------------- start / finish ---------------- */
@@ -657,7 +692,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
 
   /* ---------------- crash barrier + catch fencing ---------------- */
   const wallMat = toon({ color: PALETTE.barrier, side: THREE.DoubleSide });
-  scene.add(new THREE.Mesh(ribbonGeometry(OUTER_FENCE, false), wallMat));
+  scene.add(new THREE.Mesh(ribbonGeometry(OUTER_FENCE), wallMat));
 
   const fenceTex = canvasTexture((ctx, size) => {
     ctx.clearRect(0, 0, size, size);
@@ -687,7 +722,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
     side: THREE.DoubleSide,
     depthWrite: false,
   });
-  scene.add(new THREE.Mesh(ribbonGeometry(raiseBand(OUTER_FENCE, WALL_HEIGHT, FENCE_TOP), false), meshFenceMat));
+  scene.add(new THREE.Mesh(ribbonGeometry(raiseBand(OUTER_FENCE, WALL_HEIGHT, FENCE_TOP)), meshFenceMat));
 
   const jokerWallMat = toon({
     color: 0xe6e9ee,
@@ -695,7 +730,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
     side: THREE.DoubleSide,
   });
   for (const wall of JOKER_WALLS) {
-    scene.add(new THREE.Mesh(ribbonGeometry(wall, false), jokerWallMat));
+    scene.add(new THREE.Mesh(ribbonGeometry(wall), jokerWallMat));
   }
 
   /* ---------------- sponsor banners on the barriers ---------------- */
@@ -818,6 +853,8 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   /* ---------------- grandstands ---------------- */
   const standMat = toon({ color: 0x39414b, roughness: 0.85 });
   const crowdMat = toon({ map: crowd, roughness: 0.9 });
+  // Warna penonton diambil dari `instanceColor`, jadi materialnya putih.
+  const fanMat = toon({ color: 0xffffff });
   const makeStand = (length: number, rows: number) => {
     const group = new THREE.Group();
     for (let io = 0; io < rows; io++) {
@@ -844,6 +881,39 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
       legFront.position.set(sign * (length / 2 - 0.4), (height + 2.1) / 2, 0.6);
       group.add(legFront);
     }
+
+    // Penonton 3D sungguhan di tiap baris (instanced: 1 draw call per tribun).
+    // Tekstur kerumunan tetap dipasang di belakang sebagai latar.
+    const spacing = 0.62;
+    const perRow = Math.max(4, Math.floor((length - 1) / spacing));
+    const fans = new THREE.InstancedMesh(spectatorGeometry(), fanMat, perRow * rows);
+    fans.castShadow = false;
+    fans.receiveShadow = true;
+    let index = 0;
+    const matrix = new THREE.Matrix4();
+    const quat = new THREE.Quaternion();
+    const scale = new THREE.Vector3(1, 1, 1);
+    const pos = new THREE.Vector3();
+    const color = new THREE.Color();
+    for (let io = 0; io < rows; io++) {
+      for (let i = 0; i < perRow; i++) {
+        pos.set(
+          -(length - 1) / 2 + 0.3 + i * spacing + (Math.random() - 0.5) * 0.16,
+          0.55 + io * 0.55,
+          -io * 1.5 + 0.05 + (Math.random() - 0.5) * 0.2,
+        );
+        quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), (Math.random() - 0.5) * 0.6);
+        const s2 = 0.92 + Math.random() * 0.22;
+        scale.set(s2, 0.9 + Math.random() * 0.2, s2);
+        fans.setMatrixAt(index, matrix.compose(pos, quat, scale));
+        color.setHex(spectatorColors[Math.floor(Math.random() * spectatorColors.length)]);
+        fans.setColorAt(index, color);
+        index++;
+      }
+    }
+    fans.instanceMatrix.needsUpdate = true;
+    if (fans.instanceColor) fans.instanceColor.needsUpdate = true;
+    group.add(fans);
     return group;
   };
 
@@ -1069,6 +1139,104 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   trunks.instanceMatrix.needsUpdate = true;
   crowns.instanceMatrix.needsUpdate = true;
   scene.add(trunks, crowns);
+
+  /* ---------------- rumput liar + bukit + awan (kedalaman) ---------------- */
+  {
+    // Rumpun rumput di tepi: menjaga permukaan rumput tidak terlihat seperti
+    // karpet rata kalau dilihat dari kamera heli.
+    const tuftGeo = new THREE.ConeGeometry(0.24, 0.55, 4);
+    const tuftMat = toon({ color: 0x53953a });
+    const tuftCount = detail ? 1100 : 300;
+    const tufts = new THREE.InstancedMesh(tuftGeo, tuftMat, tuftCount);
+    tufts.castShadow = false;
+    let placedTufts = 0;
+    let guardTuft = 0;
+    while (placedTufts < tuftCount && guardTuft++ < 12000) {
+      const angle = Math.random() * Math.PI * 2;
+      const radius = 26 + Math.random() * 190;
+      const x = trackCentre.x + Math.cos(angle) * radius;
+      const z = trackCentre.z + Math.sin(angle) * radius * 0.9;
+      if (!farFromTrack(x, z, 9)) continue;
+      const h = 0.7 + Math.random() * 0.9;
+      quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * Math.PI * 2);
+      m4.compose(
+        new THREE.Vector3(x, 0.24 * h, z),
+        quat,
+        new THREE.Vector3(h, h, h),
+      );
+      tufts.setMatrixAt(placedTufts, m4);
+      placedTufts++;
+    }
+    tufts.count = placedTufts;
+    tufts.instanceMatrix.needsUpdate = true;
+    scene.add(tufts);
+
+    // Dua lapis bukit di horizon: dalam (kehijauan berkabut) dan luar (kebiruan).
+    // Tanpa ini, dunia terlihat seperti piringan rumput dengan tepi.
+    const hillRings: Array<{ radius: number; color: number; count: number; tall: number }> = [
+      { radius: 286, color: 0x7fa586, count: 26, tall: 34 },
+      { radius: 330, color: 0xa8c6d0, count: 22, tall: 52 },
+    ];
+    for (const ring of hillRings) {
+      const hillMat = toon({ color: ring.color, fog: false });
+      const hills = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 7), hillMat, ring.count);
+      hills.castShadow = false;
+      hills.receiveShadow = false;
+      for (let i = 0; i < ring.count; i++) {
+        const angle = (i / ring.count) * Math.PI * 2 + Math.random() * 0.12;
+        const radius = ring.radius * (0.9 + Math.random() * 0.22);
+        const wide = 38 + Math.random() * 52;
+        const tall = ring.tall * (0.55 + Math.random() * 0.8);
+        quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * Math.PI * 2);
+        m4.compose(
+          new THREE.Vector3(
+            trackCentre.x + Math.cos(angle) * radius,
+            -8,
+            trackCentre.z + Math.sin(angle) * radius * 0.9,
+          ),
+          quat,
+          new THREE.Vector3(wide, tall, wide * (0.7 + Math.random() * 0.6)),
+        );
+        hills.setMatrixAt(i, m4);
+      }
+      hills.instanceMatrix.needsUpdate = true;
+      scene.add(hills);
+    }
+
+    // Awan kartun: gumpalan bola pipih (bukan billboard, jadi tidak perlu
+    // di-orientasi tiap frame) di ketinggian 85–125 m.
+    const cloudMat = toon({ color: 0xffffff, fog: false });
+    const puffGeo = new THREE.SphereGeometry(1, 9, 7);
+    const clusters = detail ? 7 : 3;
+    const puffs = new THREE.InstancedMesh(puffGeo, cloudMat, clusters * 6);
+    let puffIndex = 0;
+    for (let c = 0; c < clusters; c++) {
+      const angle = Math.random() * Math.PI * 2;
+      const radius = 165 + Math.random() * 155;
+      const cx = trackCentre.x + Math.cos(angle) * radius;
+      const cz = trackCentre.z + Math.sin(angle) * radius * 0.9;
+      const cy = 118 + Math.random() * 42;
+      const spread = 9 + Math.random() * 7;
+      for (let p = 0; p < 6; p++) {
+        const scale = (4.5 + Math.random() * 5) * (p === 0 ? 1.5 : 1);
+        quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * Math.PI * 2);
+        m4.compose(
+          new THREE.Vector3(
+            cx + (Math.random() - 0.5) * spread * 2,
+            cy + (Math.random() - 0.5) * spread * 0.5,
+            cz + (Math.random() - 0.5) * spread * 2,
+          ),
+          quat,
+          new THREE.Vector3(scale, scale * 0.5, scale * 0.9),
+        );
+        puffs.setMatrixAt(puffIndex++, m4);
+      }
+    }
+    puffs.count = puffIndex;
+    puffs.instanceMatrix.needsUpdate = true;
+    puffs.frustumCulled = false;
+    scene.add(puffs);
+  }
 
   /* ---------------- joker signs ---------------- */
   const jokerPoint = pointAt(MAIN, MAIN[nearestSample(MAIN, JOKER_START)].distance - 14);

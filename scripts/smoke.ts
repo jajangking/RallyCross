@@ -18,6 +18,7 @@ import { SmokePuffs } from '../src/fx/Smoke';
 import { CarEffects } from '../src/fx/CarEffects';
 import { toon, toonFrom, toonRamp, PALETTE } from '../src/world/style';
 import { Helicopter } from '../src/world/Heli';
+import { createSunRig } from '../src/world/style';
 import { CameraRig } from '../src/camera';
 import { TRACK_BLOCKERS, type PropBox } from '../src/world/track';
 
@@ -496,8 +497,8 @@ async function run() {
   console.log('\n— gaya kartun (material) —');
   const ramp = toonRamp();
   check(
-    ramp.image.width === 4 && ramp.image.height === 1,
-    'cel-shading ramp has four hard steps',
+    ramp.image.width === 5 && ramp.image.height === 1,
+    'cel-shading ramp has five hard steps',
     `${ramp.image.width}x${ramp.image.height} px, nearest filter`,
   );
   check(ramp.minFilter === THREE.NearestFilter, 'the ramp does not blur', 'NearestFilter');
@@ -802,6 +803,35 @@ async function run() {
   check(used.size >= 5, 'the director cuts between several cameras', `${used.size} cameras, ${cuts} cuts`);
   check(minGap > 1.4, 'cameras never flicker', `shortest shot ${minGap.toFixed(1)} s`);
   check(worst < 220, 'the framed car is never absurdly far away', `worst ${worst.toFixed(0)} m`);
+
+  console.log('\n— bayangan & cahaya —');
+  {
+    const scene = new THREE.Scene();
+    const high = createSunRig(scene, false);
+    const low = createSunRig(new THREE.Scene(), true);
+    check(high.shadows && !low.shadows, 'shadow maps are off on weak hardware', `high ${high.shadows}, low ${low.shadows}`);
+    check(
+      high.sun.shadow.mapSize.x === 2048 && high.sun.castShadow && !low.sun.castShadow,
+      'the shadow map is sized for the device and off in the low preset',
+      `high ${high.sun.shadow.mapSize.x}², low castShadow ${low.sun.castShadow}`,
+    );
+    const span = high.sun.shadow.camera.right - high.sun.shadow.camera.left;
+    check(span <= 120, 'the shadow frustum is tight, not arena-wide', `${span.toFixed(0)} m across`);
+    const focus = new THREE.Vector3(40, 2, -30);
+    high.follow(focus);
+    check(
+      high.sun.target.position.distanceTo(focus) < 0.001 &&
+        high.sun.position.distanceTo(focus) > 80 &&
+        high.sun.position.y > focus.y,
+      'the shadow frustum follows the car and the sun stays up',
+      `${high.sun.position.distanceTo(focus).toFixed(0)} m from the car`,
+    );
+    // arahnya harus tetap sama walau targetnya pindah (= tidak ada matahari goyang)
+    const before = high.sun.position.clone().sub(focus).normalize();
+    high.follow(focus.clone().add(new THREE.Vector3(60, 0, 30)));
+    const after = high.sun.position.clone().sub(focus.clone().add(new THREE.Vector3(60, 0, 30))).normalize();
+    check(before.distanceTo(after) < 1e-6, 'the sun direction never moves', 'constant');
+  }
 
   console.log('\n— helikopter kamera udara —');
   const rig = new CameraRig(16 / 9, BROADCAST_SPOTS);

@@ -1,6 +1,6 @@
 # RallyCross — Vehicle Physics Prototype
 
-Prototipe **mobil rally 3D di web** (three.js + Rapier) dengan gaya **kartun** (cel shading, langit gradasi, bayangan blob): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **grid 6 mobil** (kamu + 5 lawan AI) yang balapan 3 lap, **jejak ban + asap/debu** dari ban yang benar-benar selip, papan klasemen langsung, **9 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI, dan **helikopter siaran** yang gambar udaranya ikut masuk ke siaran TV. Belum ada multiplayer.
+Prototipe **mobil rally 3D di web** (three.js + Rapier) dengan gaya **kartun sinematik** (cel shading, bayangan matahari asli, langit berlapis, tribun penuh penonton): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **grid 6 mobil** (kamu + 5 lawan AI) yang balapan 3 lap, **jejak ban + asap/debu** dari ban yang benar-benar selip, papan klasemen langsung, **9 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI, dan **helikopter siaran** yang gambar udaranya ikut masuk ke siaran TV. Belum ada multiplayer.
 
 ## Jalanin
 
@@ -293,12 +293,26 @@ Seluruh arena sekarang bergaya kartun (`src/world/style.ts`), dan itu sekaligus
 cara paling murah untuk merender:
 
 - **Cel shading** — semua material trek, props, dan mobil memakai
-  `MeshToonMaterial` dengan satu gradasi 4 langkah (`NearestFilter`, jadi
-  batas terang/gelapnya tajam). Material bawaan model GLB ikut dikonversi saat
-  dimuat (warna, peta, dan transparansinya dipertahankan).
-- **Tanpa shadow map** — bayangan diganti **blob** (satu bidang gradasi radial
-  di bawah tiap mobil, ikut mengecil/menghilang saat mobil terbang). Satu pass
-  shadow 2048² untuk seluruh arena jauh lebih mahal daripada enam lingkaran.
+  `MeshToonMaterial` dengan satu gradasi **5 langkah** (`NearestFilter`, jadi
+  batas terang/gelapnya tegas tapi tidak "pita" kasar). Material bawaan model
+  GLB ikut dikonversi saat dimuat (warna, peta, dan transparansinya
+  dipertahankan).
+- **Shadow map sungguhan, murah** — satu directional light dengan frustum orto
+  **±48 m yang mengikuti mobil**, jadi bayangan mobil/tribun/gantry tajam dan
+  pass bayangannya tidak pernah selebar arena: hanya **12 mesh / 9.1 ribu
+  segitiga** yang dirender ke peta 2048² (2048² desktop, blob di HP lemah).
+  `mergeStaticProps` meneruskan `castShadow`/`receiveShadow` mesh asalnya, kalau
+  tidak hasil gabungan kehilangan bayangannya.
+- **Langit berlapis** — kubah gradasi 4 titik + **sprite matahari**, **dua
+  lapis bukit** di horizon (kehijauan berkabut & kebiruan), **awan kartun**
+  (instanced, satu draw call), dan **1.100 rumpun rumput** di tepi trek supaya
+  tanah tidak terlihat seperti karpet rata.
+- **Detail trek** — jalur karet ban dipanggang ke tekstur aspal (bukan overlay
+  transparan: nol z-fighting, nol draw call ekstra), tekstur rumput diulang tiap
+  30 m (sebelumnya satu petak menutupi 840 m!), dan **±540 penonton 3D** di
+  barisan tribun (instanced, 1 draw call per tribun, warna jersey acak).
+- **Grade sinematik** — lapisan CSS vignette + hangat di tengah (`#grade`), dan
+  tone mapping netral dengan exposure 1,06.
 - **Tanpa environment map** — `PMREMGenerator` + `RoomEnvironment` dihapus:
   material toon tidak butuh pantulan, dan render kubah lingkungan saat boot
   termasuk biaya terbesar di HP.
@@ -307,10 +321,11 @@ cara paling murah untuk merender:
   semuanya, padahal lampu emissive sudah cukup.
 - **Draw call digabung** — ~190 mesh kecil (tiang, tribun, spanduk, tiang
   lampu) yang berbagi material digabung jadi satu per material saat trek
-  dibangun: **195 → 55 draw call** untuk seluruh arena, dengan triangle yang
-  persis sama (22.562). Bendera tetap terpisah karena dianimasikan per mesh.
+  dibangun: **±61 draw call / 68 ribu segitiga** untuk seluruh arena (termasuk
+  penonton, rumput, bukit, dan awan yang instanced). Bendera tetap terpisah
+  karena dianimasikan per mesh.
 - **Kabut & far plane** dipendekkan (120–330 m, kamera 400 m) supaya props di
-  kejauhan tidak ikut digambar; **pixel ratio** dibatasi 1,5× (dari 2×) dan
+  kejauhan tidak ikut digambar; **pixel ratio** 2× di desktop, 1,5× di HP, dan
   anisotropi tekstur 4×.
 - **Mode ringan otomatis** — di HP (pointer kasar, sisi terpendek < 620 px)
   game mulai tanpa anti-alias, pixel ratio 1×, dan 90 pohon saja.
@@ -337,7 +352,7 @@ cara paling murah untuk merender:
 - jalur lap (utama + joker) punya jarak yang monoton dan joker memang lebih pendek
 - **AI menyelesaikan satu putaran sendiri** (30 s), tidak keluar tepi trek, tidak pernah terbalik
 - mobil terbalik: AI mengirim gas/rem/setir nol (tidak ada reset), lalu menyetir lagi begitu rodanya kembali ke bawah
-- material kartun: gradasi cel shading 4 langkah dipakai bersama, `toon()` mengabaikan kunci PBR lama, dan material model GLB jadi toon tanpa kehilangan warna/transparansi
+- material kartun: gradasi cel shading 5 langkah dipakai bersama, `toon()` mengabaikan kunci PBR lama, dan material model GLB jadi toon tanpa kehilangan warna/transparansi
 - jejak ban: quad terkumpul, buffer berputar (tidak tumbuh selamanya), bisa dibersihkan, dan mobil yang diam tidak meninggalkan jejak sama sekali; mobil yang selip + handbrake menghasilkan >10 potong jejak dan asap
 - asap: partikel lahir, hidup, dan habis sesuai umurnya, semuanya di satu buffer tetap
 - papan klasemen: urut finis → lap → odometer, selisih diukur ke pemimpin; papan rekor: lap pertama jadi rekor, lap lebih lambat tidak mencuri rekor, rekor bertahan setelah reload, dan tetap jalan tanpa `localStorage`
