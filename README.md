@@ -220,7 +220,7 @@ Cara sutradaranya bekerja (`src/camera/BroadcastDirector.ts`):
 - Kamera idealnya membidik mobil **±22 m sebelum kamera itu**; plus penalti untuk sudut pandang yang melenceng dan untuk kamera yang mobilnya terlalu jauh (kelihatan kecil di seberang tikungan).
 - Gambar dipotong paling cepat **1,6 s** sekali, dengan histeresis supaya tidak berkedip-kedip bolak-balik. Uji simulasi: **16 potongan dalam 2 putaran, memakai 7 kamera berbeda**.
 - Saat potong (`cut`) posisi kamera langsung pindah, sementara arah bidiknya dilarutkan halus — persis kesan "ganti kamera" di TV. Lensa otomatis **tele saat mobil jauh** (fov 16°) dan **lebar saat lewat dekat** (62°).
-- Overlay **`● LIVE · T3`** muncul di atas layar saat kamera siaran aktif.
+- Overlay **`● LIVE · T3`** muncul saat kamera siaran aktif. Mau lihat semua sudutnya? Panel → *Camera* → **kamera berikutnya** (sutradara otomatis berhenti 6 detik, lalu jalan lagi).
 - Di mode tontonan, kamera mengikuti **pemimpin balapan**; kalau kedua mobil berdekatan (< 30 m), titik bidiknya digeser ke tengah supaya duelnya tetap satu frame.
 
 ## Lawan AI (1 mobil)

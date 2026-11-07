@@ -45,6 +45,14 @@ export class CameraRig {
     return this.currentMode;
   }
 
+  /** Pindah ke kamera TV berikutnya (manual) dan aktifkan mode TV. */
+  nextCamera(): string | null {
+    const spot = this.director?.next();
+    if (!spot) return null;
+    this.setMode('tv');
+    return spot.name;
+  }
+
   /** Nama kamera TV yang sedang dipakai, mis. "T3". */
   get broadcastName(): string | null {
     return this.currentMode === 'tv' ? (this.director?.current?.name ?? null) : null;

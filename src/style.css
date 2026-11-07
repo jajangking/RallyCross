@@ -207,7 +207,7 @@ body {
 
 #tv {
   position: fixed;
-  top: max(12px, env(safe-area-inset-top));
+  top: calc(max(12px, env(safe-area-inset-top)) + 50px);
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -226,10 +226,6 @@ body {
   white-space: nowrap;
   pointer-events: none;
   transition: opacity 0.25s ease;
-}
-
-body:not(.is-touch) #tv {
-  top: 54px;
 }
 
 #tv.hide {

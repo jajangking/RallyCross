@@ -328,6 +328,8 @@ async function boot() {
     .add(camModes, 'mode', ['chase', 'hood', 'tv'])
     .name('mode kamera')
     .onChange((v: string) => cameraRig.setMode(v as 'chase' | 'hood' | 'tv'));
+  // Panel: lompat ke kamera TV berikutnya (berguna untuk mengecek semua sudut).
+  fCam.add({ next: () => void cameraRig.nextCamera() }, 'next').name('kamera berikutnya');
   spectateToggle = fCam
     .add(spectate, 'on')
     .name('tonton AI vs AI (V)')

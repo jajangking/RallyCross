@@ -23,7 +23,8 @@ export class BroadcastDirector {
   private index = -1;
   private dwell = 0;
   private cut = true;
-  private manual = false;
+  /** Detik sisa pilihan manual sebelum sutradara otomatis jalan lagi. */
+  private manualFor = 0;
 
   constructor(private readonly spots: BroadcastSpot[]) {
     if (spots.length) this.index = 0;
@@ -52,7 +53,10 @@ export class BroadcastDirector {
   ): BroadcastSpot | null {
     if (!this.spots.length) return null;
     this.dwell += dt;
-    if (this.manual) return this.current;
+    if (this.manualFor > 0) {
+      this.manualFor -= dt;
+      return this.current;
+    }
 
     let best = this.index;
     let bestScore = Infinity;
@@ -82,18 +86,22 @@ export class BroadcastDirector {
     return this.current;
   }
 
-  /** Lompat ke kamera berikutnya (kalau penonton mau ganti sudut manual). */
+  /**
+   * Lompat ke kamera berikutnya. Sutradara otomatis berhenti sebentar (6 s)
+   * supaya penonton sempat melihat sudut yang dia pilih.
+   */
   next(): BroadcastSpot | null {
     if (!this.spots.length) return null;
     this.index = (this.index + 1) % this.spots.length;
     this.cut = true;
-    this.manual = true;
+    this.manualFor = 6;
+    this.dwell = 0;
     return this.current;
   }
 
-  /** Lepas pilihan manual supaya sutradara otomatis jalan lagi. */
+  /** Lepas pilihan manual supaya sutradara otomatis langsung jalan lagi. */
   release() {
-    this.manual = false;
+    this.manualFor = 0;
     this.dwell = 0;
   }
 
