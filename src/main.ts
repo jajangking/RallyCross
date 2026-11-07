@@ -340,7 +340,6 @@ async function boot() {
   let aiToggle: { updateDisplay(): void } | null = null;
   let rivalToggle: { updateDisplay(): void } | null = null;
   let spectateToggle: { updateDisplay(): void } | null = null;
-  const camFocus = new THREE.Vector3();
 
   /* ---------------- camera / input / hud ---------------- */
   const cameraRig = new CameraRig(window.innerWidth / window.innerHeight, BROADCAST_SPOTS);
@@ -651,6 +650,10 @@ async function boot() {
         : [],
     spectate: () => spectate.on,
   });
+  // Titik bidik yang dipakai bersama: kamera TV, heli, dan frustum bayangan.
+  // (Referensi langsung ke fokus sutradara — dulu ini salinan yang tidak pernah
+  // diperbarui, jadi kamera TV membidik titik nol = garis start.)
+  const camFocus = focusDirector.focus;
   const updateCamFocus = (dt: number) => focusDirector.update(dt);
 
   const timer = new THREE.Timer();

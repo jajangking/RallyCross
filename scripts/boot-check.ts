@@ -10,6 +10,7 @@
  *   npm run check:boot
  */
 import * as THREE from 'three';
+import { TRACK } from '../src/world/track';
 
 const noop = () => {};
 
@@ -381,8 +382,44 @@ if (rc) {
     `${cam.x.toFixed(0)}, ${cam.y.toFixed(0)}, ${cam.z.toFixed(0)}`,
   );
 
-  const focus = rc.cameraRig.director?.current?.name ?? 'chase';
-  console.log(`    (kamera siaran: ${focus})`);
+  // Kamera TV harus benar-benar mengikuti mobil — pernah rusak: fokus kamera
+  // tetap di titik nol sehingga siaran hanya membidik garis start.
+  rc.cameraRig.setMode('tv');
+  const tvCam = rc.cameraRig.camera;
+  const view = new THREE.Vector3();
+  const aim = new THREE.Vector3();
+  let worst = 0;
+  let worstGap = 0;
+  const spots = new Set<string>();
+
+  for (let i = 0; i < 10; i++) {
+    await new Promise((r) => setTimeout(r, 350));
+    tvCam.getWorldDirection(view);
+    aim.subVectors(rc.car.position as THREE.Vector3, tvCam.position);
+    const distance = aim.length();
+    aim.normalize();
+    // Sudut bidik diabaikan saat mobil tepat di lensa (jarak < 6 m).
+    if (distance > 6) {
+      worst = Math.max(
+        worst,
+        (Math.acos(Math.min(1, Math.max(-1, view.dot(aim)))) * 180) / Math.PI,
+      );
+    }
+    spots.add(rc.cameraRig.broadcastName ?? '-');
+    // Kamera yang dipilih harus dekat dengan mobil di sepanjang trek: kalau
+    // sutradara nyangkut di kamera garis start, selisihnya membengkak.
+    const spot = rc.cameraRig.director?.current;
+    if (spot) {
+      const length = TRACK.length;
+      let delta = (((spot.trackDistance - rc.playerLaps.lapDistance) % length) + length) % length;
+      if (delta > length / 2) delta -= length;
+      worstGap = Math.max(worstGap, Math.abs(delta));
+    }
+  }
+  check(worst < 25, 'kamera TV membidik mobil (bukan garis start)', `meleset maks ${worst.toFixed(0)}°`);
+  check(worstGap < 160, 'sutradara memilih kamera di dekat mobil', `selisih maks ${worstGap.toFixed(0)} m`);
+  console.log(`    (potongan kamera: ${[...spots].join(', ')})`);
+  rc.cameraRig.setMode('chase');
 }
 
 clearInterval(drain);
