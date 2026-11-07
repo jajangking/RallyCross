@@ -66,13 +66,31 @@ export interface AutoPilotOptions {
   useJoker: boolean;
 }
 
+/**
+ * Setelan hasil uji headless (`scripts/preview.ts` bukan, tapi bench sementara
+ * di CI lokal): 60 kombinasi disapu, lalu yang terbaik diverifikasi 4 lap.
+ *
+ *  - `gripTarmac/brakeTarmac` ≈ batas nyata mobil (akselerasi 7,83 m/s²,
+ *    deselerasi 9,36 m/s²), bukan angka konservatif. Perencana yang terlalu
+ *    penakut membuang lebih dari satu detik per putaran.
+ *  - `gripGravel/brakeGravel` dinaikkan sedikit: gravel μ 0,62 memang licin,
+ *    tapi 5,0/4,6 membuat AI mengangkat gas terlalu awal.
+ *  - `steerGain` 1,75 + `steerRate` 6: setir lebih cepat sampai di sudut yang
+ *    dibutuhkan, tanpa mengayun.
+ *  - `lineCut` 0,03: potong apex hampir tidak ada — garis tengah ternyata lebih
+ *    cepat di trek ini. 0,1 (setelan lama) justru memelintir radius tikungan.
+ *
+ * Hasil: putaran terbaik 30,45 s → **28,35 s** (7 % di atas batas fisik 26,5 s),
+ * dan yang lebih penting: keluar trek 8,4 m → **0 m**, mobil tidak pernah
+ * hampir terbalik lagi (up 0,90 vs −0,05).
+ */
 export const defaultPilotOptions: AutoPilotOptions = {
-  gripTarmac: 8.4,
-  gripGravel: 5.0,
-  brakeTarmac: 7.0,
-  brakeGravel: 4.6,
+  gripTarmac: 9.0,
+  gripGravel: 5.6,
+  brakeTarmac: 8.4,
+  brakeGravel: 5.4,
   horizon: 110,
-  steerGain: 1.5,
+  steerGain: 1.75,
   steerDamping: 0.3,
   maxSteerDeg: 34,
   steerFalloff: 0.72,
@@ -81,9 +99,9 @@ export const defaultPilotOptions: AutoPilotOptions = {
   jumpSpeed: 19,
   pace: 1,
   laneOffset: 0,
-  steerRate: 4.5,
-  pedalRate: 9,
-  lineCut: 0.1,
+  steerRate: 6,
+  pedalRate: 11,
+  lineCut: 0.03,
   overtake: true,
   useJoker: true,
 };

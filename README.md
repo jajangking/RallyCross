@@ -216,6 +216,37 @@ gigi R, dan repeater ◀ ▶ ◐ di HUD ikut berkedip.
 
 Preset ada di panel GUI; `Copy config` menyalin JSON config ke clipboard untuk disimpan sebagai default baru.
 
+### Seberapa cepat AI-nya, sebenarnya?
+
+Ada angka pembandingnya, bukan cuma klaim. Semua diukur headless dengan fisika
+yang sama (`scripts/` + `VehiclePhysics`):
+
+| | waktu putaran |
+|---|---|
+| Batas fisik lintasan (profil kecepatan kuasi-statis, grip aspal 8,4 m/s², rem 9,36 m/s²) | **26,50 s** |
+| AI sekarang (satu mobil, 4 lap) | **28,35 s** (+7 %) |
+| Setelan lama sebelum dituning | 30,45 s (+15 %) |
+| Lawan AI dari grid (5 mobil, saling menyalip) | 31,0–33,4 s |
+
+Tuning-nya bukan tebak-tebakan: 60 kombinasi parameter disapu, lalu 6 kandidat
+terbaik diuji 4 lap. Setelan lama bukan cuma lebih lambat — AI-nya juga
+**keluar trek sampai 8,4 m** dan sesekali hampir terbalik (`up` = −0,05). Setelan
+sekarang: **0 m keluar trek, `up` minimum 0,90**, dan lap terakhir sama cepat
+dengan lap terbaik (konsisten, bukan sekali hoki).
+
+Yang **belum** ada (kalau mau naik ke level "tercanggih"):
+
+- **Optimasi garis balap** — sekarang garisnya garis tengah + potongan apex 3 %.
+  Garis lengkung-minimum (atau hasil optimasi per tikungan) biasanya masih
+  menyimpan 2–4 % waktu.
+- **Model dinamika, bukan geometri** — perencana kecepatan memakai `√(grip/κ)`
+  (kuasi-statis). Mobil sungguhan bisa lebih cepat karena slip angle & beban
+  berpindah; MPC/horizon pendek dengan model ban akan memanfaatkan itu.
+- **Prediksi lawan** — menyalip sekarang reaktif (geser lajur kalau ada mobil
+  lambat < 12 m). Belum ada perencanaan "kalau saya masuk di sini, dia bakal
+  nutup line".
+- **Belajar** — tidak ada training/policy. Semua aturan tangan (rule-based).
+
 ## AI autopilot
 
 Tekan `P` — **di HP: tombol `AI` di kiri atas layar** (di sebelah tombol sein) — atau centang **AI mengemudi** di folder *Autopilot* pada panel, dan mobil menyetir sendiri. Panel tuning juga bisa dibuka di HP lewat tombol `⚙` di baris yang sama, jadi pilihan *joker lap* dan *kecepatan lompatan* tetap bisa diubah tanpa keyboard. Di HP, menyentuh kontrol setir/gas/rem langsung mengambil alih dari AI (tombol **AI** menyala = AI yang nyetir). AI-nya bukan animasi: ia mengirim `VehicleInput` yang sama persis dengan keyboard ke `VehiclePhysics`, jadi fisika, ban, suspensi, dan lompatan tetap berjalan apa adanya — AI bisa melebar, bisa salah, dan bisa diambil alih kapan saja (`P` lagi = pemain yang setir).
@@ -225,12 +256,12 @@ Cara kerjanya (`src/ai/AutoPilot.ts`, murni matematika, tanpa DOM):
 - **Garis balap** — AI memakai sample sirkuit yang sama dengan pembangun trek. `lapPath()` menyambung garis utama + joker jadi satu lintasan dengan jarak yang tetap menaik, jadi AI cukup punya satu "lap" untuk dua rute.
 - **Setir** — *pure pursuit*: cari titik 6 + 0,8·v meter di depan, hitung lengkung yang dibutuhkan (`κ = 2·sin α / L`), lalu terjemahkan ke sudut roda memakai geometri setir mobil (basis roda 2,64 m, batas 34°, `steerFalloff`). Ini skala otomatis: sama stabilnya di 10 km/h dan 100 km/h, dan gain lengkung 1,5 dipakai untuk menutup *understeer* di gravel.
 - **Jarak pandang menyesuaikan tikungan** — kalau 30-an meter ke depan ada tikungan tajam, titik tujuan didekatkan (sampai 45 %). Titik pandang yang jauh pada tikungan sempit membuat garis lurus memotong tikungan: mobil masuk terlalu lebar, lalu panik mengoreksi — inilah yang dulu terasa kaku.
-- **Setir diputar bertahap** — perintah setir dibatasi `steerRate` (4,5 putaran penuh per detik), jadi roda tidak melompat dari lock kiri ke kanan.
+- **Setir diputar bertahap** — perintah setir dibatasi `steerRate` (6 putaran penuh per detik), jadi roda tidak melompat dari lock kiri ke kanan.
 - **Menangkap selip** — kalau hidung mobil sudah menyimpang > 30° dari arah jalannya, AI berhenti menjejalkan setir ke titik tujuan (itu justru mempercepat putaran) dan mengarahkan roda ke arah mobil benar-benar meluncur, sambil mengangkat gas. Tanpa ini AI berputar-donat lalu melesat keluar trek.
-- **Kecepatan** — per sample di depan (horizon sampai 110 m) dihitung batas `√(grip / κ)` menurut permukaan (aspal 8,4 m/s², gravel 5,0 m/s²), lalu tiap batas dikonversi jadi "kecepatan sekarang yang masih bisa berhenti di sana" (`√(v² + 2·a·s)`). Nilai terkecil yang dipakai. Tanjakan > 9 % dianggap lompatan dan dibatasi `jumpSpeed` (19 m/s).
+- **Kecepatan** — per sample di depan (horizon sampai 110 m) dihitung batas `√(grip / κ)` menurut permukaan (aspal 9,0 m/s², gravel 5,6 m/s²), lalu tiap batas dikonversi jadi "kecepatan sekarang yang masih bisa berhenti di sana" (`√(v² + 2·a·s)`, `a` = 8,4 aspal / 5,4 gravel). Nilai terkecil yang dipakai. Tanjakan > 9 % dianggap lompatan dan dibatasi `jumpSpeed` (19 m/s).
 - **Gas & rem proporsional** — gas mengikuti selisih ke target (bukan on/off), pedalnya dilembutkan (`pedalRate`), dan rem tidak pernah dipijak penuh saat mobil sudah di luar trek.
 - **Di udara** — roda tidak menyentuh tanah, jadi AI melepas gas: roda yang berputar di udara menyentak saat mendarat dan memelintir mobil.
-- **Garis balap** — di tikungan, titik tujuan digeser sedikit ke sisi dalam (`lineCut`, 10 % lebar trek) supaya jalurnya terlihat seperti pembalap yang mencari apex. Mobil lawan tidak ikut memotong karena lajurnya sudah digeser `laneOffset`.
+- **Garis balap** — di tikungan, titik tujuan digeser sedikit ke sisi dalam (`lineCut`, 3 % lebar trek) supaya jalurnya terlihat seperti pembalap yang mencari apex. Mobil lawan tidak ikut memotong karena lajurnya sudah digeser `laneOffset`.
 - **Melebar** — di luar > 60 % lebar trek target kecepatan dipotong; kalau sudah keluar trek, titik tujuan justru didekatkan dan tarikan garis dimatikan supaya mobil benar-benar berbelok kembali ke garis (titik jauh membuat sudutnya kecil dan mobil malah jalan lurus makin jauh).
 - **Menyalip** — kalau ada mobil lebih lambat < 12 m di depan dan jalurnya sudah cukup cepat, AI menggeser **seluruh garisnya** ke sisi yang lapang (maks. selebar ruang yang tersisa), lalu kembali ke garis. Geseran itu dihitung ulang frame-nya: kalau hanya posisi yang digeser, kecepatan tikungan tetap dihitung dari radius garis lama dan mobil keluar trek.
 - **Tidak menyalip di tikungan sempit** — kalau lengkung 45 m ke depan > 0,013 (radius < 77 m), AI batal menggeser lajur dan (kalau sedang bergeser) kembali ke garis 2,5× lebih cepat. Pindah lajur sambil berbelok berarti radius yang harus dilalui berubah; di uji 6 mobil inilah penyebab satu-satunya mobil yang keluar trek lalu perlu di-rescue. Setelah aturan ini: **0 rescue, 0 tabrakan, seluruh grid finis**.
@@ -350,7 +381,7 @@ cara paling murah untuk merender:
 - determinisme: dua run identik → state akhir identik
 - `buildTrackColliders()` jalan tanpa DOM, ramp melontarkan mobil lalu mendarat tegak
 - jalur lap (utama + joker) punya jarak yang monoton dan joker memang lebih pendek
-- **AI menyelesaikan satu putaran sendiri** (30 s), tidak keluar tepi trek, tidak pernah terbalik
+- **AI menyelesaikan satu putaran sendiri** (28,9 s), tidak keluar tepi trek (0 m), tidak pernah terbalik
 - mobil terbalik: AI mengirim gas/rem/setir nol (tidak ada reset), lalu menyetir lagi begitu rodanya kembali ke bawah
 - material kartun: gradasi cel shading 5 langkah dipakai bersama, `toon()` mengabaikan kunci PBR lama, dan material model GLB jadi toon tanpa kehilangan warna/transparansi
 - jejak ban: quad terkumpul, buffer berputar (tidak tumbuh selamanya), bisa dibersihkan, dan mobil yang diam tidak meninggalkan jejak sama sekali; mobil yang selip + handbrake menghasilkan >10 potong jejak dan asap
@@ -358,7 +389,7 @@ cara paling murah untuk merender:
 - papan klasemen: urut finis → lap → odometer, selisih diukur ke pemimpin; papan rekor: lap pertama jadi rekor, lap lebih lambat tidak mencuri rekor, rekor bertahan setelah reload, dan tetap jalan tanpa `localStorage`
 - **grid 6 mobil**: lima lawan finis satu putaran, tidak ada yang melebar > 12 m, tidak ada yang berakhir terbalik, jarak terdekat > 1,2 m, dan papan klasemen memuat keenam mobil berurutan
 - penghitung lap menambah tepat satu lap per putaran, odometer cocok dengan panjang trek
-- **lawan AI menyelesaikan putaran** (35–38 s), tetap di dekat trek, dan dua mobil tidak saling menembus
+- **lawan AI menyelesaikan putaran** (31–33 s), tetap di dekat trek, dan dua mobil tidak saling menembus
 - 9 kamera TV berdiri di luar trek, sutradara memakai ≥5 kamera berbeda, tidak ada shot < 1,6 s, dan mobil yang dibidik tidak pernah lebih dari 220 m
 - **tidak ada kamera TV yang tertutup bangunan**: tiap segmen kamera → titik bidik diuji terhadap kotak pembatas (OBB) tribun utama, tribun kedua, dan race control; kamera garis start juga diperiksa berada di atas atap tribun (> 10 m)
 - **helikopter**: menjaga jarak 18–40 m dari mobil pada ketinggian > 20 m, ikut mengikuti mobil sepanjang putaran (< 60 m), posisi kameranya valid, dan dalam 90 detik siaran TV ia mendapat ≥ 5 shot udara yang masing-masing 4–7,5 detik (≈ 30 % dari waktu siaran), kameranya menempel di lensa heli, dan tanpa heli siaran tetap 100 % kamera darat
