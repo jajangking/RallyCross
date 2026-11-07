@@ -36,11 +36,13 @@ export class Hud {
     fwd.set(0, 0, 1).applyQuaternion(phys.quaternion);
     const vLong = phys.velocity.x * fwd.x + phys.velocity.z * fwd.z;
 
+    // Real gear state (manual D/R) + a cosmetic running number for forward gear.
     let gear = 'N';
-    if (kmh < 1.5) gear = 'N';
-    else if (vLong < -0.5) gear = 'R';
+    if (kmh < 1.5 && Math.abs(vLong) < 0.4) gear = 'N';
+    else if (phys.gear === -1) gear = 'R';
     else gear = String(Math.min(6, 1 + Math.floor(kmh / 26)));
     this.gearEl.textContent = gear;
+    this.gearEl.classList.toggle('rev', phys.gear === -1);
 
     let contacts = 0;
     let traction = 0;

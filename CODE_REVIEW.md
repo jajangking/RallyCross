@@ -16,16 +16,62 @@ fixed-step dengan accumulator, dan test yang menjaga bug yang pernah terjadi (ta
 Masalah yang ditemukan tidak ada yang fatal. Yang paling perlu diperbaiki: satu slider GUI yang mati,
 satu bug pixel-ratio saat resize, ukuran bundle mobile, dan pemisahan collider vs visual di `track.ts`.
 
+## Status perbaikan (2026-11-07)
+
+Semua temuan sudah dikerjakan di branch ini, kecuali dua yang dijelaskan di bawah.
+
+| # | Temuan | Status |
+|---|---|---|
+| 1 | Slider `angularDamping` mati | ✅ `VehiclePhysics.applyDamping()` + `onChange` di GUI |
+| 2 | `?quality=low` hilang setelah resize | ✅ `maxPixelRatio` dipakai saat init **dan** resize |
+| 3 | Bundle 4,92 MB (WASM base64) | ⏳ belum — lihat catatan di bawah |
+| 4 | `track.ts` mencampur collider & visual | ✅ `buildTrackColliders()` (tanpa DOM) + `buildTrackVisuals()`, layout berupa data |
+| 5 | Suspensi mendorong ke `up` body | ✅ dorong searah `w.normal` (normal kontak) |
+| 6 | Batas kecepatan diterapkan dua kali | ✅ `dragScale` dihapus, tinggal `powerScale` (relatif gigi) |
+| 7 | `driftAngle` memutasi scratch `fixedStep` | ✅ pakai scratch sendiri (`sDrift`) |
+| 8 | `fixedStep` monolit 200 baris | ✅ dipecah: `updateGear`, `updateSteering`, `updateSuspension`, `applyAntiRoll`, `applyTireForces`, `applyAero`, `applyImpulse` |
+| 9 | `TouchSlider` tidak melacak `pointerId` | ✅ `activePid` per slider; jari kedua tidak membajak kontrol |
+| 10 | Tidak ada CI / test determinisme / linter | ✅ CI (`check` + `smoke` + `build`) + test determinisme; ⏳ linter sengaja belum |
+| 11 | Detail kecil | ✅ format `fixedStep`, README dobel, favicon + meta description, `surfaceMu` di-reset, gear HUD nyata, barrier keliling dunia, material track di-cache, alloc objek impulse dihapus |
+
+### Perubahan perilaku: rem murni + gigi mundur manual
+
+Ini permintaan terpisah dan mengubah kontrak input fisika:
+
+- `VehicleInput` sekarang `{ throttle: 0..1, brake: 0..1, steer, handbrake, gear: 1 |-1 }`.
+  Dulu `throttle: -1..1` dengan arti "negatif = rem/mundur".
+- **Rem hanya memperlambat.** Besarnya gaya rem dikali `clamp(|v_long|/1.2, 0, 1)`, jadi saat mobil
+  hampir berhenti gayanya memudar: rem tidak bisa mendorong mundur dan tidak bergetar di sekitar nol.
+- **Gigi mundur manual.** `Q` (keyboard) atau tombol D/R (sentuh) meminta gigi R; `VehiclePhysics.updateGear()`
+  hanya menerimanya kalau `|v_forward| ≤ shiftSpeedLimit` (1,5 m/s). Gas di gigi R mendorong mundur dengan
+  batas `reverseMaxSpeed` (12 m/s). HUD menampilkan `D`/`R` yang benar-benar aktif, bukan tebakan dari kecepatan.
+- Gas dan rem kini **independen** (dulu `throttle = gas - rem`), jadi menekan keduanya tidak saling meniadakan.
+- `scripts/smoke.ts` dan `scripts/browser-check.mjs` diperbarui untuk semantik baru, ditambah check:
+  rem tidak pernah membalikkan mobil, R ditolak saat melaju lalu masuk setelah berhenti, top speed R terbatas,
+  rem tetap bekerja di gigi R, dan tombol D/R + HUD `R`.
+
+### Catatan untuk #3 (bundle) dan linter
+
+- **#3 sengaja belum diubah.** `@dimforge/rapier3d-compat` meng-*inline* WASM sebagai base64 (4,1 MB dari
+  4,93 MB bundle) supaya tidak perlu request `.wasm` terpisah — nyaman di Termux/Android. Menggantinya ke
+  `@dimforge/rapier3d` (WASM terpisah, ±1,9 MB, gzip jauh lebih kecil) mengubah pipeline build & cara init,
+  dan `scripts/smoke.ts` di Node ikut terdampak. Perubahan sebesar itu harus diverifikasi di browser sungguhan,
+  sedangkan sandbox ini tidak punya Chromium. Rencananya: pakai `rapier3d` untuk web + tetap `-compat` untuk
+  smoke Node, lalu ukur LCP di HP.
+- **Linter** (biome/eslint + prettier) belum ditambahkan karena butuh dependency baru dan reformat seluruh repo;
+  lebih baik diputuskan terpisah supaya diff review tetap terbaca. `tsc` strict + `noUnusedLocals` sudah menangkap
+  sebagian besar masalah mekanis.
+
 ## Verifikasi yang dijalankan
 
 | Perintah | Hasil |
 |---|---|
 | `npm install` | 56 paket, tanpa error |
 | `tsc --noEmit` | ✅ bersih (strict + `noUnusedLocals` + `noUnusedParameters`) |
-| `npm run build` | ✅ 19 modul, `dist` 4,92 MB JS (gzip 1,82 MB) + 4,9 kB CSS |
-| `npm run smoke` | ✅ 16/16 check lolos (massa 1250 kg, ride height 0,923 m, 0→26,5 m/s, rem 26,5→7,1 m/s, drift 149,8°, landing aman) |
-| `npm run check:browser` | ⚠️ tidak bisa dijalankan di sandbox ini (tidak ada Chromium) |
-| Probe tambahan (ramp z=70) | ✅ mobil lepas landas sampai y≈5,6 m, pitch maks 12°, mendarat dengan benar |
+| `npm run build` | ✅ 19 modul, `dist` 4,93 MB JS (gzip 1,82 MB) + 5,1 kB CSS |
+| `npm run smoke` | ✅ **35/35 check lolos** (massa 1250 kg, ride height 0,923 m, 0→30,3 m/s, rem 30,3→10,1 m/s lalu berhenti, drift 146,6°, gigi R 11,6 m/s, determinisme, ramp di track asli) |
+| `npm run check:browser` | ⚠️ tidak bisa dijalankan di sandbox ini (tidak ada Chromium); skripnya sudah diperbarui tapi belum diverifikasi di browser |
+| Shim DOM (jsdom, sementara) | ✅ input keyboard/sentuh & tombol D/R: 15/15 check lolos — jsdom tidak dipakai lagi setelah itu |
 
 ## Yang sudah bagus
 
@@ -155,4 +201,12 @@ determinisme berbasis hash posisi/kecepatan setelah N step.
 
 - `vite.config.ts`: `server.allowedHosts` + `preview.allowedHosts` = `true`. Sebelumnya dev server menolak
   Host proxy (`403 Blocked request`), jadi preview di environment ini tidak bisa dibuka.
-- `CODE_REVIEW.md`: dokumen ini.
+- `src/vehicle/VehiclePhysics.ts`: dipecah per sistem, input baru (rem murni + gigi manual), suspensi searah
+  normal kontak, satu kurva tenaga, scratch vector terpisah, `applyDamping()`.
+- `src/input.ts`: pedal gas/rem independen, gigi D/R (`Q`, tombol sentuh), `pointerId` per slider.
+- `src/main.ts`: pixel ratio tetap, slider `angularDamping`/`reverseMaxSpeed`/`shiftSpeedLimit`, reset ikut
+  mengembalikan gigi ke D.
+- `src/hud.ts`, `src/style.css`, `index.html`: gear D/R nyata, tombol D/R, favicon, teks bantuan.
+- `src/world/track.ts`: collider & visual dipisah, layout data, barrier keliling, material di-cache.
+- `scripts/smoke.ts` (+35 check), `scripts/browser-check.mjs`, `.github/workflows/ci.yml`.
+- `README.md` diperbarui (kontrol, gigi manual, model fisika, verifikasi), `CODE_REVIEW.md` ini.

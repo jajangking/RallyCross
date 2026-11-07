@@ -151,6 +151,13 @@ try {
   check(gasBox.w > 30 && gasBox.h > 60, 'gas slider rendered', `${gasBox.w.toFixed(0)}×${gasBox.h.toFixed(0)}`);
   check(brakeBox.w > 30 && brakeBox.h > 60, 'brake slider rendered', `${brakeBox.w.toFixed(0)}×${brakeBox.h.toFixed(0)}`);
 
+  const readGear = () =>
+    page.evaluate(() => ({
+      req: window.rc.input.state.gear,
+      actual: window.rc.car.gear,
+      hud: document.getElementById('gear').textContent,
+    }));
+
   const press = (id, f, ms = 90) =>
     page.evaluate(
       ({ id, f, ms }) =>
@@ -163,7 +170,12 @@ try {
             new PointerEvent('pointerdown', { bubbles: true, pointerId: 11, clientX: x, clientY: y }),
           );
           setTimeout(
-            () => resolve({ steer: window.rc.input.state.steer, throttle: window.rc.input.state.throttle }),
+            () =>
+              resolve({
+                steer: window.rc.input.state.steer,
+                throttle: window.rc.input.state.throttle,
+                brake: window.rc.input.state.brake,
+              }),
             ms,
           );
         }),
@@ -182,7 +194,12 @@ try {
             new PointerEvent('pointermove', { bubbles: true, pointerId: 11, clientX: x, clientY: y }),
           );
           setTimeout(
-            () => resolve({ steer: window.rc.input.state.steer, throttle: window.rc.input.state.throttle }),
+            () =>
+              resolve({
+                steer: window.rc.input.state.steer,
+                throttle: window.rc.input.state.throttle,
+                brake: window.rc.input.state.brake,
+              }),
             ms,
           );
         }),
@@ -196,12 +213,24 @@ try {
           const el = document.querySelector(`#touch [data-ctl="${id}"]`);
           el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 11 }));
           setTimeout(
-            () => resolve({ steer: window.rc.input.state.steer, throttle: window.rc.input.state.throttle }),
+            () =>
+              resolve({
+                steer: window.rc.input.state.steer,
+                throttle: window.rc.input.state.throttle,
+                brake: window.rc.input.state.brake,
+              }),
             ms,
           );
         }),
       { id, ms },
     );
+
+  const tapGear = () =>
+    page.evaluate(() => {
+      const btn = document.querySelector('#touch button[data-gear]');
+      btn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 31 }));
+      return { req: window.rc.input.state.gear, label: btn.textContent };
+    });
 
   await page.evaluate(() => window.rc.car.reset());
   await new Promise((r) => setTimeout(r, 400)); // let pedals from the previous test settle
@@ -214,16 +243,21 @@ try {
   v = await release('gas');
   check(Math.abs(v.throttle) < 0.05, 'gas closes on release', `throttle=${v.throttle.toFixed(2)}`);
 
-  // brake is its own opening control too
+  // brake is its own control and never feeds throttle
   v = await press('brake', 0.7);
-  check(Math.abs(v.throttle + 0.7) < 0.05, 'brake opening 70%', `throttle=${v.throttle.toFixed(2)}`);
+  check(Math.abs(v.brake - 0.7) < 0.05, 'brake opening 70%', `brake=${v.brake.toFixed(2)}`);
+  check(Math.abs(v.throttle) < 0.05, 'brake does not add throttle', `throttle=${v.throttle.toFixed(2)}`);
   v = await release('brake');
-  check(Math.abs(v.throttle) < 0.05, 'brake closes on release', `throttle=${v.throttle.toFixed(2)}`);
+  check(Math.abs(v.brake) < 0.05, 'brake closes on release', `brake=${v.brake.toFixed(2)}`);
 
-  // both pedals at once cancel out
+  // both pedals at once are independent (no more throttle = gas - brake)
   await press('gas', 0.6);
   v = await press('brake', 0.6);
-  check(Math.abs(v.throttle) < 0.05, 'gas + brake cancel', `throttle=${v.throttle.toFixed(2)}`);
+  check(
+    Math.abs(v.throttle - 0.6) < 0.06 && Math.abs(v.brake - 0.6) < 0.06,
+    'gas + brake are independent',
+    `gas=${v.throttle.toFixed(2)} brake=${v.brake.toFixed(2)}`,
+  );
   await release('brake');
   await release('gas');
 
@@ -240,6 +274,42 @@ try {
   await page.keyboard.up('KeyW');
   check(partial > 0.05 && partial < 0.95, 'keyboard gas is progressive', `throttle=${partial.toFixed(2)} after 120 ms`);
   await new Promise((r) => setTimeout(r, 400));
+
+  console.log('\n— manual reverse gear —');
+  await page.evaluate(() => window.rc.car.reset());
+  await new Promise((r) => setTimeout(r, 300));
+
+  let g = await tapGear();
+  await new Promise((r) => setTimeout(r, 250));
+  let gs = await readGear();
+  check(g.req === -1 && gs.actual === -1, 'gear button shifts into R', `req=${gs.req} actual=${gs.actual}`);
+  check(g.label === 'R', 'gear button shows the engaged gear', `label=${g.label}`);
+
+  const zBeforeReverse = await page.evaluate(() => window.rc.car.position.z);
+  await press('gas', 1, 900);
+  const reversing = await page.evaluate(() => ({
+    z: window.rc.car.position.z,
+    speed: window.rc.car.speed,
+    hud: document.getElementById('gear')?.textContent,
+  }));
+  await release('gas');
+  check(reversing.z < zBeforeReverse - 0.5, 'gas in R drives backwards', `Δz=${(reversing.z - zBeforeReverse).toFixed(2)} m`);
+  check(reversing.hud === 'R', 'HUD shows R while reversing', `gear=${reversing.hud}`);
+
+  await page.evaluate(() => window.rc.car.reset());
+  await new Promise((r) => setTimeout(r, 300));
+  await tapGear();
+  await new Promise((r) => setTimeout(r, 300));
+  gs = await readGear();
+  check(gs.req === 1 && gs.actual === 1, 'shifts back to D when stopped', `req=${gs.req} actual=${gs.actual}`);
+
+  // the brake must not turn into reverse anymore
+  const zAtRest = await page.evaluate(() => window.rc.car.position.z);
+  await press('brake', 1, 900);
+  const zAfterBrake = await page.evaluate(() => window.rc.car.position.z);
+  await release('brake');
+  check(zAfterBrake >= zAtRest - 0.1, 'brake alone does not reverse', `Δz=${(zAfterBrake - zAtRest).toFixed(2)} m`);
+  await new Promise((r) => setTimeout(r, 300));
 
   check(errors.length === 0, 'no console errors', errors.slice(0, 3).join(' | '));
 } finally {

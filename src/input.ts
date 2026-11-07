@@ -1,4 +1,4 @@
-import type { VehicleInput } from './vehicle/VehiclePhysics';
+import type { GearDirection, VehicleInput } from './vehicle/VehiclePhysics';
 
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 const toward = (cur: number, target: number, maxStep: number) =>
@@ -36,6 +36,7 @@ class TouchSlider {
   held = false;
 
   private readonly track: HTMLElement;
+  private activePid: number | null = null;
 
   constructor(
     private readonly root: HTMLElement,
@@ -65,6 +66,9 @@ class TouchSlider {
   private onDown = (e: PointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    // Ignore a second finger on the same control: the first one keeps ownership.
+    if (this.activePid !== null && this.activePid !== e.pointerId) return;
+    this.activePid = e.pointerId;
     this.held = true;
     this.setFromEvent(e);
     this.root.classList.add('on');
@@ -76,18 +80,20 @@ class TouchSlider {
   };
 
   private onMove = (e: PointerEvent) => {
-    if (!this.held) return;
+    if (!this.held || e.pointerId !== this.activePid) return;
     e.preventDefault();
     this.setFromEvent(e);
   };
 
-  private onUp = () => {
+  private onUp = (e: PointerEvent) => {
+    if (this.activePid !== null && e.pointerId !== this.activePid) return;
     this.release();
   };
 
   release() {
-    if (!this.held) return;
+    if (!this.held && this.activePid === null) return;
     this.held = false;
+    this.activePid = null;
     this.root.classList.remove('on');
   }
 
@@ -106,12 +112,14 @@ class TouchSlider {
 type TouchKey = 'hand';
 
 export class Input {
-  /** Analogue throughout: pedals 0..1, steer -1..1. */
-  readonly state: VehicleInput = { throttle: 0, steer: 0, handbrake: false };
+  /** Analogue throughout: throttle/brake 0..1, steer -1..1, gear D/R. */
+  readonly state: VehicleInput = { throttle: 0, brake: 0, steer: 0, handbrake: false, gear: 1 };
   readonly isTouch: boolean;
 
   private readonly keys = new Set<string>();
   private readonly touch: Record<TouchKey, boolean> = { hand: false };
+  private gearBtn: HTMLButtonElement | null = null;
+  private gearShown: GearDirection | null = null;
 
   private steer: TouchSlider | null = null;
   private gas: TouchSlider | null = null;
@@ -130,6 +138,31 @@ export class Input {
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
     window.addEventListener('blur', () => this.clear());
     this.bindTouch();
+    this.syncGearButton();
+  }
+
+  get gear(): GearDirection {
+    return this.state.gear;
+  }
+
+  /** Gigi mundur manual: D <-> R. Mobil sendiri yang memutuskan kapan boleh masuk. */
+  toggleGear() {
+    this.state.gear = this.state.gear === 1 ? -1 : 1;
+    this.syncGearButton();
+  }
+
+  setGear(gear: GearDirection) {
+    this.state.gear = gear;
+    this.syncGearButton();
+  }
+
+  private syncGearButton() {
+    if (!this.gearBtn || this.gearShown === this.state.gear) return;
+    this.gearShown = this.state.gear;
+    const reverse = this.state.gear === -1;
+    this.gearBtn.textContent = reverse ? 'R' : 'D';
+    this.gearBtn.classList.toggle('on', reverse);
+    this.gearBtn.setAttribute('aria-pressed', String(reverse));
   }
 
   private onKeyDown(e: KeyboardEvent) {
@@ -147,6 +180,9 @@ export class Input {
         break;
       case 'KeyG':
         this.actions.gui();
+        break;
+      case 'KeyQ':
+        this.toggleGear();
         break;
     }
   }
@@ -175,6 +211,15 @@ export class Input {
       btn.addEventListener('contextmenu', (e) => e.preventDefault());
     }
 
+    this.gearBtn = document.querySelector<HTMLButtonElement>('#touch button[data-gear]');
+    if (this.gearBtn) {
+      this.gearBtn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        this.toggleGear();
+      });
+      this.gearBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+    }
+
     const ctl = (id: string) => document.querySelector<HTMLElement>(`#touch [data-ctl="${id}"]`);
     const steerEl = ctl('steer');
     const gasEl = ctl('gas');
@@ -198,6 +243,8 @@ export class Input {
     this.gas?.release();
     this.brake?.release();
     document.querySelectorAll('#touch button.on').forEach((b) => b.classList.remove('on'));
+    this.gearShown = null;
+    this.syncGearButton();
   }
 
   update(dt = 1 / 60) {
@@ -216,9 +263,13 @@ export class Input {
     const gas = this.gas ? this.gas.value : gasKey ? 1 : 0;
     const brake = this.brake ? this.brake.value : brakeKey ? 1 : 0;
 
-    this.state.throttle = clamp(gas - brake, -1, 1);
+    // Gas and brake are independent pedals now: the brake never turns into
+    // reverse, that is what the manual R gear is for.
+    this.state.throttle = clamp(gas, 0, 1);
+    this.state.brake = clamp(brake, 0, 1);
     this.state.steer = this.steer ? this.steer.value : steerKey;
     this.state.handbrake = k.has('Space') || this.touch.hand;
+    this.syncGearButton();
 
     this.steer?.render();
     this.gas?.render();
