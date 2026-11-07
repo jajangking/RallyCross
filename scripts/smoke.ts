@@ -17,6 +17,9 @@ import { SkidMarks } from '../src/fx/SkidMarks';
 import { SmokePuffs } from '../src/fx/Smoke';
 import { CarEffects } from '../src/fx/CarEffects';
 import { toon, toonFrom, toonRamp, PALETTE } from '../src/world/style';
+import { Helicopter } from '../src/world/Heli';
+import { CameraRig } from '../src/camera';
+import { TRACK_BLOCKERS, type PropBox } from '../src/world/track';
 
 const DT = 1 / 60;
 let failures = 0;
@@ -704,6 +707,71 @@ async function run() {
   }
   check(outside > 4, 'every camera stands outside the track', `closest wall ${outside.toFixed(1)} m from the edge`);
 
+  /* Garis pandang: tidak boleh ada kamera yang tertutup tribun. */
+  const segHitsBox = (box: PropBox, a: THREE.Vector3, b: THREE.Vector3) => {
+    const c = Math.cos(-box.yaw);
+    const s = Math.sin(-box.yaw);
+    const local = (p: THREE.Vector3) => ({
+      x: (p.x - box.center.x) * c + (p.z - box.center.z) * s,
+      y: p.y - box.center.y,
+      z: -(p.x - box.center.x) * s + (p.z - box.center.z) * c,
+    });
+    const p0 = local(a);
+    const p1 = local(b);
+    let tmin = 0;
+    let tmax = 1;
+    for (const axis of ['x', 'y', 'z'] as const) {
+      const dir = p1[axis] - p0[axis];
+      const half = box.half[axis];
+      if (Math.abs(dir) < 1e-9) {
+        if (Math.abs(p0[axis]) > half) return false;
+        continue;
+      }
+      let t1 = (-half - p0[axis]) / dir;
+      let t2 = (half - p0[axis]) / dir;
+      if (t1 > t2) [t1, t2] = [t2, t1];
+      tmin = Math.max(tmin, t1);
+      tmax = Math.min(tmax, t2);
+      if (tmin > tmax) return false;
+    }
+    return true;
+  };
+  const insideBox = (box: PropBox, p: THREE.Vector3) => {
+    const c = Math.cos(-box.yaw);
+    const s = Math.sin(-box.yaw);
+    const x = (p.x - box.center.x) * c + (p.z - box.center.z) * s;
+    const z = -(p.x - box.center.x) * s + (p.z - box.center.z) * c;
+    return (
+      Math.abs(x) <= box.half.x &&
+      Math.abs(z) <= box.half.z &&
+      Math.abs(p.y - box.center.y) <= box.half.y
+    );
+  };
+  const blockedBy: string[] = [];
+  const insideBy: string[] = [];
+  for (const spot of BROADCAST_SPOTS) {
+    for (const box of TRACK_BLOCKERS) {
+      if (segHitsBox(box, spot.position, spot.aim)) blockedBy.push(`${spot.name}→${box.name}`);
+      if (insideBox(box, spot.position)) insideBy.push(`${spot.name} di ${box.name}`);
+    }
+  }
+  check(
+    blockedBy.length === 0,
+    'no broadcast camera looks through a grandstand',
+    blockedBy.length ? blockedBy.join(', ') : `${BROADCAST_SPOTS.length} cameras clear`,
+  );
+  check(
+    insideBy.length === 0,
+    'no broadcast camera sits inside a prop',
+    insideBy.length ? insideBy.join(', ') : 'all outside',
+  );
+  const startSpot = BROADCAST_SPOTS.find((s) => s.name === 'GARIS START');
+  check(
+    !!startSpot && startSpot.position.y > 10,
+    'the start-line camera sits above the grandstand roof',
+    startSpot ? `${startSpot.position.y.toFixed(1)} m high` : 'missing',
+  );
+
   const director = new BroadcastDirector(BROADCAST_SPOTS);
   const focus = new THREE.Vector3();
   const dt = 1 / 60;
@@ -734,6 +802,69 @@ async function run() {
   check(used.size >= 5, 'the director cuts between several cameras', `${used.size} cameras, ${cuts} cuts`);
   check(minGap > 1.4, 'cameras never flicker', `shortest shot ${minGap.toFixed(1)} s`);
   check(worst < 220, 'the framed car is never absurdly far away', `worst ${worst.toFixed(0)} m`);
+
+  console.log('\n— helikopter kamera udara —');
+  const rig = new CameraRig(16 / 9, BROADCAST_SPOTS);
+  const cycle: string[] = [rig.modeName];
+  for (let i = 0; i < 4; i++) {
+    rig.toggleMode();
+    cycle.push(rig.modeName);
+  }
+  check(
+    cycle.includes('heli') && cycle[0] === cycle[4],
+    'C cycles chase -> kap -> TV -> heli -> chase',
+    cycle.join(' → '),
+  );
+
+  const heli = new Helicopter();
+  const heliFocus = new THREE.Vector3(TRACK.main[10].pos.x, TRACK.main[10].pos.y, TRACK.main[10].pos.z);
+  heli.place(heliFocus);
+  for (let i = 0; i < 60; i++) heli.update(1 / 60, heliFocus);
+  const cam0 = heli.cameraPosition.clone();
+  const off = Math.hypot(cam0.x - heliFocus.x, cam0.z - heliFocus.z);
+  check(
+    off > 18 && off < 40,
+    'the helicopter keeps station around the car',
+    `${off.toFixed(1)} m out, ${(cam0.y - heliFocus.y).toFixed(0)} m up`,
+  );
+  check(
+    cam0.y - heliFocus.y > 20,
+    'the helicopter camera is a genuine aerial shot',
+    `${(cam0.y - heliFocus.y).toFixed(0)} m above the car`,
+  );
+  check(
+    [cam0.x, cam0.y, cam0.z].every(Number.isFinite) && cam0.y > 0,
+    'the helicopter camera position is finite and above ground',
+    `${cam0.x.toFixed(0)}, ${cam0.y.toFixed(0)}, ${cam0.z.toFixed(0)}`,
+  );
+
+  // Mobil bergerak: heli harus ikut, bukan tertinggal.
+  let heliMaxLag = 0;
+  for (let i = 0; i < 240; i++) {
+    const p = TRACK.at((i * 22) / 60);
+    heliFocus.set(p.pos.x, p.pos.y, p.pos.z);
+    heli.update(1 / 60, heliFocus);
+    heliMaxLag = Math.max(heliMaxLag, Math.hypot(heli.cameraPosition.x - heliFocus.x, heli.cameraPosition.z - heliFocus.z));
+  }
+  check(
+    heliMaxLag < 60,
+    'the helicopter follows the car around the lap',
+    `worst ${heliMaxLag.toFixed(0)} m behind`,
+  );
+
+  // Kamera udara membidik mobil dari posisi heli.
+  rig.setMode('heli');
+  for (let i = 0; i < 40; i++) rig.updateAerial(1 / 60, heli.cameraPosition, heliFocus);
+  check(
+    rig.camera.position.distanceTo(heli.cameraPosition) < 8,
+    'the aerial camera rides on the helicopter',
+    `${rig.camera.position.distanceTo(heli.cameraPosition).toFixed(1)} m from the heli`,
+  );
+  check(
+    rig.camera.fov >= 45,
+    'the aerial lens is wide enough to read the circuit',
+    `${rig.camera.fov.toFixed(0)}° fov`,
+  );
 
   console.log(`\n${failures === 0 ? '✅ all checks passed' : `❌ ${failures} check(s) failed`}\n`);
   if (failures > 0) process.exitCode = 1;

@@ -1,6 +1,6 @@
 # RallyCross — Vehicle Physics Prototype
 
-Prototipe **mobil rally 3D di web** (three.js + Rapier) dengan gaya **kartun** (cel shading, langit gradasi, bayangan blob): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **grid 6 mobil** (kamu + 5 lawan AI) yang balapan 3 lap, **jejak ban + asap/debu** dari ban yang benar-benar selip, papan klasemen langsung, dan **9 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI. Belum ada multiplayer.
+Prototipe **mobil rally 3D di web** (three.js + Rapier) dengan gaya **kartun** (cel shading, langit gradasi, bayangan blob): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **grid 6 mobil** (kamu + 5 lawan AI) yang balapan 3 lap, **jejak ban + asap/debu** dari ban yang benar-benar selip, papan klasemen langsung, **9 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI, dan **helikopter siaran** yang terbang di atas arena sebagai kamera udara. Belum ada multiplayer.
 
 ## Jalanin
 
@@ -32,7 +32,7 @@ Semua input **analog/proporsional** — bukan tombol on/off:
 | Lampu utama | `L` | tombol ◐ |
 | Handbrake | `Space` | HB |
 | Reset mobil | `R` | — |
-| Ganti kamera (chase → kap → TV) | `C` | — |
+| Ganti kamera (chase → kap → TV → **heli**) | `C` | tombol **HELI** (kamera udara) |
 | Tonton **AI vs AI** — 6 mobil, kamera TV | `V` | tombol **TV** (kiri atas) |
 | Panel tuning | `G` | tombol **⚙** (kiri atas) |
 | **AI autopilot on/off** | `P` | tombol **AI** (kiri atas) |
@@ -240,7 +240,13 @@ Hasil uji headless dengan fisika asli: **satu putaran 29,9 s**, tidak pernah kel
 
 ## Kamera TV (broadcast)
 
-Ada **9 kamera** tetap di pinggir trek: satu di **luar setiap tikungan** (T1–T8) dan satu menara di **garis start**. Semuanya di ketinggian 6,5–9 m, di belakang pagar pengaman, jadi mobilnya terlihat datang menghadap kamera lalu lewat — sudut yang dipakai siaran sungguhan.
+Ada **9 kamera** tetap di pinggir trek: satu di **luar setiap tikungan** (T1–T8) dan satu menara di **garis start**. Kamera tikungan berdiri di ketinggian 6,5–9 m, di belakang pagar pengaman, jadi mobilnya terlihat datang menghadap kamera lalu lewat — sudut yang dipakai siaran sungguhan.
+
+Kamera **garis start** sengaja dinaikkan ke **15 m** dan digeser 2 m lebih jauh ke luar: di ketinggian 9 m menara itu tertutup atap **tribun utama** (garis pandang ke garis start menembus bangku penonton), sedangkan di 15 m pandangannya bersih. Uji `smoke` memeriksa ini secara geometri — kotak pembatas (OBB, sudah diputar sesuai yaw) tiap tribun dan gedung race control diuji terhadap segmen kamera → titik bidik, jadi kalau ada kamera yang kembali tertutup, build langsung merah.
+
+### Helikopter (kamera udara)
+
+Sebuah **helikopter siaran** (badan pod merah, rotor utama + rotor ekor, dua skid) terbang **34 m di atas** mobil yang sedang disorot, mengelilinginya pelan (radius 26 m, ±1 putaran per 29 s) dengan sudut kamera yang mengikuti arah terbang. Tekan **`C`** sampai mode **HELI** atau tombol **HELI** di HP: kamera pindah ke perut heli (1,6 m di bawah rotor hub) dan membidik mobil, lensa melebar 52–62° supaya tikungan di sekitarnya ikut terbaca. Modelnya disembunyikan saat mode ini aktif (kita sedang "naik" di dalamnya), dan heli tetap terlihat terbang di langit arena saat memakai kamera chase/kap/TV.
 
 Tekan **`V`** (atau tombol **TV** di HP) untuk **AI vs AI**: mobilmu disetir AI, lawan disetir AI, kameranya pindah ke siaran TV. Tombol **`AI`** mematikan mode ini dan mengembalikan setir (juga kamera) ke pemain.
 
@@ -335,6 +341,8 @@ cara paling murah untuk merender:
 - penghitung lap menambah tepat satu lap per putaran, odometer cocok dengan panjang trek
 - **lawan AI menyelesaikan putaran** (35–38 s), tetap di dekat trek, dan dua mobil tidak saling menembus
 - 9 kamera TV berdiri di luar trek, sutradara memakai ≥5 kamera berbeda, tidak ada shot < 1,6 s, dan mobil yang dibidik tidak pernah lebih dari 220 m
+- **tidak ada kamera TV yang tertutup bangunan**: tiap segmen kamera → titik bidik diuji terhadap kotak pembatas (OBB) tribun utama, tribun kedua, dan race control; kamera garis start juga diperiksa berada di atas atap tribun (> 10 m)
+- **helikopter**: siklus `C` kembali ke chase setelah 4 tekan (chase → kap → TV → heli → chase), heli menjaga jarak 18–40 m dari mobil pada ketinggian > 20 m, ikut mengikuti mobil sepanjang putaran (< 60 m), kamera udara benar-benar menempel di posisi heli, dan lensanya lebar (≥ 45°)
 
 `npm run check:browser` (opsional, perlu Chromium) menambah cek UI: bukaan gas/rem 1:1 (50 %, 85 %, 70 %), gas dan rem saling independen, rem tidak menambah throttle, semuanya menutup saat dilepas, slider setir balik ke tengah, tombol D/R memindah gigi + HUD menampilkan `R` saat mundur, rem tidak membalikkan mobil, dan arah setir cocok dengan layar. Untuk detail visual: lampu rem menguat saat pedal ditekan, sein kiri berkedip sementara kanan tetap mati, repeater HUD menyala, lampu utama menyala, lampu mundur menyala di gigi R, empat hub suspensi berada di rentang travel, dan setir berputar.
 

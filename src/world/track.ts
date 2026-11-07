@@ -373,6 +373,86 @@ export interface BroadcastSpot {
 }
 
 /**
+ * Tribun & menara race control: data murni (tanpa DOM), dipakai pembangun
+ * visual **dan** uji kamera TV (supaya tidak ada kamera yang tertutup tribun).
+ *
+ * `distance` = posisi di lintasan, `side` = -1 kiri / +1 kanan, `extra` = jarak
+ * dari tepi trek, `length` = panjang tribun, `rows` = jumlah baris.
+ */
+export interface TrackProp {
+  name: string;
+  distance: number;
+  side: number;
+  extra: number;
+  /** Ukuran kotak pembatas di ruang lokal prop, meter (lebar, tinggi, dalam). */
+  size: { x: number; y: number; z: number };
+  /** Geseran kotak dari titik taruh prop. */
+  offset: { x: number; y: number; z: number };
+}
+
+export const TRACK_PROPS: TrackProp[] = (() => {
+  const stands = [
+    { name: 'tribun utama', distance: START_DIST - 16, side: -1, extra: 6.5, length: 34, rows: 7 },
+    { name: 'tribun kedua', distance: START_DIST + 74, side: -1, extra: 7.5, length: 20, rows: 5 },
+  ];
+  const props: TrackProp[] = stands.map((st) => {
+    // Sama persis dengan `makeStand()`: baris 1,5 m ke belakang, atap di
+    // `height + 2,1`, kaki di kedua ujungnya.
+    const height = 0.28 + st.rows * 0.55;
+    const depth = st.rows * 1.5 + 1.5;
+    return {
+      name: st.name,
+      distance: st.distance,
+      side: st.side,
+      extra: st.extra,
+      size: { x: st.length + 1.6, y: height + 2.4, z: depth },
+      offset: { x: 0, y: (height + 2.4) / 2, z: -((st.rows * 1.5) / 2 - 0.4) },
+    };
+  });
+  // race control: poros 3,6 x 11 x 3,6 + kabin 6,2 m
+  props.push({
+    name: 'race control',
+    distance: START_DIST - 34,
+    side: -1,
+    extra: 15,
+    size: { x: 6.4, y: 13.6, z: 6.4 },
+    offset: { x: 0, y: 6.8, z: 0 },
+  });
+  return props;
+})();
+
+/** Kotak pembatas prop di ruang dunia (sumbu lokal diputar `yaw`). */
+export interface PropBox {
+  name: string;
+  center: THREE.Vector3;
+  half: THREE.Vector3;
+  yaw: number;
+}
+
+/** Posisi + rotasi taruh sebuah prop di sisi trek (sama dengan `place()`). */
+export function propBox(prop: TrackProp): PropBox {
+  const p = pointAt(MAIN, prop.distance);
+  const center = p.pos
+    .clone()
+    .addScaledVector(p.side, prop.side * (p.halfWidth + prop.extra));
+  center.y = prop.offset.y;
+  // Prop diputar supaya sisi depannya menghadap garis balap.
+  const yaw = Math.atan2(p.side.x * -prop.side, p.side.z * -prop.side);
+  const cos = Math.cos(yaw);
+  const sin = Math.sin(yaw);
+  center.x += prop.offset.x * cos + prop.offset.z * sin;
+  center.z += -prop.offset.x * sin + prop.offset.z * cos;
+  return {
+    name: prop.name,
+    center,
+    half: new THREE.Vector3(prop.size.x / 2, prop.size.y / 2, prop.size.z / 2),
+    yaw,
+  };
+}
+
+export const TRACK_BLOCKERS: PropBox[] = TRACK_PROPS.map(propBox);
+
+/**
  * Satu kamera TV di luar setiap tikungan + satu di garis start. Diletakkan di
  * sisi luar tikungan pada ketinggian menara ~6,5 m, jadi mobil terlihat
  * datang menghadap kamera lalu lewat — sudut yang dipakai siaran sungguhan.
@@ -399,8 +479,12 @@ export const BROADCAST_SPOTS: BroadcastSpot[] = (() => {
   });
 
   const start = pointAt(MAIN, START_DIST);
-  const tower = start.pos.clone().addScaledVector(start.side, -(start.halfWidth + 13));
-  tower.y = start.pos.y + 9;
+  // Kamera garis start duduk di **atas** tribun utama (tribun itu menutupi
+  // sisi kiri sepanjang ±33 m dari garis, jadi kamera 9 m di belakang tribun
+  // hanya melihat atapnya). 15 m masih di bawah tiang lampu, dan garis
+  // pandangnya lewat di atas atap tribun (6,3 m).
+  const tower = start.pos.clone().addScaledVector(start.side, -(start.halfWidth + 15));
+  tower.y = start.pos.y + 15;
   const aim = start.pos.clone();
   aim.y += 1.2;
   spots.push({ name: 'GARIS START', position: tower, aim, trackDistance: 0 });
@@ -763,8 +847,12 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
     return group;
   };
 
-  place(makeStand(34, 7), pointAt(MAIN, START_DIST - 16), -1, 6.5);
-  place(makeStand(20, 5), pointAt(MAIN, START_DIST + 74), -1, 7.5);
+  for (const stand of [
+    { length: 34, rows: 7, distance: START_DIST - 16, extra: 6.5 },
+    { length: 20, rows: 5, distance: START_DIST + 74, extra: 7.5 },
+  ]) {
+    place(makeStand(stand.length, stand.rows), pointAt(MAIN, stand.distance), -1, stand.extra);
+  }
 
   /* ---------------- race control tower ---------------- */
   const tower = new THREE.Group();

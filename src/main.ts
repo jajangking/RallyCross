@@ -15,9 +15,10 @@ import { SmokePuffs } from './fx/Smoke';
 import { CarEffects } from './fx/CarEffects';
 import { Input } from './input';
 import { Hud } from './hud';
-import { CameraRig } from './camera';
+import { CameraRig, type CameraMode } from './camera';
 import type { CarLightState } from './vehicle/CarLights';
 import { createBlobShadow, createSky, PALETTE } from './world/style';
+import { Helicopter } from './world/Heli';
 
 const FIXED_DT = 1 / 60;
 const MAX_SUBSTEPS = 5;
@@ -192,6 +193,15 @@ async function boot() {
 
   for (const r of rivals) scene.add(r.shadow);
 
+  /* ---------------- helikopter siaran (kamera udara) ---------------- */
+  // Heli terbang mengelilingi mobil yang sedang disorot, selalu ada di langit
+  // arena, dan jadi kamera udara di mode `C` -> HELI.
+  // Tanpa bayangan: 34 m di atas lintasan, bayangan blob-nya cuma bikin bingung
+  // (dan ikut tenggelam di bagian sirkuit yang menanjak).
+  const heli = new Helicopter();
+  scene.add(heli.root);
+  heli.place(car.position);
+
   const playerLaps = new LapCounter(TRACK.main, TRACK.start, car.position);
   const race = {
     laps: 3,
@@ -310,9 +320,17 @@ async function boot() {
     spectateToggle?.updateDisplay();
   };
 
+  const heliButton = document.querySelector<HTMLButtonElement>('#lampbar button[data-heli]');
+
+  /** Tombol HELI di HP: langsung ke kamera udara, tekan lagi kembali ke chase. */
+  const toggleHeli = () => {
+    cameraRig.setMode(cameraRig.modeName === 'heli' ? 'chase' : 'heli');
+  };
+
   const input = new Input({
     reset: resetCar,
     camera: () => cameraRig.toggleMode(),
+    heli: toggleHeli,
     gui: () => setGui(!guiOpen),
     ai: () => setAutopilot(!auto.enabled),
     spectate: () => setSpectate(!spectate.on),
@@ -410,13 +428,13 @@ async function boot() {
       return cameraRig.modeName;
     },
     set mode(v: string) {
-      cameraRig.setMode(v as 'chase' | 'hood' | 'tv');
+      cameraRig.setMode(v as CameraMode);
     },
   };
   fCam
-    .add(camModes, 'mode', ['chase', 'hood', 'tv'])
+    .add(camModes, 'mode', ['chase', 'hood', 'tv', 'heli'])
     .name('mode kamera')
-    .onChange((v: string) => cameraRig.setMode(v as 'chase' | 'hood' | 'tv'));
+    .onChange((v: string) => cameraRig.setMode(v as CameraMode));
   // Panel: lompat ke kamera TV berikutnya (berguna untuk mengecek semua sudut).
   fCam.add({ next: () => void cameraRig.nextCamera() }, 'next').name('kamera berikutnya');
   spectateToggle = fCam
@@ -615,9 +633,16 @@ async function boot() {
     skidMarks.flush();
     smoke.update(raw);
 
+    // Heli selalu terbang (kelihatan di langit arena), apa pun kameranya.
+    updateCamFocus();
+    heli.update(raw, camFocus);
+    // Di mode heli kita "naik" ke dalamnya, jadi modelnya disembunyikan.
+    heli.root.visible = cameraRig.modeName !== 'heli';
+
     if (cameraRig.modeName === 'tv') {
-      updateCamFocus();
       cameraRig.updateBroadcast(raw, camFocus, camFocusDistance, TRACK.length);
+    } else if (cameraRig.modeName === 'heli') {
+      cameraRig.updateAerial(raw, heli.cameraPosition, camFocus);
     } else {
       cameraRig.update(raw, car);
     }
@@ -648,7 +673,12 @@ async function boot() {
       records,
       now() < newRecordUntil,
     );
-    hud.setCamera(cameraRig.modeName === 'tv', cameraRig.broadcastName);
+    hud.setCamera(cameraRig.modeName, cameraRig.broadcastName);
+    const heliOn = cameraRig.modeName === 'heli';
+    if (heliButton && heliButton.classList.contains('on') !== heliOn) {
+      heliButton.classList.toggle('on', heliOn);
+      heliButton.setAttribute('aria-pressed', String(heliOn));
+    }
     hud.setFinish(
       race.winner === null
         ? null
@@ -693,6 +723,7 @@ async function boot() {
     skidMarks,
     smoke,
     cameraRig,
+    heli,
     renderer,
     scene,
     snap: () => {

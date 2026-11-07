@@ -16,6 +16,8 @@ const STEER_RELEASE = 8.0;
 export interface InputActions {
   reset(): void;
   camera(): void;
+  /** Lompat langsung ke kamera udara helikopter (tombol HELI di HP). */
+  heli(): void;
   gui(): void;
   ai(): void;
   spectate(): void;
@@ -238,6 +240,14 @@ export class Input {
         this.actions.spectate();
       });
       this.tvButton.addEventListener('contextmenu', (e) => e.preventDefault());
+    }
+    const heliBtn = document.querySelector<HTMLButtonElement>('#lampbar button[data-heli]');
+    if (heliBtn) {
+      heliBtn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        this.actions.heli();
+      });
+      heliBtn.addEventListener('contextmenu', (e) => e.preventDefault());
     }
     const panelBtn = document.querySelector<HTMLButtonElement>('#lampbar button[data-panel]');
     if (panelBtn) {

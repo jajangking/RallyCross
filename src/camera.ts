@@ -6,7 +6,7 @@ import { BroadcastDirector } from './camera/BroadcastDirector';
 const up = new THREE.Vector3(0, 1, 0);
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
-export type CameraMode = 'chase' | 'hood' | 'tv';
+export type CameraMode = 'chase' | 'hood' | 'tv' | 'heli';
 
 export class CameraRig {
   readonly camera: THREE.PerspectiveCamera;
@@ -24,6 +24,8 @@ export class CameraRig {
   private readonly desiredPos = new THREE.Vector3();
   private readonly desiredLook = new THREE.Vector3();
   private readonly fwd = new THREE.Vector3();
+  /** Minta kamera udara langsung "pindah" (potong), bukan meluncur dari kamera lama. */
+  private snapAerial = false;
 
   constructor(aspect: number, spots: BroadcastSpot[] = []) {
     this.camera = new THREE.PerspectiveCamera(this.fovBase, aspect, 0.1, 400);
@@ -31,12 +33,23 @@ export class CameraRig {
     this.director = spots.length ? new BroadcastDirector(spots) : null;
   }
 
-  /** `C`: kamera chase -> kap -> TV -> chase. */
+  /** `C`: kamera chase -> kap -> TV -> heli -> chase. */
   toggleMode() {
-    this.setMode(this.currentMode === 'chase' ? 'hood' : this.currentMode === 'hood' ? 'tv' : 'chase');
+    const next: Record<CameraMode, CameraMode> = {
+      chase: 'hood',
+      hood: 'tv',
+      tv: 'heli',
+      heli: 'chase',
+    };
+    this.setMode(next[this.currentMode]);
   }
 
   setMode(mode: CameraMode) {
+    if (mode !== 'tv' && this.currentMode === 'heli') this.tvFov = 56;
+    if (mode === 'heli') {
+      this.snapAerial = true;
+      this.tvFov = 52;
+    }
     this.currentMode = mode;
     if (mode === 'tv') this.director?.takeCut();
   }
@@ -59,6 +72,12 @@ export class CameraRig {
   }
 
   snap(phys: VehiclePhysics) {
+    if (this.currentMode === 'heli') {
+      // Kamera udara punya posisi sendiri (dari heli); cukup luruskan bidikan.
+      this.look.copy(phys.position);
+      this.camera.lookAt(this.look);
+      return;
+    }
     if (this.currentMode === 'tv') {
       const spot = this.director?.current;
       if (spot) {
@@ -104,6 +123,27 @@ export class CameraRig {
     this.camera.updateProjectionMatrix();
   }
 
+  /**
+   * Kamera udara: duduk di perut helikopter, membidik mobil dari atas.
+   * Lensa lebar (bukan tele) supaya sirkuitnya ikut terbaca.
+   */
+  updateAerial(dt: number, eye: THREE.Vector3, focus: THREE.Vector3) {
+    if (this.snapAerial) {
+      this.pos.copy(eye);
+      this.look.copy(focus);
+      this.snapAerial = false;
+    } else {
+      this.pos.lerp(eye, 1 - Math.exp(-8 * dt));
+    }
+    this.look.lerp(focus, 1 - Math.exp(-10 * dt));
+    this.camera.position.copy(this.pos);
+    this.camera.lookAt(this.look);
+    const targetFov = 52 + Math.min(10, this.pos.distanceTo(focus) * 0.12);
+    this.tvFov += (targetFov - this.tvFov) * (1 - Math.exp(-4 * dt));
+    this.camera.fov = this.tvFov;
+    this.camera.updateProjectionMatrix();
+  }
+
   private computeDesired(phys: VehiclePhysics) {
     const p = phys.position;
     this.fwd.set(0, 0, 1).applyQuaternion(phys.quaternion);
@@ -120,9 +160,9 @@ export class CameraRig {
     }
   }
 
-  /** Kamera chase/kap. Mode TV dijalankan lewat `updateBroadcast`. */
+  /** Kamera chase/kap. Mode TV/heli punya jalur sendiri. */
   update(dt: number, phys: VehiclePhysics) {
-    if (this.currentMode === 'tv') return;
+    if (this.currentMode === 'tv' || this.currentMode === 'heli') return;
     this.computeDesired(phys);
 
     const posK = 1 - Math.exp(-9 * dt);

@@ -294,8 +294,9 @@ body.is-touch #board-head {
   padding-bottom: 3px;
 }
 
-#lampbar button[data-tv] {
-  font-size: 12px;
+#lampbar button[data-tv],
+#lampbar button[data-heli] {
+  font-size: 11px;
   letter-spacing: 0.04em;
 }
 
@@ -578,7 +579,9 @@ body.is-touch #hud {
 
 body.is-touch #lampbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+  max-width: calc(100vw - 28px);
 }
 
 @media (max-width: 430px) {
@@ -590,8 +593,10 @@ body.is-touch #lampbar {
   }
 
   #lampbar button.ai,
-  #lampbar button[data-tv] {
-    font-size: 10px;
+  #lampbar button[data-tv],
+  #lampbar button[data-heli] {
+    font-size: 9px;
+    letter-spacing: 0.02em;
   }
 }
 
