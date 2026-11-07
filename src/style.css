@@ -414,6 +414,18 @@ body.is-touch #lampbar {
   color: #fff;
 }
 
+/* the AI toggle is a mode, not a lamp: green when the car drives itself */
+#lampbar button.ai {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+#lampbar button.ai.on {
+  background: rgba(87, 214, 141, 0.62);
+  border-color: rgba(87, 214, 141, 0.95);
+  color: #0d1117;
+}
+
 /* ---------- boot ---------- */
 
 #boot {

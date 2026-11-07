@@ -142,6 +142,7 @@ async function boot() {
       pilot.reset(car.position);
       input.setGear(1);
     }
+    input.setAi(on);
     aiToggle?.updateDisplay();
   };
 
@@ -154,6 +155,12 @@ async function boot() {
 
   /** Perintah yang dipakai frame ini: AI kalau aktif, kalau tidak pemain. */
   let command: VehicleInput = input.state;
+
+  // On a phone there is no keyboard to grab the wheel back with, so touching
+  // any driving control takes over from the AI.
+  document.getElementById('touch')?.addEventListener('pointerdown', () => {
+    if (auto.enabled) setAutopilot(false);
+  });
 
   /* ---------------- live tuning ---------------- */
   const cfg = car.cfg;

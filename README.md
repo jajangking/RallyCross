@@ -33,8 +33,8 @@ Semua input **analog/proporsional** — bukan tombol on/off:
 | Handbrake | `Space` | HB |
 | Reset mobil | `R` | — |
 | Ganti kamera (chase/hood) | `C` | — |
-| Panel tuning | `G` | — |
-| **AI autopilot on/off** | `P` | — |
+| Panel tuning | `G` | tombol **⚙** (kiri atas) |
+| **AI autopilot on/off** | `P` | tombol **AI** (kiri atas) |
 
 Cara kerjanya:
 
@@ -189,7 +189,7 @@ Preset ada di panel GUI; `Copy config` menyalin JSON config ke clipboard untuk d
 
 ## AI autopilot
 
-Tekan `P` (atau centang **AI mengemudi** di folder *Autopilot* pada panel) dan mobil menyetir sendiri. AI-nya bukan animasi: ia mengirim `VehicleInput` yang sama persis dengan keyboard ke `VehiclePhysics`, jadi fisika, ban, suspensi, dan lompatan tetap berjalan apa adanya — AI bisa melebar, bisa salah, dan bisa diambil alih kapan saja (`P` lagi = pemain yang setir).
+Tekan `P` — **di HP: tombol `AI` di kiri atas layar** (di sebelah tombol sein) — atau centang **AI mengemudi** di folder *Autopilot* pada panel, dan mobil menyetir sendiri. Panel tuning juga bisa dibuka di HP lewat tombol `⚙` di baris yang sama, jadi pilihan *joker lap* dan *kecepatan lompatan* tetap bisa diubah tanpa keyboard. Di HP, menyentuh kontrol setir/gas/rem langsung mengambil alih dari AI (tombol **AI** menyala = AI yang nyetir). AI-nya bukan animasi: ia mengirim `VehicleInput` yang sama persis dengan keyboard ke `VehiclePhysics`, jadi fisika, ban, suspensi, dan lompatan tetap berjalan apa adanya — AI bisa melebar, bisa salah, dan bisa diambil alih kapan saja (`P` lagi = pemain yang setir).
 
 Cara kerjanya (`src/ai/AutoPilot.ts`, murni matematika, tanpa DOM):
 

@@ -132,6 +132,7 @@ export class Input {
   private gearBtn: HTMLButtonElement | null = null;
   private gearShown: GearDirection | null = null;
   private lampButtons: HTMLButtonElement[] = [];
+  private aiButton: HTMLButtonElement | null = null;
 
   private steer: TouchSlider | null = null;
   private gas: TouchSlider | null = null;
@@ -169,6 +170,14 @@ export class Input {
     this.syncGearButton();
   }
 
+  /** Nyalakan/matikan tampilan tombol AI di layar sentuh. */
+  setAi(on: boolean) {
+    const btn = this.aiButton;
+    if (!btn) return;
+    btn.classList.toggle('on', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+
   toggleSignal(side: 'left' | 'right') {
     const on = !this.lights[side];
     this.lights.left = side === 'left' ? on : false;
@@ -201,6 +210,25 @@ export class Input {
       btn.addEventListener('contextmenu', (e) => e.preventDefault());
     }
     this.syncLamps();
+
+    // Touch has no keyboard, so the AI toggle and the tuning panel need
+    // buttons of their own.
+    this.aiButton = document.querySelector<HTMLButtonElement>('#lampbar button[data-ai]');
+    if (this.aiButton) {
+      this.aiButton.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        this.actions.ai();
+      });
+      this.aiButton.addEventListener('contextmenu', (e) => e.preventDefault());
+    }
+    const panelBtn = document.querySelector<HTMLButtonElement>('#lampbar button[data-panel]');
+    if (panelBtn) {
+      panelBtn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        this.actions.gui();
+      });
+      panelBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+    }
   }
 
   private syncLamps() {
