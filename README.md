@@ -1,6 +1,6 @@
 # RallyCross — Vehicle Physics Prototype
 
-Prototipe **mobil rally 3D di web** (three.js + Rapier): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control. Belum ada AI/multiplayer.
+Prototipe **mobil rally 3D di web** (three.js + Rapier): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel 478 m dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot** yang bisa menyetir sendiri (termasuk joker lap). Belum ada multiplayer.
 
 ## Jalanin
 
@@ -34,6 +34,7 @@ Semua input **analog/proporsional** — bukan tombol on/off:
 | Reset mobil | `R` | — |
 | Ganti kamera (chase/hood) | `C` | — |
 | Panel tuning | `G` | — |
+| **AI autopilot on/off** | `P` | — |
 
 Cara kerjanya:
 
@@ -46,7 +47,7 @@ Cara kerjanya:
 
 Panel lil-gui di kanan atas berisi semua parameter handling + preset **Tarmac / Gravel / Ice**. Semua perubahan langsung terasa (live), tanpa reload.
 
-> Debug handle: `window.rc` → `{ car, world, cfg, input, cameraRig, renderer, scene, snap() }`.
+> Debug handle: `window.rc` → `{ car, world, cfg, input, pilot, auto, setAutopilot, cameraRig, renderer, scene, snap() }`.
 
 ## Struktur
 
@@ -88,7 +89,7 @@ Satu putaran 478 m, searah jarum jam, garis start/finish di `(0, 0)` menghadap `
 | Main straight | 92 m, grid 6 kotak, gantry + 5 lampu start, grandstand + race control di sisi luar |
 | T1 | kanan sedang, keluar ke straight gravel atas |
 | Gravel-out | ±55 m gravel, ada *bump* (yump) 0,55 m |
-| T2 | kanan cepat; **joker lap** memotong di dalamnya (gravel, ±8 m lebih pendek) |
+| T2 | kanan cepat; **joker lap** memotong di dalamnya (gravel, ±2,5 m lebih pendek tapi lebih lambat) |
 | JUMP 1 | lompatan aspal di straight timur, crest 1,35 m, lip pendek — mobil terbang ±1 s |
 | T3 + gravel-in | kanan, lalu 60 m gravel dengan JUMP 2 (crest 1,30 m) |
 | Flick + final corner | dua belokan lambat menuju garis start |
@@ -186,6 +187,23 @@ gigi R, dan repeater ◀ ▶ ◐ di HUD ikut berkedip.
 
 Preset ada di panel GUI; `Copy config` menyalin JSON config ke clipboard untuk disimpan sebagai default baru.
 
+## AI autopilot
+
+Tekan `P` (atau centang **AI mengemudi** di folder *Autopilot* pada panel) dan mobil menyetir sendiri. AI-nya bukan animasi: ia mengirim `VehicleInput` yang sama persis dengan keyboard ke `VehiclePhysics`, jadi fisika, ban, suspensi, dan lompatan tetap berjalan apa adanya — AI bisa melebar, bisa salah, dan bisa diambil alih kapan saja (`P` lagi = pemain yang setir).
+
+Cara kerjanya (`src/ai/AutoPilot.ts`, murni matematika, tanpa DOM):
+
+- **Garis balap** — AI memakai sample sirkuit yang sama dengan pembangun trek. `lapPath()` menyambung garis utama + joker jadi satu lintasan dengan jarak yang tetap menaik, jadi AI cukup punya satu "lap" untuk dua rute.
+- **Setir** — *pure pursuit*: cari titik 6 + 0,8·v meter di depan, hitung lengkung yang dibutuhkan (`κ = 2·sin α / L`), lalu terjemahkan ke sudut roda memakai geometri setir mobil (basis roda 2,64 m, batas 34°, `steerFalloff`). Ini skala otomatis: sama stabilnya di 10 km/h dan 100 km/h, dan gain lengkung 1,5 dipakai untuk menutup *understeer* di gravel.
+- **Kecepatan** — per sample di depan (horizon sampai 110 m) dihitung batas `√(grip / κ)` menurut permukaan (aspal 8,0 m/s², gravel 5,2 m/s²), lalu tiap batas dikonversi jadi "kecepatan sekarang yang masih bisa berhenti di sana" (`√(v² + 2·a·s)`). Nilai terkecil yang dipakai. Tanjakan > 9 % dianggap lompatan dan dibatasi `jumpSpeed` (19 m/s).
+- **Melebar** — kalau mobil keluar > 55 % lebar trek, target kecepatan dipotong supaya sempat kembali ke garis.
+- **Macet / terbalik** — diam < 1,2 m/s selama 1,6 s → mundur sebentar lalu maju lagi; terbalik (up < 0,35) selama 2,5 s → minta reset.
+- **Joker** — pilihan joker dievaluasi ulang tiap putaran (checkbox *joker lap*), dan HUD menampilkan status AI + lap + waktu lap/best.
+
+Hasil uji headless dengan fisika asli: **satu putaran 29,2 s**, tidak pernah keluar tepi trek, 0 reset, dan stabil di 6 putaran berturut-turut (aspal & gravel, dengan/tanpa joker).
+
+Agar AI bisa secepat itu, tepi trek juga diperbaiki: bahu jalan sekarang punya **bahu datar 2,6 m** di ketinggian aspal sebelum turun ke rumput, jadi roda yang melebar di bibir lompatan tidak lagi menghantam "tebing" dan berhenti mendadak. Joker juga keluar-masuk secara tangensial (bukan kink 40°) supaya mobil tidak terlempar ke pagar saat menyatu kembali.
+
 ## Verifikasi
 
 `npm run smoke` menjalankan fisika yang sama di Node dan mengecek:
@@ -202,6 +220,8 @@ Preset ada di panel GUI; `Copy config` menyalin JSON config ke clipboard untuk d
 - jatuh dari 6 m: mendarat dan tidak terbalik
 - determinisme: dua run identik → state akhir identik
 - `buildTrackColliders()` jalan tanpa DOM, ramp melontarkan mobil lalu mendarat tegak
+- jalur lap (utama + joker) punya jarak yang monoton dan joker memang lebih pendek
+- **AI menyelesaikan satu putaran sendiri** (29 s), tidak keluar tepi trek, tanpa reset
 
 `npm run check:browser` (opsional, perlu Chromium) menambah cek UI: bukaan gas/rem 1:1 (50 %, 85 %, 70 %), gas dan rem saling independen, rem tidak menambah throttle, semuanya menutup saat dilepas, slider setir balik ke tengah, tombol D/R memindah gigi + HUD menampilkan `R` saat mundur, rem tidak membalikkan mobil, dan arah setir cocok dengan layar. Untuk detail visual: lampu rem menguat saat pedal ditekan, sein kiri berkedip sementara kanan tetap mati, repeater HUD menyala, lampu utama menyala, lampu mundur menyala di gigi R, empat hub suspensi berada di rentang travel, dan setir berputar.
 
@@ -211,7 +231,7 @@ Status terakhir: **semua lolos**.
 
 1. **Track sungguhan** — heightmap/trimesh + spline, bukan plane datar (layout-nya sekarang sudah berupa data, jadi tinggal ganti sumbernya).
 2. **Efek** — debu, skidmark, suara mesin (WebAudio), kamera shake.
-3. **AI lawan** — racing line + Pure Pursuit + speed profile dari kurvatur (lihat diskusi awal).
+3. **AI lawan** — beberapa mobil sekaligus (autopilot-nya sudah ada; tinggal `AutoPilot` + `VehiclePhysics` per mobil, plus logika menyalip).
 4. **Multiplayer** — Rapier headless di server (kode fisika sudah DOM-free).
 5. **Optimasi mobile** — instancing, LOD, KTX2, shadow hanya untuk mobil.
 

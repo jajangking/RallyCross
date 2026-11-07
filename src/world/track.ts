@@ -40,7 +40,8 @@ function lift(samples: PathSample[], dy: number): PathSample[] {
 }
 
 const MAIN = lift(samplePath(MAIN_NODES, 1.5, true), ROAD_LIFT);
-const JOKER = lift(samplePath(JOKER_NODES, 1.2, false), ROAD_LIFT);
+// the joker rides 8 mm proud of the racing line where the two overlap
+const JOKER = lift(samplePath(JOKER_NODES, 1.2, false), ROAD_LIFT + 0.008);
 const MAIN_LENGTH = MAIN[MAIN.length - 1].distance;
 /** Lap distance of the start/finish line. */
 const START_DIST = MAIN[nearestSample(MAIN, START)].distance;
@@ -86,7 +87,7 @@ const JOKER_WALLS = (() => {
   const out: Ribbon[] = [];
   const length = JOKER[JOKER.length - 1].distance;
   // keep the walls clear of both junctions so neither line is blocked
-  const mid = JOKER.filter((s) => s.distance > 14 && s.distance < length - 14);
+  const mid = JOKER.filter((s) => s.distance > 26 && s.distance < length - 26);
   if (mid.length < 4) return out;
   out.push(offsetWall(mid, 1, 1.4, 0.85));
   out.push(offsetWall(mid, -1, 1.4, 0.85));

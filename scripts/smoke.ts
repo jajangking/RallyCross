@@ -6,6 +6,8 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import { defaultConfig, VehiclePhysics, type VehicleInput } from '../src/vehicle/VehiclePhysics';
 import { buildTrackColliders, TRACK } from '../src/world/track';
+import { lapPath, type PathSample } from '../src/world/circuit';
+import { AutoPilot } from '../src/ai/AutoPilot';
 
 const DT = 1 / 60;
 let failures = 0;
@@ -285,6 +287,45 @@ async function run() {
   );
   check(trackCar.position.y > 0.6, 'lands back on the track', `y=${trackCar.position.y.toFixed(2)} m`);
   check(Math.abs(trackCar.quaternion.x) < 0.3, 'stays upright after the jump', `qx=${trackCar.quaternion.x.toFixed(2)}`);
+
+  /* ---------------------------------------------------------------- */
+  console.log('\n— autopilot (real physics, headless) —');
+  const plainPath = lapPath(TRACK.main, TRACK.joker, false);
+  const jokerPath = lapPath(TRACK.main, TRACK.joker, true);
+  const pathLength = (p: PathSample[]) => p[p.length - 1].distance;
+  const monotonic = (p: PathSample[]) => p.every((s, i) => i === 0 || s.distance > p[i - 1].distance);
+  check(
+    monotonic(plainPath) && monotonic(jokerPath),
+    'lap path distance is monotonic (main + joker spliced)',
+    `${pathLength(plainPath).toFixed(1)} m / ${pathLength(jokerPath).toFixed(1)} m`,
+  );
+  check(
+    pathLength(jokerPath) < pathLength(plainPath),
+    'the joker lap is the shorter way round',
+    `${(pathLength(plainPath) - pathLength(jokerPath)).toFixed(1)} m shorter`,
+  );
+
+  const aiWorld = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+  aiWorld.timestep = DT;
+  buildTrackColliders(aiWorld);
+  const aiCar = new VehiclePhysics(aiWorld, defaultConfig, new THREE.Vector3(0, 0.95, -10));
+  const pilot = new AutoPilot(TRACK.main, TRACK.joker, { useJoker: true });
+  let maxExcess = 0;
+  let resets = 0;
+  let aiTime = 0;
+  for (let i = 0; i < Math.round(80 / DT) && pilot.lap < 1; i++) {
+    const command = pilot.update(DT, aiCar);
+    if (pilot.needsReset) resets++;
+    aiCar.fixedStep(DT, command);
+    aiWorld.step();
+    aiCar.sync();
+    aiTime += DT;
+    maxExcess = Math.max(maxExcess, Math.abs(pilot.lateral) - pilot.sample.halfWidth);
+  }
+  check(pilot.lap >= 1, 'the AI drives a full lap unaided', `${pilot.lastLap.toFixed(1)} s lap, ${aiTime.toFixed(1)} s total`);
+  check(maxExcess < 3, 'the AI keeps the car on the road', `max ${maxExcess.toFixed(1)} m past the edge`);
+  check(resets === 0, 'the AI never needs a reset', `${resets} resets`);
+  check(pilot.bestLap < 45, 'AI lap time is sane', `best ${pilot.bestLap.toFixed(1)} s`);
 
   console.log(`\n${failures === 0 ? '✅ all checks passed' : `❌ ${failures} check(s) failed`}\n`);
   if (failures > 0) process.exitCode = 1;

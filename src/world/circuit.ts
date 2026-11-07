@@ -239,37 +239,32 @@ export function vergeRibbon(
   samples: PathSample[],
   outward: number | ((s: PathSample) => number) = 16,
   edgeY = 0.015,
+  shoulder = 2.6,
 ): Ribbon {
   const out = typeof outward === 'function' ? outward : () => outward;
   const ribbon: Ribbon = { positions: [], uvs: [], distances: [], indices: [] };
   const a = new THREE.Vector3();
   const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
 
-  // left side: from the outer verge in to the road edge
-  for (const s of samples) {
-    a.copy(s.pos).addScaledVector(s.side, s.halfWidth + out(s));
-    b.copy(s.pos).addScaledVector(s.side, s.halfWidth - 0.02);
-    ribbon.positions.push(a.x, edgeY, a.z, b.x, b.y, b.z);
-    ribbon.uvs.push(a.x * 0.1, a.z * 0.1, b.x * 0.1, b.z * 0.1);
-    ribbon.distances.push(s.distance);
-  }
-  for (let k = 0; k < samples.length - 1; k++) {
-    const i = k * 2;
-    ribbon.indices.push(i, i + 1, i + 3, i, i + 3, i + 2);
-  }
-  const half = samples.length * 2;
-
-  // right side: from the road edge out to the verge
-  for (const s of samples) {
-    a.copy(s.pos).addScaledVector(s.side, -s.halfWidth + 0.02);
-    b.copy(s.pos).addScaledVector(s.side, -s.halfWidth - out(s));
-    ribbon.positions.push(a.x, a.y, a.z, b.x, edgeY, b.z);
-    ribbon.uvs.push(a.x * 0.1, a.z * 0.1, b.x * 0.1, b.z * 0.1);
-    ribbon.distances.push(s.distance);
-  }
-  for (let k = 0; k < samples.length - 1; k++) {
-    const i = half + k * 2;
-    ribbon.indices.push(i, i + 1, i + 3, i, i + 3, i + 2);
+  // Two rows per side: a flat shoulder at road height (so a wheel that runs
+  // wide does not catch a lip), then the grass falling away to the ground.
+  for (const sideSign of [1, -1]) {
+    const base = ribbon.positions.length / 3;
+    for (const s of samples) {
+      const width = Math.max(out(s), shoulder + 0.5);
+      a.copy(s.pos).addScaledVector(s.side, sideSign * (s.halfWidth - 0.02));
+      b.copy(s.pos).addScaledVector(s.side, sideSign * (s.halfWidth + shoulder));
+      c.copy(s.pos).addScaledVector(s.side, sideSign * (s.halfWidth + width));
+      ribbon.positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, edgeY, c.z);
+      ribbon.uvs.push(a.x * 0.1, a.z * 0.1, b.x * 0.1, b.z * 0.1, c.x * 0.1, c.z * 0.1);
+      ribbon.distances.push(s.distance, s.distance, s.distance);
+    }
+    for (let k = 0; k < samples.length - 1; k++) {
+      const i = base + k * 3;
+      ribbon.indices.push(i, i + 1, i + 4, i, i + 4, i + 3);
+      ribbon.indices.push(i + 1, i + 2, i + 5, i + 1, i + 5, i + 4);
+    }
   }
 
   return ribbon;
@@ -424,20 +419,48 @@ export const MAIN_NODES: PathNode[] = [
  * (clean air vs. the jump) rather than a shortcut.
  */
 export const JOKER_NODES: PathNode[] = [
-  { x: 58, z: 75, width: 9, surface: 'gravel' },
-  { x: 72, z: 71, width: 9 },
-  { x: 88, z: 66, width: 9 },
-  { x: 104, z: 57, width: 9 },
+  { x: 56, z: 84, width: 9, surface: 'gravel' }, // splits off the racing line
+  // The first nodes only ease away from the main line: a hard 40° kink at
+  // the split sends the car off the outside of the joker at speed.
+  { x: 66, z: 82, width: 9 },
+  { x: 74, z: 76, width: 9 },
+  { x: 82, z: 70, width: 9 },
+  { x: 90, z: 65, width: 9 },
+  { x: 99, z: 60, width: 9 },
+  { x: 108, z: 53, width: 9 },
   { x: 117, z: 43, width: 10 },
-  { x: 126, z: 29, width: 10, surface: 'tarmac' },
+  { x: 124, z: 37, width: 10 },
+  { x: 129, z: 32, width: 10 },
+  // The tail sits on the main straight so the merge is tangential instead of
+  // a 45° kink that throws the car into the catch fence.
+  { x: 132, z: 24, width: 10, surface: 'tarmac' },
+  { x: 132, z: 16, width: 10 },
 ];
-
-/** Where the joker leaves the racing line / comes back. */
-export const JOKER_START = new THREE.Vector3(58, 0, 75);
-export const JOKER_END = new THREE.Vector3(127, 0, 29);
+export const JOKER_START = new THREE.Vector3(56, 0, 84);
+export const JOKER_END = new THREE.Vector3(132, 0, 20);
 
 /** Start/finish line: centre of the main straight, cars heading +Z. */
 export const START = new THREE.Vector3(0, 0, 0);
+
+/**
+ * One drivable lap for the AI: the racing line, or the racing line with the
+ * joker section spliced in. Distances are re-stamped so the result is a single
+ * monotonic lap that the speed planner can walk.
+ */
+export function lapPath(main: PathSample[], joker: PathSample[], useJoker: boolean): PathSample[] {
+  const restamp = (samples: PathSample[]): PathSample[] => {
+    let d = 0;
+    return samples.map((s, i) => {
+      if (i > 0) d += s.pos.distanceTo(samples[i - 1].pos);
+      return { ...s, distance: d };
+    });
+  };
+  if (!useJoker || joker.length < 4) return restamp(main);
+  const from = nearestSample(main, JOKER_START);
+  const to = nearestSample(main, JOKER_END);
+  if (to <= from + 2) return restamp(main);
+  return restamp([...main.slice(0, from + 1), ...joker, ...main.slice(to)]);
+}
 
 /** Index of the sample closest to a point (used to place props). */
 export function nearestSample(samples: PathSample[], point: THREE.Vector3): number {

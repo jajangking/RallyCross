@@ -153,6 +153,24 @@ body {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
 }
 
+#auto {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 3px 7px;
+  border-radius: 4px;
+  justify-self: start;
+  color: #0d1117;
+  background: var(--ok, #57d68d);
+  font-variant-numeric: tabular-nums;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+#auto.off {
+  color: var(--dim);
+  background: rgba(255, 255, 255, 0.07);
+}
+
 /* ---------- help ---------- */
 
 #help {

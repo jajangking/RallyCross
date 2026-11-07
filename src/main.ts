@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import GUI from 'lil-gui';
-import { defaultConfig, VehiclePhysics } from './vehicle/VehiclePhysics';
+import { defaultConfig, VehiclePhysics, type VehicleInput } from './vehicle/VehiclePhysics';
 import { CarVisual } from './vehicle/CarVisual';
 import { CarModelVisual } from './vehicle/CarModelVisual';
-import { buildTrack } from './world/track';
+import { buildTrack, TRACK } from './world/track';
+import { AutoPilot } from './ai/AutoPilot';
 import { Input } from './input';
 import { Hud } from './hud';
 import { CameraRig } from './camera';
@@ -100,6 +101,17 @@ async function boot() {
     carVisual = model;
   });
 
+  /* ---------------- autopilot ---------------- */
+  // The pilot drives the very same `VehicleInput` interface as the keyboard,
+  // so it can be switched on and off mid-lap without touching the physics.
+  const pilot = new AutoPilot(TRACK.main, TRACK.joker);
+  const auto = {
+    enabled: false,
+    useJoker: true,
+    jumpSpeed: pilot.options.jumpSpeed,
+  };
+  let aiToggle: { updateDisplay(): void } | null = null;
+
   /* ---------------- camera / input / hud ---------------- */
   const cameraRig = new CameraRig(window.innerWidth / window.innerHeight);
   cameraRig.snap(car);
@@ -121,13 +133,27 @@ async function boot() {
     car.reset();
     cameraRig.snap(car);
     input.setGear(1);
+    pilot.reset(car.position);
+  };
+
+  const setAutopilot = (on: boolean) => {
+    auto.enabled = on;
+    if (on) {
+      pilot.reset(car.position);
+      input.setGear(1);
+    }
+    aiToggle?.updateDisplay();
   };
 
   const input = new Input({
     reset: resetCar,
     camera: () => cameraRig.toggleMode(),
     gui: () => setGui(!guiOpen),
+    ai: () => setAutopilot(!auto.enabled),
   });
+
+  /** Perintah yang dipakai frame ini: AI kalau aktif, kalau tidak pemain. */
+  let command: VehicleInput = input.state;
 
   /* ---------------- live tuning ---------------- */
   const cfg = car.cfg;
@@ -218,6 +244,19 @@ async function boot() {
       void navigator.clipboard?.writeText(JSON.stringify(cfg, null, 2)).catch(() => {});
     },
   };
+  const fAi = gui.addFolder('Autopilot');
+  aiToggle = fAi.add(auto, 'enabled').name('AI mengemudi (P)').onChange((v: boolean) => setAutopilot(v));
+  fAi
+    .add(auto, 'useJoker')
+    .name('joker lap')
+    .onChange((v: boolean) => pilot.setUseJoker(v));
+  fAi
+    .add(auto, 'jumpSpeed', 8, 30, 1)
+    .name('kecepatan lompatan')
+    .onChange((v: number) => {
+      pilot.options.jumpSpeed = v;
+    });
+
   const fPreset = gui.addFolder('Presets');
   fPreset.add(actions, 'Tarmac');
   fPreset.add(actions, 'Gravel');
@@ -258,16 +297,27 @@ async function boot() {
 
     let steps = 0;
     while (accumulator >= FIXED_DT && steps < MAX_SUBSTEPS) {
-      car.fixedStep(FIXED_DT, input.state);
+      if (auto.enabled) {
+        // fresh transform each substep: the pilot is a closed loop
+        car.sync();
+        command = pilot.update(FIXED_DT, car);
+      } else {
+        command = input.state;
+      }
+      car.fixedStep(FIXED_DT, command);
       world.step();
       accumulator -= FIXED_DT;
       steps++;
+      if (auto.enabled && pilot.needsReset) {
+        resetCar();
+        break;
+      }
     }
     if (steps === MAX_SUBSTEPS) accumulator = 0;
 
     car.sync();
 
-    lightState.brake = input.state.brake;
+    lightState.brake = command.brake;
     lightState.reverse = car.gear === -1;
     lightState.left = input.lights.left;
     lightState.right = input.lights.right;
@@ -279,6 +329,7 @@ async function boot() {
     cameraRig.update(raw, car);
     hud.update(car, raw);
     hud.setLamps(lightState);
+    hud.setAutopilot(auto.enabled, pilot.lap, auto.enabled ? pilot.lapTime : 0, pilot.bestLap);
     followSun();
 
     renderer.render(scene, cameraRig.camera);
@@ -301,6 +352,9 @@ async function boot() {
     world,
     cfg,
     input,
+    pilot,
+    auto,
+    setAutopilot,
     cameraRig,
     renderer,
     scene,

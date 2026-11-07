@@ -8,6 +8,7 @@ export class Hud {
   private readonly speedEl = document.getElementById('speed')!;
   private readonly gearEl = document.getElementById('gear')!;
   private readonly telemEl = document.getElementById('telem')!;
+  private readonly autoEl = document.getElementById('auto');
   private readonly indLeft = document.getElementById('ind-left');
   private readonly indRight = document.getElementById('ind-right');
   private readonly indBeam = document.getElementById('ind-beam');
@@ -35,6 +36,18 @@ export class Hud {
     this.indLeft?.classList.toggle('on', left);
     this.indRight?.classList.toggle('on', right);
     this.indBeam?.classList.toggle('on', state.headlights);
+  }
+
+  /** Baris status AI: menyala, nomor lap, waktu lap terakhir dan terbaik. */
+  setAutopilot(on: boolean, lap: number, lapTime: number, best: number) {
+    const el = this.autoEl;
+    if (!el) return;
+    el.classList.toggle('off', !on);
+    const text = on
+      ? `AI mengemudi · lap ${Math.max(1, lap + 1)} · ${lapTime.toFixed(1)}s` +
+        (Number.isFinite(best) ? ` · best ${best.toFixed(1)}s` : '')
+      : 'AI nonaktif · P';
+    if (el.textContent !== text) el.textContent = text;
   }
 
   update(phys: VehiclePhysics, dt: number) {

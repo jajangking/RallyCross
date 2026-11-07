@@ -17,6 +17,7 @@ export interface InputActions {
   reset(): void;
   camera(): void;
   gui(): void;
+  ai(): void;
 }
 
 interface SliderOpts {
@@ -242,6 +243,9 @@ export class Input {
         break;
       case 'KeyG':
         this.actions.gui();
+        break;
+      case 'KeyP':
+        this.actions.ai();
         break;
       case 'KeyQ':
         this.toggleGear();
