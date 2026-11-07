@@ -240,3 +240,38 @@ Fisika tidak diubah; semua tambahan ada di lapisan visual.
 
 - Karena badan mobil kini turun sampai `y ≈ -0.62` (visual) sementara collider tetap 0.68 m, bagian bawah bodi bisa terlihat sedikit menembus tanjakan/obstacle. Collider sengaja tidak diubah supaya handling tetap sama.
 - Renderer software itu hanya alat bantu verifikasi sementara dan tidak ikut di-commit (repo tetap bersih dari artefak).
+
+## Iterasi 3 — bodi diganti model GLB (2026-11-07)
+
+Umpan balik: bodi prosedural jelek. Solusi: **berhenti membangun bodi sendiri** dan
+memakai model 3D yang sudah ada, di-porting ke dalam fisika yang sama.
+
+**Model**
+
+| | |
+|---|---|
+| Model | "1991 Honda Civic EG6" oleh [rifdanzz](https://sketchfab.com/rifdanzz) |
+| Sumber | Sketchfab, redistribusi via [`iManuel2K/capcar`](https://github.com/iManuel2K/capcar) |
+| Lisensi | CC BY 4.0 (boleh dipakai komersial + diubah + didistribusikan, wajib atribusi) |
+| Berkas | `public/models/honda-civic-eg6.glb`, 250.560 B, 39 mesh / 18.197 triangle |
+| Atribusi | [`public/models/CREDITS.md`](public/models/CREDITS.md) (wajib ikut kalau model dipakai ulang) |
+
+**Cara porting (`src/vehicle/CarModelVisual.ts`)**
+
+- Skala dihitung dari jarak sumbu roda model (`516,3 unit` → `2,64 m`), bukan ditebak: hasilnya lebar 1,844 m / panjang 4,192 m / tinggi 1,359 m — cocok dengan `halfWidth 0.92`, `halfLength 2.05`.
+- Tinggi ban diukur dari bounding box roda, lalu model digeser vertikal supaya keempat ban menyentuh bidang tanah yang sama dengan suspensi (`hub rest = -0.725 m`, alas ban `= -1.02 m`).
+- Empat node roda (`Circle*`) di-*attach* ke pivot `steer` (yaw) + `spin` (poros) tanpa mengubah geometri; tiap frame pivot mengikuti `steerAngle`, `spinAngle`, dan `suspLength`. Sudut setir visual dibatasi 0,5 rad supaya bahu ban tidak menembus fender di lock penuh.
+- Lampu: mesh lampu bawaan model dibelah kiri/kanan di index buffer (atribut vertex dipakai bersama, hanya index yang dipisah), lalu material emissive-nya digerakkan `LampController` yang sama dengan bodi prosedural. Hasilnya lampu rem, sein, mundur, dan lampu utama menyala persis di bentuk lampu model.
+- `CarLights` tetap ada sebagai fallback (kalau model tidak punya mesh lampu) dan `CarVisual` tetap ada sebagai fallback kalau GLB gagal dimuat — game tidak pernah kehilangan mobil.
+
+**Verifikasi**
+
+- `tsc --noEmit` bersih, `npm run smoke` **35/35** (fisika tidak tersentuh), `npm run build` sukses; `dist/models/honda-civic-eg6.glb` ikut ter-copy (250.560 B).
+- Model + perakitan diuji headless: GLB di-parse `GLTFLoader` di Node dengan tekstur di-strip, lalu dirakit dengan `assembleCarModel()` dan dirender 4 sudut memakai software rasterizer **dengan z-buffer** (versi painter's algorithm sempat memberi kesan ban menembus fender — itu artefak sorting, bukan bug).
+- Angka hasil rakitan: roda di `x ±0,753 / z ±1,320`, pivot roda berputar tepat di pusat ban (geser 0,000 m saat spin, 0,003 m saat steer), bodi `y -1,020 … +0,339`.
+- `dev` server: `/models/honda-civic-eg6.glb` disajikan `200 model/gltf-binary`, modul baru ter-load lewat Vite.
+
+**Catatan**
+
+- Track ban visual (±1,51 m) lebih sempit dari anchor fisika (±1,72 m) karena model memakai proporsi pabrikan; yang penting sumbu roda dan alas ban cocok, sehingga tidak ada ban melayang/amblas.
+- Cat bodi bisa diganti tanpa rebuild: `?paint=e23b2e`.

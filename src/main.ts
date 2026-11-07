@@ -3,6 +3,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import GUI from 'lil-gui';
 import { defaultConfig, VehiclePhysics } from './vehicle/VehiclePhysics';
 import { CarVisual } from './vehicle/CarVisual';
+import { CarModelVisual } from './vehicle/CarModelVisual';
 import { buildTrack } from './world/track';
 import { Input } from './input';
 import { Hud } from './hud';
@@ -84,7 +85,19 @@ async function boot() {
   buildTrack(world, scene);
 
   const car = new VehiclePhysics(world, defaultConfig, new THREE.Vector3(0, 0.95, 0));
-  const carVisual = new CarVisual(scene, car, { detail: !lowQuality });
+
+  // The hand-built body is only a stand-in: the detailed GLB in `public/models`
+  // replaces it as soon as it is decoded (and stays if the download fails).
+  const proceduralCar = new CarVisual(scene, car, { detail: !lowQuality });
+  let carVisual: CarVisual | CarModelVisual = proceduralCar;
+  const modelUrl = new URL('models/honda-civic-eg6.glb', document.baseURI).href;
+  const paintParam = new URLSearchParams(location.search).get('paint');
+  const paint = paintParam && /^[0-9a-f]{6}$/i.test(paintParam) ? parseInt(paintParam, 16) : undefined;
+  void CarModelVisual.load(scene, car, modelUrl, { detail: !lowQuality, paint }).then((model) => {
+    if (!model) return;
+    proceduralCar.dispose();
+    carVisual = model;
+  });
 
   /* ---------------- camera / input / hud ---------------- */
   const cameraRig = new CameraRig(window.innerWidth / window.innerHeight);
@@ -279,7 +292,10 @@ async function boot() {
   /* ---------------- debug handle ---------------- */
   (window as unknown as Record<string, unknown>).rc = {
     car,
-    carVisual,
+    // getter: the visual is swapped to the imported model once it decodes
+    get carVisual() {
+      return carVisual;
+    },
     world,
     cfg,
     input,

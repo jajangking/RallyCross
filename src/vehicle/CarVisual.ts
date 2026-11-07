@@ -348,4 +348,13 @@ export class CarVisual {
   get hubHeights() {
     return this.suspension.map((s) => s.hub.position.y);
   }
+
+  /** Drops the procedural body once the imported model has taken over. */
+  dispose() {
+    this.root.removeFromParent();
+    this.root.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (mesh.isMesh) mesh.geometry?.dispose();
+    });
+  }
 }

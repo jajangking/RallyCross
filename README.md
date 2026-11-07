@@ -55,7 +55,8 @@ src/
 ├─ main.ts                  # renderer, scene, loop tetap 60 Hz, GUI, presets
 ├─ vehicle/
 │  ├─ VehiclePhysics.ts     # SEMUA fisika kendaraan (tidak butuh DOM)
-│  ├─ CarVisual.ts          # bodi, kaca, spion, interior, perakitan
+│  ├─ CarModelVisual.ts     # GLB Honda Civic: roda, lampu, skala ke fisika
+│  ├─ CarVisual.ts          # bodi prosedural (fallback kalau GLB gagal)
 │  ├─ CarSuspension.ts      # per roda: wishbone, tie rod, coilover, rem
 │  ├─ CarLights.ts          # lampu rem, sein, mundur, lampu utama
 │  └─ carParts.ts           # material + helper geometri (link, pegas)
@@ -66,6 +67,9 @@ src/
 ├─ input.ts                 # slider setir/gas/rem analog + gigi D/R + sein/lampu
 ├─ hud.ts                   # speedo, gear D/R, beban per roda, drift
 └─ style.css
+public/models/
+├─ honda-civic-eg6.glb      # model bodi mobil (CC BY 4.0, lihat CREDITS.md)
+└─ CREDITS.md               # atribusi + daftar perubahan model
 scripts/
 ├─ smoke.ts                 # test fisika headless (Node + Rapier, tanpa render)
 └─ browser-check.mjs        # opsional: cek render/console di Chromium headless
@@ -102,28 +106,38 @@ scripts/
 
 ## Mobil & detail visual
 
-Visual mobil sekarang dibangun prosedural (tanpa file model), semuanya mengikuti state fisika:
+Bodi mobilnya sekarang **model 3D sungguhan**: Honda Civic EG6 (CC BY 4.0) di
+`public/models/honda-civic-eg6.glb`, dimuat dengan `GLTFLoader` dan
+dipasang ke mobil fisika oleh `CarModelVisual.ts`. Atribusi lengkap + daftar
+perubahan ada di [`public/models/CREDITS.md`](public/models/CREDITS.md).
 
-**Bodi & kabin**
-- Dua `ExtrudeGeometry` dari profil samping (counter-clockwise, jadi normal menghadap keluar): bodi bawah dengan hidung/buntut membulat + greenhouse terpisah, keduanya ber-bevel.
-- Kaca terpisah: windshield, rear glass (diposisikan keluar dari bevel bodi), dan dua jendela samping per sisi.
-- Spion (rumah + kaca reflektif + tangkai), fender flare di 4 lubang roda, side skirt, splitter, diffuser, sayap belakang yang menempel di bagasi lewat dua stay, scoop atap, mud flap, knalpot, tow hook, plat nomor, grille, handle pintu.
-- Interior: dashboard, dua jok, roll cage di dalam kabin, dan setir yang berputar mengikuti sudut setir (rasio 5:1).
+- **Skala otomatis** — model diskalakan dari jarak sumbu rodanya supaya pas
+  dengan `wheelBaseHalf` di fisika; tinggi ban diukur dari bounding box roda,
+  jadi keempat ban menyentuh bidang tanah yang sama dengan suspensi (tidak
+  melayang, tidak amblas).
+- **Roda tetap hidup** — empat node roda model di-*re-parent* ke pivot kemudi
+  dan pivot putaran, lalu tiap frame mengikuti `steerAngle`, `spinAngle`, dan
+  `suspLength` per roda, termasuk gerak naik/turun saat suspensi terkompresi.
+- **Lampu dari model itu sendiri** — mesh lampu bawaan model dibelah kiri/kanan
+  di index buffer, jadi lampu rem, lampu posisi, sein, lampu mundur, dan lampu
+  utama menyala di bentuk lampu aslinya (plus dua `SpotLight` untuk sorot
+  lampu utama, dimatikan di `?quality=low`).
+- **Cat bisa diganti** — default putih `#dfe4e8`; coba `?paint=e23b2e`,
+  `?paint=1f3fbf`, dan seterusnya.
+- **Fallback** — kalau GLB gagal dimuat, `CarVisual.ts` (bodi prosedural lama)
+  tetap dipakai, jadi game tidak pernah kehilangan mobil.
 
-**Suspensi per roda (kelihatan bekerja)**
-- Tiap sudut punya lower & upper wishbone, tie rod kemudi, dan coilover: pegas helical (`TubeGeometry`) + body damper + shaft.
-- Semua titik pangkal dihitung ulang tiap frame dari `wheel.suspLength` hasil raycast, jadi saat kompresi pegas memendek, lengan berayun, roda ikut bergerak; camber bertambah sedikit saat suspensi terkompresi.
-- Roda: ban, rim barel + bibir + 5 spoke, center cap, disc brake (ikut berputar) + caliper (menempel di upright, berwarna kontras), dan cakram yang berpijar halus saat rem dipakai.
-
-**Lampu (semua dinamis)**
-- Lampu rem menyala terang mengikuti pedal rem (lerp 14/s), lampu posisi redup saat tidak ngerem.
-- Lampu mundur putih menyala otomatis saat gigi R.
-- Sein kiri/kanan + hazard: kedip 0.42 s nyala / 0.42 s mati, langsung restart saat pilihan berubah, plus repeater ◀ ▶ ◐ di HUD yang ikut berkedip.
-- Lampu utama: lensa emissive + dua `SpotLight` (dimatikan di `?quality=low`).
+Logika lampu yang sama dipakai kedua jalur: `LampController` di
+`CarLights.ts` mengubah input pengemudi (pedal rem, gigi, sein, saklar lampu)
+jadi intensitas lampu — rem menguat dengan lerp 14/s, sein berkedip 0.42 s
+nyala / 0.42 s mati dan restart saat pilihan berubah, lampu mundur mengikuti
+gigi R, dan repeater ◀ ▶ ◐ di HUD ikut berkedip.
 
 **Material & performa**
-- `PMREMGenerator` + `RoomEnvironment` memberi environment map untuk cat (clearcoat), kaca, dan spion; dilewati di `?quality=low`.
-- Versi detail: **132 mesh / ±37 ribu triangle**; mode low memakai segmen lebih sedikit, tanpa roll cage dan tanpa spot light.
+- `PMREMGenerator` + `RoomEnvironment` memberi environment map supaya cat
+  metalik, kaca, dan krom model terbaca (dilewati di `?quality=low`).
+- Model: 39 mesh / ±18 ribu triangle, 250 KB, satu tekstur JPEG (lampu + plat
+  nomor); bodi prosedural fallback: 132 mesh / ±37 ribu triangle.
 
 **Loop**
 - Fisika fixed **1/60 s** + accumulator (maks 5 substep), render interpolasi pose setelah `world.step()`.
