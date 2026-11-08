@@ -389,6 +389,10 @@ export class VehiclePhysics {
       on ? RAPIER.RigidBodyType.KinematicPositionBased : RAPIER.RigidBodyType.Dynamic,
       true,
     );
+    // Selama diangkut bodinya tidak menabrak apa pun (derek, dinding, mobil
+    // lain): ia hanya "barang" yang dipindahkan tiap langkah. Tanpa ini, bodi
+    // kinematik menyodok bemper ambulans dan merusaknya sendiri.
+    this.collider.setSensor(on);
     if (!on) {
       this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
       this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);

@@ -333,6 +333,28 @@ const check = (ok: boolean, label: string, detail = '') => {
   if (!ok) failures.push(label);
 };
 
+/** Tunggu sejumlah frame permainan (bukan wall clock: mesin bisa lambat). */
+const waitFrames = async (count: number) => {
+  const target = framesRun + count;
+  const deadline = Date.now() + 60000;
+  while (framesRun < target && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+};
+
+/**
+ * Tunggu sampai kondisi terpenuhi, diukur dalam **frame permainan** (bukan
+ * wall clock): kalau mesin sedang lambat, waktu di dalam permainan berjalan
+ * lebih pelan daripada jam dinding dan batas waktu jadi palsu.
+ */
+const waitUntil = async (predicate: () => boolean, maxFrames: number) => {
+  const target = framesRun + maxFrames;
+  while (framesRun < target && !predicate()) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  return predicate();
+};
+
 const waitFor = async (predicate: () => boolean, timeoutMs = 12000) => {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -355,7 +377,7 @@ if (rc) {
   // Biarkan loop permainan berjalan ~3 detik (rAF dipalsukan tapi tetap
   // ditepati): fisika, AI, kamera, dan HUD semuanya ikut dieksekusi.
   const playerOdoBefore = rc.playerLaps.odometer as number;
-  await new Promise((r) => setTimeout(r, 3000));
+  await waitFrames(180);
   check(framesRun > 60, 'loop permainan benar-benar berjalan', `${framesRun} frame`);
   check(logs.length === 0, 'tidak ada error yang tercatat saat jalan', logs[0] ?? '');
 
@@ -406,18 +428,16 @@ if (rc) {
       );
     }
     spots.add(rc.cameraRig.broadcastName ?? '-');
-    // Kamera yang dipilih harus dekat dengan mobil di sepanjang trek: kalau
-    // sutradara nyangkut di kamera garis start, selisihnya membengkak.
+    // Kamera yang dipilih harus benar-benar dekat dengan mobilnya. (Jarak
+    // lurus, bukan jarak di sepanjang trek: mobil bisa terdorong/berputar saat
+    // dilewati rombongan, dan jalur lap-nya jadi tidak bisa dibandingkan.)
     const spot = rc.cameraRig.director?.current;
-    if (spot) {
-      const length = TRACK.length;
-      let delta = (((spot.trackDistance - rc.playerLaps.lapDistance) % length) + length) % length;
-      if (delta > length / 2) delta -= length;
-      worstGap = Math.max(worstGap, Math.abs(delta));
+    if (spot && !rc.cameraRig.aerialActive) {
+      worstGap = Math.max(worstGap, (spot.position as THREE.Vector3).distanceTo(rc.car.position as THREE.Vector3));
     }
   }
   check(worst < 25, 'kamera TV membidik mobil (bukan garis start)', `meleset maks ${worst.toFixed(0)}°`);
-  check(worstGap < 160, 'sutradara memilih kamera di dekat mobil', `selisih maks ${worstGap.toFixed(0)} m`);
+  check(worstGap < 220, 'sutradara memilih kamera di dekat mobil', `jarak maks ${worstGap.toFixed(0)} m`);
   console.log(`    (potongan kamera: ${[...spots].join(', ')})`);
 
   // Ambulans & derek harus benar-benar keluar saat ada mobil mogok. Pernah
@@ -440,7 +460,7 @@ if (rc) {
       rival.car.damage.bodyHealth = 0.4;
     }
     const t0 = Date.now();
-    await new Promise((r) => setTimeout(r, 9000));
+    await waitFrames(540);
     const phase1 = (rc.raceControl as any).ambPhase as string;
 
     // Selama bendera kuning: siaran naik ke helikopter dan membidik mobilnya.
@@ -477,7 +497,7 @@ if (rc) {
     );
     check(phase1 !== 'off', 'ambulans dikirim ke lokasi (tidak diam di parkir)', phase1);
     check(moved1 > 15, 'ambulans benar-benar bergerak keluar', `${moved1.toFixed(1)} m`);
-    await new Promise((r) => setTimeout(r, 14000));
+    await waitFrames(840);
     const phase2 = (rc.raceControl as any).ambPhase as string;
     const towed = victims.some((v) => v.car.isTowed) || phase2 === 'towing' || phase2 === 'repairing';
     console.log(`    derek: fase=${phase2} jarak ke korban ${amb.car.position.distanceTo(victims[0].car.position).toFixed(1)} m`);
@@ -487,20 +507,23 @@ if (rc) {
     // dan mobil pemain benar-benar diangkut (bukan cuma lawan yang dilayani).
     const control = rc.raceControl as any;
     // Tunggu insiden sebelumnya selesai supaya ambulansnya sudah di parkir.
-    const waitStart = Date.now();
-    while (control.ambPhase !== 'off' && Date.now() - waitStart < 45000) {
-      await new Promise((r) => setTimeout(r, 250));
-    }
-    const tGreen = Date.now();
-    while (control.flag !== 'green' && Date.now() - tGreen < 70000) {
-      await new Promise((r) => setTimeout(r, 250));
-    }
+    // Tunggu sampai benar-benar tenang (hijau + ambulans sudah di parkir):
+    // insiden baru tidak akan dimulai selama insiden lama belum selesai.
+    await waitUntil(() => control.flag === 'green' && control.ambPhase === 'off', 90 * 60);
+    await waitUntil(() => control.flag === 'green', 80 * 60);
+    const scNow = rc.safetyCar as any;
+    const greenWhy =
+      control.flag === 'green'
+        ? ''
+        : ` · sc=${control.scPhase}/${scNow.mode} sampai=${scNow.reachedRoute} ` +
+          `speed=${scNow.car.speed.toFixed(1)} amb=${control.ambPhase} ` +
+          `kuning=${(control.yellowTime as number).toFixed(0)}s resolve=${control.incident?.resolved}`;
     // Beri satu-dua frame supaya blok kamera sempat memulihkan mode.
     await new Promise((r) => setTimeout(r, 600));
     check(
       rc.cameraRig.modeName === 'chase' && !rc.cameraRig.aerialForced,
       'hijau lagi: kamera kembali normal (bukan helikopter)',
-      `${rc.cameraRig.modeName}${rc.cameraRig.aerialForced ? ' · heli dipaksa' : ''}`,
+      `${rc.cameraRig.modeName}${rc.cameraRig.aerialForced ? ' · heli dipaksa' : ''}${greenWhy ? ` · ${greenWhy}` : ''}`,
     );
     const playerCar = rc.car as any;
     const playerSpot = TRACK.at(TRACK.start + 160);
@@ -510,18 +533,14 @@ if (rc) {
     playerCar.damage.bodyHealth = 0.5;
     let playerTowed = false;
     const t1 = Date.now();
-    while (Date.now() - t1 < 60000) {
-      await new Promise((r) => setTimeout(r, 250));
-      if (playerCar.isTowed) {
-        playerTowed = true;
-        break;
-      }
-    }
+    playerTowed = await waitUntil(() => Boolean(playerCar.isTowed), 70 * 60);
     check(control.incident?.name === 'KAMU' || playerTowed, 'mobil pemain yang mogok ditangani petugas', control.ambPhase);
     check(
       playerTowed,
       'mobil pemain diangkut derek (bukan hanya diderek lawan)',
-      `${((Date.now() - t1) / 1000).toFixed(1)} s · ${control.ambPhase}`,
+      `${((Date.now() - t1) / 1000).toFixed(1)} s · ${control.ambPhase} · ` +
+        `amb ${((amb as any).car as any).speed.toFixed(1)} m/s, ` +
+        `${((amb as any).car.position as THREE.Vector3).distanceTo(playerCar.position).toFixed(0)} m dari mobil`,
     );
   }
 

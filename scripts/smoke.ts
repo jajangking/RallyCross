@@ -1650,7 +1650,7 @@ async function run() {
       const towAmb = new ServiceVehicle({
         kind: 'ambulance',
         world: towWorld,
-        park: ambPose.position,
+        park: pitPose(PIT.from + 12, 9.4).position,
         yaw: ambPose.yaw,
         main: TRACK.main,
         joker: TRACK.joker,
@@ -1660,7 +1660,7 @@ async function run() {
       const towSafety = new ServiceVehicle({
         kind: 'safety',
         world: towWorld,
-        park: pitPose(PIT.from + 2, 7.4).position,
+        park: pitPose(PIT.from + 2, 9.4).position,
         yaw: ambPose.yaw,
         main: TRACK.main,
         joker: TRACK.joker,
@@ -1681,6 +1681,13 @@ async function run() {
         { minSafetyTime: 8, hookTime: 0.8 },
       );
       const cars = [{ name: 'Krisna', car: wreckCar }];
+      // Kendaraan pendukung juga harus tahu ada mobil lain (kalau tidak, mereka
+      // saling menabrak saat sama-sama menyusuri garis balap).
+      const towTraffic = [
+        { position: wreckCar.position, speed: 0 },
+        { position: towAmb.car.position, speed: 0 },
+        { position: towSafety.car.position, speed: 0 },
+      ];
       let rescuedAt = -1;
       let towed = false;
       let t = 0;
@@ -1688,15 +1695,23 @@ async function run() {
       // cepat sampai): hitung frame yang arahnya berlawanan dengan garis balap.
       let wrongFrames = 0;
       let worstWrong = 0;
+      let worstHurt = 0;
+      let spinFrames = 0;
+      let hurtAt = '';
+      let control2: any = realControl;
       const ambFwd = new THREE.Vector3();
       for (let i = 0; i < Math.round(120 / DT); i++) {
-        towAmb.step(DT);
-        towSafety.step(DT);
+        towTraffic[0].speed = wreckCar.speed;
+        towTraffic[1].speed = towAmb.car.speed;
+        towTraffic[2].speed = towSafety.car.speed;
+        towAmb.step(DT, towTraffic);
+        towSafety.step(DT, towTraffic);
         towWorld.step();
         towAmb.sync(DT);
         towSafety.sync(DT);
         wreckCar.sync();
         realControl.update(DT, cars);
+        control2 = realControl;
         if (wreckCar.isTowed) towed = true;
         t += DT;
         if (towAmb.car.speed > 6) {
@@ -1705,6 +1720,15 @@ async function run() {
           const along = ambFwd.x * tangent.x + ambFwd.z * tangent.z;
           if (along < -0.3) wrongFrames++;
           worstWrong = Math.max(worstWrong, -along);
+          // Berputar/drift liar = badan mobil melintang jauh dari arah trek.
+          if (Math.abs(along) < 0.5) spinFrames++;
+          // Kendaraan pendukung tidak boleh menghajar apa pun di jalan.
+          const hurt = 1 - Math.min(towAmb.car.damage.bodyHealth, towSafety.car.damage.bodyHealth);
+          if (hurt > worstHurt + 0.005) {
+            hurtAt = `${control2.ambPhase}/${control2.scPhase} t=${t.toFixed(0)}s`;
+          }
+          worstHurt = Math.max(worstHurt, hurt);
+          // Dan tidak boleh melenceng jauh dari garis balap (drift liar).
         }
         if (wreckCar.damage.bodyHealth === 1 && wreckCar.damage.engineHealth === 1) {
           rescuedAt = t;
@@ -1717,6 +1741,16 @@ async function run() {
         wrongFrames < 60,
         'ambulans tidak menyetir lawan arah',
         `${wrongFrames} frame lawan arah (maks ${worstWrong.toFixed(2)})`,
+      );
+      check(
+        worstHurt < 0.02,
+        'ambulans & safety car tidak menabrak apa pun saat bertugas',
+        `bodi paling rusak ${(worstHurt * 100).toFixed(0)} % ${hurtAt}`,
+      );
+      check(
+        spinFrames < 40,
+        'ambulans tidak berputar/drift liar saat bertugas',
+        `${spinFrames} frame melintang`,
       );
       check(
         rescuedAt > 0 && atBox < 8,

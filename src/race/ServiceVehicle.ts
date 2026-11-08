@@ -58,6 +58,10 @@ export class ServiceVehicle {
   private readonly yaw: number;
   /** Titik yang dikejar `intercept()` — cukup dekat, tidak harus tepat. */
   private chase: THREE.Vector3 | null = null;
+  /** Jarak (m) yang dianggap "sudah sampai" untuk `intercept()`. */
+  private chaseRadius = 7;
+  /** Sudah berhenti dekat sasaran selama ini (detik) → dianggap sampai. */
+  private chaseWait = 0;
   private readonly barMat: THREE.MeshToonMaterial;
   private readonly lights: CarLightState = {
     brake: 0,
@@ -78,7 +82,9 @@ export class ServiceVehicle {
       useJoker: false,
       laneOffset: 0,
       pace: 0.55,
-      overtake: false,
+      // Ambulans boleh menyalip mobil yang lambat (rombongan di bawah bendera
+      // kuning) supaya tidak tertahan di belakangnya. Safety car tidak.
+      overtake: setup.kind === 'ambulance',
       chase: false,
     });
     this.pilot.reset(this.car.position);
@@ -112,6 +118,7 @@ export class ServiceVehicle {
     this.mode = 'parked';
     this.route = [];
     this.chase = null;
+    this.chaseWait = 0;
     this.arrived = false;
     this.car.placeAt(this.park, this.yaw);
     this.pilot.reset(this.car.position);
@@ -122,6 +129,7 @@ export class ServiceVehicle {
     this.mode = 'parked';
     this.route = [];
     this.chase = null;
+    this.chaseWait = 0;
     this.arrived = true;
   }
 
@@ -130,6 +138,7 @@ export class ServiceVehicle {
     this.mode = 'line';
     this.route = [];
     this.chase = null;
+    this.chaseWait = 0;
     this.pilot.options.pace = pace;
     this.pilot.reset(this.car.position);
   }
@@ -148,9 +157,6 @@ export class ServiceVehicle {
     this.pilot.options.pace = pace;
   }
 
-  /** Jarak (m) yang dianggap "sudah sampai" untuk `intercept()`. */
-  private readonly chaseRadius = 9;
-
   /** Sudah sampai di titik terakhir rute? */
   get reachedRoute(): boolean {
     return this.arrived;
@@ -164,14 +170,19 @@ export class ServiceVehicle {
    * kerb dan tanggul; mengikuti garis balap ke arah balap berarti mengelilingi
    * hampir satu putaran penuh kalau kecelakaannya ada di belakang.
    */
-  intercept(target: THREE.Vector3, pace = 0.85) {
-    // Selalu menyusuri garis balap **searah balap** (tidak pernah lawan arah):
-    // kalau lokasinya di belakang pun, ambulans memutar satu putaran. Lalu
-    // merapat ke titiknya saat sudah dekat.
+  /**
+   * Kejar sebuah titik dengan **mengikuti garis balap** (searah balap, tidak
+   * pernah lawan arah), lalu **mengerem** begitu mendekati titiknya.
+   *
+   * Sengaja tidak menyetir langsung ke titiknya: `driveTo` pada sasaran yang
+   * dekat membuat mobil darurat berputar-putar (busur setir penuh) dan
+   * menabrak kerb/dinding pit. Menyusuri garis + rem = berhenti rapi di sisinya.
+   */
+  intercept(target: THREE.Vector3, pace = 0.85, stopRadius = 7) {
     this.followLine(pace);
-    // Cukup berhenti **di dekat** titiknya: kalau harus tepat, mobil darurat
-    // akan mendorong mobil yang mogok.
     this.chase = target.clone();
+    this.chaseRadius = stopRadius;
+    this.chaseWait = 0;
   }
 
   /** Titik yang sedang dituju (null kalau tidak ada). */
@@ -184,22 +195,27 @@ export class ServiceVehicle {
     let command: VehicleInput = { throttle: 0, brake: 1, steer: 0, handbrake: false, gear: 1 };
     if (this.mode === 'line') {
       this.arrived = false;
+      command = this.pilot.update(dt, this.car, others);
       if (this.chase) {
         const gap = this.chase.distanceTo(this.car.position);
-        if (gap < this.chaseRadius) {
-          // Sudah di sampingnya.
+        const speed = Math.abs(this.car.speed);
+        // Berhenti karena ada mobil lain/dinding di depannya? Jangan menggantung
+        // selamanya di fase "menuju lokasi".
+        if (gap < this.chaseRadius + 8 && speed < 2) this.chaseWait += dt;
+        else this.chaseWait = 0;
+        if ((gap < this.chaseRadius && speed < 3) || this.chaseWait > 1.5) {
+          // Sudah berhenti di sampingnya.
           this.hold();
-          this.car.fixedStep(dt, command);
-          return command;
-        }
-        if (gap < 30) {
-          // Dekat tapi tidak persis di garis (mis. mobil terlempar ke rumput).
-          command = this.pilot.driveTo(dt, this.car, this.chase, { maxSpeed: 10, stopDistance: 4 });
-          this.car.fixedStep(dt, command);
-          return command;
+          command = { throttle: 0, brake: 1, steer: 0, handbrake: false, gear: 1 };
+        } else {
+          // Profil rem sederhana: v = √(2·a·s) menuju titiknya. Setirnya tetap
+          // dari pilot (menyusuri garis), jadi tidak ada busur mengelilingi
+          // sasaran.
+          const allowed = Math.sqrt(Math.max(0, 2 * 5.5 * Math.max(0, gap - this.chaseRadius * 0.6)));
+          if (speed > allowed + 1.5) command = { ...command, throttle: 0, brake: 1 };
+          else if (speed > allowed) command = { ...command, throttle: 0, brake: 0.45 };
         }
       }
-      command = this.pilot.update(dt, this.car, others);
     } else if (this.mode === 'route') {
       // Sudah cukup dekat dengan titik yang dikejar? Berhenti di sisinya.
       if (this.chase && this.chase.distanceTo(this.car.position) < this.chaseRadius) {

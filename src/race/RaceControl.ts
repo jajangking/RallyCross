@@ -32,7 +32,7 @@ export interface ServiceHandle {
   followLine(pace?: number): void;
   driveRoute(points: THREE.Vector3[], after: 'park' | 'line', pace?: number): void;
   /** Susuri garis balap sampai dekat titik, lalu berhenti di sisinya. */
-  intercept?(target: THREE.Vector3, pace?: number): void;
+  intercept?(target: THREE.Vector3, pace?: number, stopRadius?: number): void;
   /** Berhenti di tempat (tanpa teleport ke kotak parkir). */
   hold?(): void;
   parkNow(): void;
@@ -131,8 +131,6 @@ export class RaceControl {
   incident: Incident | null = null;
 
   private readonly setup: RaceControlSetup;
-  /** Lama tiap mobil berhenti (detik), untuk mendeteksi mobil nyangkut. */
-  private readonly stopped = new Map<string, number>();
   private yellowTime = 0;
   private attendTimer = 0;
   /** Kotak servis tujuan derek, disimpan saat insiden dimulai. */
@@ -191,7 +189,6 @@ export class RaceControl {
     this.ambPhase = 'off';
     this.incident?.target.setTowed?.(false);
     this.incident = null;
-    this.stopped.clear();
     this.yellowTime = 0;
     this.attendTimer = 0;
     this.towTarget = null;
@@ -203,7 +200,7 @@ export class RaceControl {
   /** Satu langkah pengawasan. Panggil sekali per frame (setelah `sync()`). */
   update(dt: number, cars: readonly RaceCar[]) {
     if (!this.incident) {
-      this.watch(dt, cars);
+      this.watch(cars);
       return;
     }
 
@@ -226,9 +223,7 @@ export class RaceControl {
         // Kembali lewat trek dulu sampai mulut pit, baru belok ke kotaknya:
         // menyetir lurus dari tengah trek berarti menembus kerb & dinding pit.
         const safety = this.setup.safety;
-        this.scLeg = this.setup.pitEntry && safety?.intercept ? 'line' : 'box';
-        if (this.scLeg === 'line') safety!.intercept!(this.setup.pitEntry!, 0.9);
-        else safety?.driveRoute([this.setup.scPark], 'park', 0.6);
+        if (safety) this.scLeg = this.goHome(safety, this.setup.scPark, 0.9);
       }
     } else if (this.scPhase === 'returning') {
       const safety = this.setup.safety;
@@ -253,7 +248,7 @@ export class RaceControl {
         ambulance.reachedRoute ||
         // Cukup dekat dengan mobilnya (bukan titik lama saat insiden mulai:
         // mobil bisa menggelinding atau terdorong).
-        ambulance.car.position.distanceTo(incident.target.position) < 10
+        ambulance.car.position.distanceTo(incident.target.position) < 12
       ) {
         this.attendTimer = 0;
         ambulance.hold?.();
@@ -274,7 +269,7 @@ export class RaceControl {
         this.towLeg = this.setup.pitEntry && ambulance?.intercept ? 'line' : 'box';
         if (this.setup.pitEntry && ambulance?.intercept) {
           // Menarik derek: susuri trek dulu sampai pintu masuk pit.
-          ambulance.intercept(this.setup.pitEntry.clone(), 0.9);
+          ambulance.intercept(this.setup.pitEntry.clone(), 0.75, 14);
         } else {
           const dest = this.towTarget!;
           ambulance?.driveRoute([dest.position.clone()], 'park', 0.6);
@@ -287,8 +282,10 @@ export class RaceControl {
         const yaw = ambulance.car.yaw ?? 0;
         const behind = this.tmpTow
           .copy(ambulance.car.position)
-          .addScaledVector(this.tmpFwd.set(Math.sin(yaw), 0, Math.cos(yaw)), -5.4);
-        behind.y += 0.15;
+          .addScaledVector(this.tmpFwd.set(Math.sin(yaw), 0, Math.cos(yaw)), -6.9);
+        // Digantung cukup jauh & cukup tinggi di belakang derek supaya
+        // bodinya tidak menyodok bemper belakang ambulans saat mengerem.
+        behind.y += 0.35;
         incident.target.carryTo?.(behind, yaw);
         if (ambulance.reachedRoute && this.towLeg === 'line') {
           // Sudah sampai pintu masuk pit: belok ke kotak servisnya.
@@ -376,13 +373,30 @@ export class RaceControl {
     return false;
   }
 
-  /** Pulangkan ambulans ke parkirnya: susuri trek dulu sampai mulut pit. */
+  /**
+   * Arahkan kendaraan pendukung pulang ke kotaknya.
+   *
+   * Kalau sudah dekat (masih di area servis) cukup menyetir langsung ke kotak —
+   * dulu ambulans yang baru menurunkan mobil malah memutar satu putaran penuh
+   * hanya untuk kembali ke parkirnya.
+   */
+  private goHome(handle: ServiceHandle, park: THREE.Vector3, pace = 0.9): 'line' | 'box' {
+    if (handle.car.position.distanceTo(park) < 60) {
+      handle.driveRoute([park], 'park', 0.6);
+      return 'box';
+    }
+    if (this.setup.pitEntry && handle.intercept) {
+      handle.intercept(this.setup.pitEntry, pace, 12);
+      return 'line';
+    }
+    handle.driveRoute([park], 'park', 0.6);
+    return 'box';
+  }
+
+  /** Pulangkan ambulans ke parkirnya. */
   private sendHome() {
     const ambulance = this.setup.ambulance;
-    if (!ambulance) return;
-    this.ambLeg = this.setup.pitEntry && ambulance.intercept ? 'line' : 'box';
-    if (this.ambLeg === 'line') ambulance.intercept!(this.setup.pitEntry!, 0.9);
-    else ambulance.driveRoute([this.setup.ambPark], 'park', 0.8);
+    if (ambulance) this.ambLeg = this.goHome(ambulance, this.setup.ambPark, 0.9);
   }
 
   /** Insiden benar-benar selesai: hijau lagi. */
@@ -405,22 +419,17 @@ export class RaceControl {
    *    masuk pit sendiri (AI minta pit otomatis, pemain menyetir ke kotaknya)
    *    supaya perbaikannya tetap memakan waktu seperti pit stop.
    */
-  private watch(dt: number, cars: readonly RaceCar[]) {
+  private watch(cars: readonly RaceCar[]) {
     for (const entry of cars) {
       const damage = entry.car.damage;
       const flipped = (entry.car.upright ?? 1) < 0.25;
       const cannotDrive =
         damage.engineDead || damage.immobile || damage.lostCount >= 2 || flipped;
 
-      const slow = Math.abs(entry.car.speed) < this.options.stoppedSpeed;
-      const stuckFor = slow ? (this.stopped.get(entry.name) ?? 0) + dt : 0;
-      this.stopped.set(entry.name, stuckFor);
-
-      // Nyangkut = berhenti lama **dan** sudah rusak (bukan pemain yang sedang
-      // diam saja dengan mobil utuh).
-      const wedged = stuckFor > this.options.stuckTime && damage.bodyHealth < 0.95;
-
-      if (cannotDrive || wedged) {
+      // Hanya mobil yang **benar-benar tidak bisa jalan** yang dilayani derek.
+      // Mobil yang sekadar berhenti, spin, atau nyangkut sebentar tidak
+      // memunculkan ambulans: dia bisa menyetir sendiri (atau mundur) ke pit.
+      if (cannotDrive) {
         this.startIncident(entry, true);
         return;
       }
@@ -440,7 +449,6 @@ export class RaceControl {
     this.flag = 'yellow';
     this.scPhase = 'deploying';
     this.yellowTime = 0;
-    this.stopped.set(entry.name, 0);
     // Diderek ke kotak servisnya sendiri (kalau ada kotaknya).
     this.towTarget = medical ? (this.setup.towTo?.(entry.name) ?? null) : null;
     this.repairTime = 0;
@@ -454,8 +462,10 @@ export class RaceControl {
       scene.y = Math.max(0.95, position.y);
       // Susuri trek dulu, baru belok ke lokasi — ambulance tidak bisa
       // menyetir lurus menembus kerb dan tanggul.
-      // Mobil darurat: ngebut searah balap (tidak pernah lawan arah).
-      if (this.setup.ambulance.intercept) this.setup.ambulance.intercept(scene, 1);
+      // Mobil darurat: cepat tapi tetap di garis balap (tidak pernah lawan
+      // arah). Pace 0,9 adalah batas aman — lebih dari itu ambulans mulai
+      // melebar di tikungan dan menyabet dinding.
+      if (this.setup.ambulance.intercept) this.setup.ambulance.intercept(scene, 0.9);
       else this.setup.ambulance.driveRoute([scene], 'park', 0.9);
       this.events.push({ kind: 'yellow', text: 'AMBULANS DIBERANGKATKAN' });
     }
