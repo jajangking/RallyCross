@@ -1471,7 +1471,9 @@ async function run() {
       { name: 'KAMU', car: healthyCar, isPlayer: true },
       { name: 'Krisna', car: hurtCar },
     ];
-    control.update(DT, cars);
+    // Mogok = tidak bisa jalan **dan** diam cukup lama (bukan sekadar sempat
+    // berhenti): biarkan beberapa detik dulu.
+    for (let i = 0; i < Math.round(7 / DT); i++) control.update(DT, cars);
     check(
       control.flag === 'yellow' && control.scActive && hurt.engineDead,
       'mobil hancur memicu bendera kuning + safety car',
@@ -1560,7 +1562,7 @@ async function run() {
         { name: 'KAMU', car: healthyCar, isPlayer: true },
         { name: 'Krisna', car: wreckCar },
       ];
-      towControl.update(DT, towCars);
+      for (let i = 0; i < Math.round(7 / DT); i++) towControl.update(DT, towCars);
       check(
         towControl.ambPhase === 'toScene',
         'mobil mogok: ambulans meluncur ke lokasi',
@@ -1759,7 +1761,28 @@ async function run() {
       );
     }
 
-    // 6. Mobil terbalik (mesin & bodi masih utuh) = tidak bisa jalan → ambulans
+    // 6. Mesin mati tapi mobilnya masih meluncur: belum tentu mogok — bisa
+    //    berhenti sendiri di pinggir. Tidak boleh langsung memicu kuning.
+    {
+      const rolling = new RaceControl(
+        { safety: makeHandle(), ambulance: makeHandle(), scJoin: svJoin.clone(), scPark: new THREE.Vector3(), ambPark: new THREE.Vector3() },
+        { minSafetyTime: 8 },
+      );
+      const car = { position: new THREE.Vector3(), speed: 12, damage: new VehicleDamage() };
+      car.damage.engineHealth = 0;
+      car.damage.engineDead = true;
+      // Masih meluncur: posisinya berubah, jadi belum dianggap mogok.
+      for (let i = 0; i < Math.round(7 / DT); i++) {
+        car.position.z += 12 * DT;
+        rolling.update(DT, [{ name: 'KAMU', car }]);
+      }
+      check(rolling.flag === 'green' && !rolling.scActive, 'masih meluncur: belum dianggap mogok', rolling.flag);
+      // Berhenti (tidak ada kemajuan) → setelah ambang waktu baru ditangani.
+      for (let i = 0; i < Math.round(7 / DT); i++) rolling.update(DT, [{ name: 'KAMU', car }]);
+      check(rolling.flag === 'yellow', 'berhenti lama tanpa kemajuan: baru dipanggilkan bantuan', rolling.flag);
+    }
+
+    // 7. Mobil terbalik (mesin & bodi masih utuh) = tidak bisa jalan → ambulans
     //    datang dan mendereknya, bukan cuma didiamkan.
     {
       const flipped = new RaceControl(
@@ -1785,8 +1808,12 @@ async function run() {
           dropAt: () => {},
         },
       };
-      for (let i = 0; i < 20; i++) flipped.update(DT, [upsideDown]);
-      check(flipped.flag === 'yellow' && flipped.ambPhase !== 'off', 'mobil terbalik mengirim ambulans', flipped.ambPhase);
+      // Sebentar terbalik: belum dihitung mogok (mobil bisa balik sendiri).
+      for (let i = 0; i < Math.round(2 / DT); i++) flipped.update(DT, [upsideDown]);
+      check(flipped.flag === 'green' && flipped.ambPhase === 'off', 'terbalik sebentar: tidak ada bendera kuning', flipped.ambPhase);
+      // Terbalik terus (lebih lama dari ambang): ambulans + derek.
+      for (let i = 0; i < Math.round(6 / DT); i++) flipped.update(DT, [upsideDown]);
+      check(flipped.flag === 'yellow' && flipped.ambPhase !== 'off', 'terbalik lama mengirim ambulans', flipped.ambPhase);
     }
 
     // 6. Tanpa kecelakaan: tidak ada kuning, tidak ada safety car.

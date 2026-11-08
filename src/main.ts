@@ -845,8 +845,10 @@ async function boot() {
     const watchingCrash = raceControl.flag === 'yellow' && incident !== null;
     if (watchingCrash) {
       if (yellowCamReturn === null) yellowCamReturn = cameraRig.modeName;
-      cameraRig.setForcedAerial(true);
+      // Urutannya penting: `setMode('tv')` mematikan gambar udara, jadi
+      // paksaannya dipasang setelah mode siaran aktif.
       if (cameraRig.modeName !== 'tv') cameraRig.setMode('tv');
+      cameraRig.setForcedAerial(true);
     } else if (yellowCamReturn !== null) {
       cameraRig.setForcedAerial(false);
       cameraRig.setMode(yellowCamReturn);

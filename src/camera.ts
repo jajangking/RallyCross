@@ -228,6 +228,12 @@ export class CameraRig {
       a.active = false;
       return false;
     }
+    if (this.forcedAerial) {
+      // Dipaksa (bendera kuning): gambar udara terus, tanpa jadwal.
+      a.active = true;
+      a.held += dt;
+      return true;
+    }
     if (a.active) {
       a.held += dt;
       if (this.forcedAerial) return true;

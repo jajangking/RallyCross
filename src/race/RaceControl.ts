@@ -89,9 +89,7 @@ export type RaceControlEvent =
   | { kind: 'repaired'; text: string };
 
 export interface RaceControlOptions {
-  /** Kecepatan di bawah ini dianggap berhenti (m/s). */
-  stoppedSpeed: number;
-  /** Berapa lama berhenti sebelum dianggap perlu bantuan (detik). */
+  /** Berapa lama tidak bisa jalan **tanpa kemajuan** sebelum diderek (detik). */
   stuckTime: number;
   /** Lama safety car memimpin sebelum boleh masuk (detik). */
   minSafetyTime: number;
@@ -103,9 +101,11 @@ export interface RaceControlOptions {
   yellowPace: number;
 }
 
+/** Mobil yang bergeser lebih jauh dari ini dianggap masih bisa menyelamatkan diri. */
+const STUCK_TRAVEL = 12;
+
 export const defaultRaceControlOptions: RaceControlOptions = {
-  stoppedSpeed: 1.2,
-  stuckTime: 8,
+  stuckTime: 6,
   minSafetyTime: 10,
   attendTime: 5,
   hookTime: 1.2,
@@ -131,6 +131,8 @@ export class RaceControl {
   incident: Incident | null = null;
 
   private readonly setup: RaceControlSetup;
+  /** Sejak kapan & dari mana tiap mobil dalam keadaan tidak bisa jalan. */
+  private readonly stuck = new Map<string, { t: number; pos: THREE.Vector3 }>();
   private yellowTime = 0;
   private attendTimer = 0;
   /** Kotak servis tujuan derek, disimpan saat insiden dimulai. */
@@ -191,6 +193,7 @@ export class RaceControl {
     this.incident = null;
     this.yellowTime = 0;
     this.attendTimer = 0;
+    this.stuck.clear();
     this.towTarget = null;
     this.events.length = 0;
     this.setup.safety?.parkNow();
@@ -200,7 +203,7 @@ export class RaceControl {
   /** Satu langkah pengawasan. Panggil sekali per frame (setelah `sync()`). */
   update(dt: number, cars: readonly RaceCar[]) {
     if (!this.incident) {
-      this.watch(cars);
+      this.watch(dt, cars);
       return;
     }
 
@@ -411,25 +414,45 @@ export class RaceControl {
    * Cari mobil yang butuh bantuan.
    *
    * Aturannya:
-   *  - **Tidak bisa jalan** (mesin mati, roda tinggal dua, atau terbalik) →
-   *    ambulans datang, mengait, dan mendereknya ke kotak servis.
+   *  - **Tidak bisa jalan dan diam cukup lama** (mesin mati, roda tinggal dua,
+   *    atau terbalik) → ambulans datang, mengait, dan mendereknya ke kotak
+   *    servis. Terbalik lalu bisa balik sendiri = tidak dihitung.
    *  - **Berhenti lama setelah rusak** (nyangkut di gravel/pagar) → sama:
    *    diderek keluar, karena tidak bisa menyelamatkan diri.
    *  - **Masih bisa jalan** → tidak ada insiden sama sekali. Mobil itu yang
    *    masuk pit sendiri (AI minta pit otomatis, pemain menyetir ke kotaknya)
    *    supaya perbaikannya tetap memakan waktu seperti pit stop.
    */
-  private watch(cars: readonly RaceCar[]) {
+  private watch(dt: number, cars: readonly RaceCar[]) {
     for (const entry of cars) {
-      const damage = entry.car.damage;
-      const flipped = (entry.car.upright ?? 1) < 0.25;
+      const car = entry.car;
+      const damage = car.damage;
+      // Terbalik = tidak bisa jalan sendiri, walau mesinnya masih hidup.
+      const flipped = (car.upright ?? 1) < 0.25;
       const cannotDrive =
         damage.engineDead || damage.immobile || damage.lostCount >= 2 || flipped;
 
-      // Hanya mobil yang **benar-benar tidak bisa jalan** yang dilayani derek.
-      // Mobil yang sekadar berhenti, spin, atau nyangkut sebentar tidak
-      // memunculkan ambulans: dia bisa menyetir sendiri (atau mundur) ke pit.
-      if (cannotDrive) {
+      // Yang penting **lama**, bukan sekadar sempat: mobil yang terbalik lalu
+      // bisa balik sendiri, atau yang masih meluncur setelah mesinnya mati,
+      // tidak boleh langsung memicu bendera kuning + derek. Dihitung dari
+      // lamanya tidak bisa jalan **tanpa kemajuan**: kalau mobilnya ternyata
+      // masih pindah jauh (didorong, menggelinding), hitungannya diulang.
+      const seen = this.stuck.get(entry.name);
+      if (!cannotDrive) {
+        this.stuck.delete(entry.name);
+        continue;
+      }
+      if (!seen) {
+        this.stuck.set(entry.name, { t: 0, pos: car.position.clone() });
+        continue;
+      }
+      if (seen.pos.distanceTo(car.position) > STUCK_TRAVEL) {
+        seen.pos.copy(car.position);
+        seen.t = 0;
+        continue;
+      }
+      seen.t += dt;
+      if (seen.t > this.options.stuckTime) {
         this.startIncident(entry, true);
         return;
       }
@@ -449,6 +472,7 @@ export class RaceControl {
     this.flag = 'yellow';
     this.scPhase = 'deploying';
     this.yellowTime = 0;
+    this.stuck.delete(entry.name);
     // Diderek ke kotak servisnya sendiri (kalau ada kotaknya).
     this.towTarget = medical ? (this.setup.towTo?.(entry.name) ?? null) : null;
     this.repairTime = 0;

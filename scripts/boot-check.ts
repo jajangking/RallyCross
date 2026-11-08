@@ -454,13 +454,18 @@ if (rc) {
       // Taruh di depan ambulans (ia parkir di km 120), lalu rusakkan —
       // urutannya penting: `placeAt` memperbaiki mobil (damage.reset).
       const spot = TRACK.at(TRACK.start + 180);
-      rival.car.placeAt(new THREE.Vector3(spot.pos.x, spot.pos.y + 0.6, spot.pos.z), spot.yaw);
+      // Di pinggir trek (bukan di garis balap) supaya rombongan tidak terus
+      // menabraknya — kalau didorong, mobil itu belum benar-benar mogok.
+      const side = spot.pos.clone().addScaledVector(spot.side, 9);
+      rival.car.placeAt(new THREE.Vector3(side.x, spot.pos.y + 0.6, side.z), spot.yaw);
       rival.car.damage.engineHealth = 0;
       rival.car.damage.engineDead = true;
       rival.car.damage.bodyHealth = 0.4;
     }
     const t0 = Date.now();
     await waitFrames(540);
+    // Beri beberapa frame: kamera kuning baru aktif setelah insiden dimulai.
+    await waitFrames(30);
     const phase1 = (rc.raceControl as any).ambPhase as string;
 
     // Selama bendera kuning: siaran naik ke helikopter dan membidik mobilnya.
@@ -526,14 +531,17 @@ if (rc) {
       `${rc.cameraRig.modeName}${rc.cameraRig.aerialForced ? ' · heli dipaksa' : ''}${greenWhy ? ` · ${greenWhy}` : ''}`,
     );
     const playerCar = rc.car as any;
-    const playerSpot = TRACK.at(TRACK.start + 160);
-    playerCar.placeAt(new THREE.Vector3(playerSpot.pos.x, playerSpot.pos.y + 0.6, playerSpot.pos.z), playerSpot.yaw);
+    const playerSpot = TRACK.at(TRACK.start + 90);
+    // Di pinggir trek juga: kalau di garis balap, rombongan akan terus
+    // mendorongnya dan mobil itu belum benar-benar mogok.
+    const playerSide = playerSpot.pos.clone().addScaledVector(playerSpot.side, 8);
+    playerCar.placeAt(new THREE.Vector3(playerSide.x, playerSpot.pos.y + 0.6, playerSide.z), playerSpot.yaw);
     playerCar.damage.engineHealth = 0;
     playerCar.damage.engineDead = true;
     playerCar.damage.bodyHealth = 0.5;
     let playerTowed = false;
     const t1 = Date.now();
-    playerTowed = await waitUntil(() => Boolean(playerCar.isTowed), 70 * 60);
+    playerTowed = await waitUntil(() => Boolean(playerCar.isTowed), 110 * 60);
     check(control.incident?.name === 'KAMU' || playerTowed, 'mobil pemain yang mogok ditangani petugas', control.ambPhase);
     check(
       playerTowed,
