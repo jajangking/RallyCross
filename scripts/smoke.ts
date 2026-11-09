@@ -12,7 +12,7 @@ import { RaceControl, type ServiceHandle } from '../src/race/RaceControl';
 import { ServiceVehicle } from '../src/race/ServiceVehicle';
 import { VehicleDamage } from '../src/vehicle/Damage';
 import { BroadcastDirector } from '../src/camera/BroadcastDirector';
-import { lapPath, nearestSample, type PathSample } from '../src/world/circuit';
+import { JOKER_START, lapPath, nearestSample, type PathSample } from '../src/world/circuit';
 import { AutoPilot } from '../src/ai/AutoPilot';
 import { LapCounter } from '../src/race/LapCounter';
 import { Rival } from '../src/race/Rival';
@@ -525,6 +525,156 @@ async function run() {
     check(stillHurt, 'mobil uji tidak sembuh sendiri di tengah jalan', `bodi ${(rival.car.damage.bodyHealth * 100).toFixed(0)} %`);
   }
 
+  /* ---- joker taktis: keputusan mengikuti lalu lintas, bukan jadwal ---- */
+  {
+    const fakeCar = (at: THREE.Vector3, yaw: number) => ({
+      position: at.clone(),
+      velocity: new THREE.Vector3(0, 0, 12),
+      quaternion: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw),
+      angularVelocity: new THREE.Vector3(),
+      speed: 12,
+      gear: 1 as const,
+      wheels: [{ contact: true }, { contact: true }, { contact: true }, { contact: true }],
+    });
+    // Titik belah joker diukur dari geometri, bukan angka hafalan.
+    const splitDistance = TRACK.main[nearestSample(TRACK.main, JOKER_START)].distance;
+    const splitAt = TRACK.at(splitDistance);
+    // 30 m sebelum titik belah, tepat di garis.
+    const before = TRACK.at(splitDistance - 30);
+    const placePilot = (p: AutoPilot) => {
+      p.reset(before.pos.clone());
+      return fakeCar(before.pos.clone().setY(0.95), before.yaw);
+    };
+    const makePilot = (opts: Record<string, unknown>) =>
+      new AutoPilot(TRACK.main, TRACK.joker, { jokerPolicy: 'tactical', ...opts });
+
+    const blockedPilot = makePilot({ jokerBias: 0, jokerEvery: 0 });
+    const blockedCar = placePilot(blockedPilot);
+    const slowAhead = {
+      position: blockedCar.position.clone().addScaledVector(splitAt.tangent, 10),
+      speed: 4,
+    };
+    blockedPilot.update(DT, blockedCar, [slowAhead]);
+    check(
+      blockedPilot.options.useJoker && blockedPilot.jokerReason === 'terhalang',
+      'joker diambil saat jalur terhalang mobil lambat',
+      `alasan: ${blockedPilot.jokerReason}`,
+    );
+
+    const freePilot = makePilot({ jokerBias: 0.3, jokerEvery: 0 });
+    const freeCar = placePilot(freePilot);
+    freePilot.update(DT, freeCar, []);
+    check(
+      !freePilot.options.useJoker && freePilot.jokerReason === 'bebas',
+      'jalur lengang: AI tetap di garis utama',
+      `alasan: ${freePilot.jokerReason}`,
+    );
+
+    const duePilot = makePilot({ jokerBias: 0, jokerEvery: 2 });
+    const dueCar = placePilot(duePilot);
+    duePilot.lap = 3; // tiga lap tanpa joker
+    duePilot.update(DT, dueCar, []);
+    check(
+      duePilot.options.useJoker && duePilot.jokerReason === 'wajib',
+      'setelah beberapa lap tanpa joker, AI mengambilnya (tidak hilang selamanya)',
+      `alasan: ${duePilot.jokerReason}`,
+    );
+  }
+
+  /* ---- menyalip di tikungan: cari celah, jangan keluar trek ---- */
+  {
+    const cornerAt = 120; // T1
+    const corner = TRACK.at(cornerAt);
+    const startPose = TRACK.at(cornerAt - 55);
+    const run = (allowCorner: boolean) => {
+      const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+      world.timestep = DT;
+      buildTrackColliders(world);
+      const car = new VehiclePhysics(
+        world,
+        defaultConfig,
+        new THREE.Vector3(startPose.pos.x, 0.95, startPose.pos.z),
+        startPose.yaw,
+      );
+      const pilot = new AutoPilot(TRACK.main, TRACK.joker, {
+        jokerPolicy: 'never',
+        useJoker: false,
+        overtakeInCorners: allowCorner,
+        cornerOvertakeLimit: 0.03,
+        overtake: true,
+      });
+      pilot.reset(car.position);
+      // Mobil yang disalip berada di sisi LUAR tikungan: AI harus mencari celah
+      // di sisi dalam (aturan baru: menyalip di tikungan hanya ke dalam).
+      const blockerPos = corner.pos.clone().addScaledVector(corner.side, 4.0);
+      const blocker = { position: blockerPos.clone(), speed: 3 };
+      let passed = false;
+      let maxExcess = 0;
+      let closest = Infinity;
+      for (let i = 0; i < Math.round(9 / DT); i++) {
+        const command = pilot.update(DT, car, [blocker]);
+        car.fixedStep(DT, command);
+        world.step();
+        car.sync();
+        maxExcess = Math.max(maxExcess, Math.abs(pilot.lateral) - pilot.sample.halfWidth);
+        closest = Math.min(closest, car.position.distanceTo(blockerPos));
+        if (!passed && Math.hypot(car.position.x - blockerPos.x, car.position.z - blockerPos.z) > 14) {
+          passed = true;
+        }
+      }
+      return { passed, maxExcess, closest };
+    };
+    const allowed = run(true);
+    check(
+      allowed.passed,
+      'AI menyalip mobil yang berhenti di dalam tikungan',
+      `jarak terdekat ${allowed.closest.toFixed(1)} m`,
+    );
+    check(
+      allowed.maxExcess < 2,
+      'menyalip di tikungan tanpa keluar trek',
+      `maks ${allowed.maxExcess.toFixed(1)} m lewat tepi`,
+    );
+    check(
+      allowed.closest > 1.8,
+      'tidak menyerempet mobil yang disalip',
+      `terdekat ${allowed.closest.toFixed(1)} m`,
+    );
+    // Kontrol: di dalam tikungan yang sama, izin menyalip memang yang membuat
+    // bedanya — tanpa izin, AI sama sekali tidak menggeser lajur.
+    const cornerPose = TRACK.at(118);
+    const decide = (allowCorner: boolean) => {
+      const p = new AutoPilot(TRACK.main, TRACK.joker, {
+        jokerPolicy: 'never',
+        useJoker: false,
+        overtakeInCorners: allowCorner,
+      });
+      const car = {
+        position: cornerPose.pos.clone().setY(0.95),
+        velocity: cornerPose.tangent.clone().multiplyScalar(15),
+        quaternion: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), cornerPose.yaw),
+        angularVelocity: new THREE.Vector3(),
+        speed: 15,
+        gear: 1 as const,
+        wheels: [{ contact: true }, { contact: true }, { contact: true }, { contact: true }],
+      };
+      p.reset(car.position);
+      const ahead = {
+        position: cornerPose.pos.clone().addScaledVector(cornerPose.tangent, 7),
+        speed: 3,
+      };
+      p.update(DT, car, [ahead]);
+      return p.overtakeSide;
+    };
+    const withCorner = decide(true);
+    const withoutCorner = decide(false);
+    check(
+      withCorner !== 0 && withoutCorner === 0,
+      'menyalip di tikungan hanya dilakukan kalau diizinkan',
+      `dengan izin ${withCorner}, tanpa izin ${withoutCorner}`,
+    );
+  }
+
   /* ---------------------------------------------------------------- */
   console.log('\n— lap counter & rival —');
   // Walk a virtual car around the path: the counter must tick exactly once
@@ -831,7 +981,8 @@ async function run() {
         startDistance: TRACK.start,
         pace: plan.pace,
         laneOffset: plan.laneOffset,
-        jokerEachLap: plan.jokerEachLap,
+        jokerBias: plan.jokerBias,
+        jokerEvery: plan.jokerEvery,
       }),
   );
   check(pack.length === 5, 'five rivals join the player', `${pack.length + 1} cars on the grid`);
@@ -880,9 +1031,16 @@ async function run() {
   // (bukan mobil anti-penyok), dan mengemudi bersih tidak merusak apa pun.
   const rivalDamage = pack.map((r) => r.car.damage);
   check(
-    rivalDamage.every((d) => d.options.enabled) && rivalDamage.every((d) => d.bodyHealth > 0.9),
+    rivalDamage.every((d) => d.options.enabled) && rivalDamage.every((d) => d.bodyHealth > 0.8),
     'lawan memakai model kerusakan yang sama (rusak kalau memang bertabrakan)',
     `${rivalDamage.length} mobil · bodi ${rivalDamage.map((d) => (d.bodyHealth * 100).toFixed(0)).join('/')} % · mesin ${rivalDamage.map((d) => (d.engineHealth * 100).toFixed(0)).join('/')} %`,
+  );
+  // Kontak ringan antar-mobil itu wajar di grid 6 mobil, tapi tidak boleh ada
+  // yang sampai hancur/kehilangan roda hanya karena satu lap.
+  check(
+    rivalDamage.every((d) => !d.engineDead && d.lostCount === 0),
+    'satu lap pack tidak menghancurkan mobil siapa pun',
+    rivalDamage.map((d) => `${(d.bodyHealth * 100).toFixed(0)}%`).join('/'),
   );
   const packLaps = pack.map((r) => r.bestLap).filter((b) => Number.isFinite(b));
   check(

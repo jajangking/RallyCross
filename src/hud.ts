@@ -58,14 +58,18 @@ export class Hud {
     this.indBeam?.classList.toggle('on', state.headlights);
   }
 
-  /** Baris status AI: menyala, nomor lap, waktu lap terakhir dan terbaik. */
-  setAutopilot(on: boolean, lap: number, lapTime: number, best: number) {
+  /**
+   * Baris status AI: menyala, nomor lap, waktu lap terakhir dan terbaik, plus
+   * alasan keputusan joker terakhir (`terhalang`, `wajib`, `terjepit`, ...).
+   */
+  setAutopilot(on: boolean, lap: number, lapTime: number, best: number, reason = '') {
     const el = this.autoEl;
     if (!el) return;
     el.classList.toggle('off', !on);
     const text = on
       ? `AI mengemudi · lap ${Math.max(1, lap + 1)} · ${lapTime.toFixed(1)}s` +
-        (Number.isFinite(best) ? ` · best ${best.toFixed(1)}s` : '')
+        (Number.isFinite(best) ? ` · best ${best.toFixed(1)}s` : '') +
+        (reason ? ` · joker ${reason}` : '')
       : 'AI nonaktif · P';
     if (el.textContent !== text) el.textContent = text;
   }

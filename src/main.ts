@@ -219,7 +219,8 @@ async function boot() {
       startDistance: TRACK.start,
       pace: skills.tuning(plan.name).pace,
       laneOffset: plan.laneOffset,
-      jokerEachLap: plan.jokerEachLap,
+      jokerBias: plan.jokerBias,
+      jokerEvery: plan.jokerEvery,
     });
     const procedural = new CarVisual(scene, rival.car, { detail: !lowQuality, paint: plan.color });
     let visual: CarVisual | CarModelVisual = procedural;
@@ -1041,7 +1042,7 @@ async function boot() {
     }
     hud.update(car, raw);
     hud.setLamps(lightState);
-    hud.setAutopilot(auto.enabled, pilot.lap, auto.enabled ? pilot.lapTime : 0, pilot.bestLap);
+    hud.setAutopilot(auto.enabled, pilot.lap, auto.enabled ? pilot.lapTime : 0, pilot.bestLap, auto.enabled ? pilot.jokerReason : '');
     hud.setStandings(
       standings([
         {

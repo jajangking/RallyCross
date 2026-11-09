@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { lapPath, type PathSample } from '../world/circuit';
+import { JOKER_START, lapPath, nearestSample, type PathSample } from '../world/circuit';
 import type { GearDirection, VehicleInput } from '../vehicle/VehiclePhysics';
 
 /**
@@ -78,8 +78,25 @@ export interface AutoPilotOptions {
   defend: boolean;
   /** Kelengkungan maksimum di depan yang masih boleh dipakai untuk menyalip. */
   overtakeCornerLimit: number;
-  /** Ambil joker lap? */
+  /** Ambil joker lap **sekarang**? (dipakai memilih jalur; diisi oleh kebijakan) */
   useJoker: boolean;
+  /**
+   * Bagaimana joker dipilih:
+   *  - `'static'` (default): ikuti `useJoker` apa adanya (dipakai tombol/GUI).
+   *  - `'tactical'`: diputuskan **per lap** dari lalu lintas & riwayat.
+   *  - `'never'`: tidak pernah lewat joker.
+   */
+  jokerPolicy: 'static' | 'tactical' | 'never';
+  /** 0..1 — seberapa gampang dia memilih joker saat jalannya lengang. */
+  jokerBias: number;
+  /** Jangan biarkan lebih dari N lap tanpa lewat joker (0 = tidak wajib). */
+  jokerEvery: number;
+  /** Boleh menyalip di tikungan (cari celah), bukan hanya di lurus? */
+  overtakeInCorners: boolean;
+  /** Lengkung maksimum yang masih boleh dipakai menyalip di tikungan (1/m). */
+  cornerOvertakeLimit: number;
+  /** Geseran lajur maksimum saat menyalip di tikungan, meter (lebih kecil). */
+  cornerShift: number;
 }
 
 /**
@@ -128,6 +145,12 @@ export const defaultPilotOptions: AutoPilotOptions = {
   defend: false,
   overtakeCornerLimit: 0.013,
   useJoker: true,
+  jokerPolicy: 'static',
+  jokerBias: 0.5,
+  jokerEvery: 2,
+  overtakeInCorners: true,
+  cornerOvertakeLimit: 0.03,
+  cornerShift: 2.0,
 };
 
 /** Apa yang perlu diketahui AI tentang mobil lain di lintasan. */
@@ -250,6 +273,14 @@ export class AutoPilot {
   chaseSpeedValue = 0;
   /** 0..1: seberapa keras sedang memburu (dipakai perencana kecepatan). */
   private chasePush = 0;
+  /** Jarak lap titik belah joker (tempat keputusan diambil). */
+  private readonly splitDistance: number;
+  /** Lap yang keputusan jokernya sudah diambil (sekali per lap). */
+  private jokerDecidedLap = -1;
+  /** Lap terakhir kali benar-benar lewat joker. */
+  private jokerUsedLap = 0;
+  /** Alasan keputusan joker terakhir — untuk HUD/debug. */
+  jokerReason = 'bebas';
 
   constructor(main: PathSample[], joker: PathSample[], options: Partial<AutoPilotOptions> = {}) {
     this.options = { ...defaultPilotOptions, ...options };
@@ -258,6 +289,7 @@ export class AutoPilot {
     this.plain = shiftPath(lapPath(main, joker, false), this.options.laneOffset);
     this.withJoker = shiftPath(lapPath(main, joker, true), this.options.laneOffset);
     this.path = this.options.useJoker ? this.withJoker : this.plain;
+    this.splitDistance = main[nearestSample(main, JOKER_START)].distance;
     this.index = this.nearest(this.path, new THREE.Vector3(0, 0, 0), 0);
     this.rebuildSteps();
   }
@@ -307,6 +339,9 @@ export class AutoPilot {
     }
 
     if (this.mode !== 'drive') return this.maneuver(dt, car, speed);
+
+    // Joker diputuskan sekali per lap, sebelum titik belah.
+    this.updateJokerChoice(car, others, speed);
 
     // Tersangkut (menempel dinding, keluar trek): mundur, lalu luruskan lagi.
     const throttling = speed < 1.2;
@@ -451,6 +486,70 @@ export class AutoPilot {
 
   /* ------------------------------------------------------------------ */
 
+  /**
+   * **Joker taktis.** Jalur joker diputuskan per lap, bukan sekali di awal
+   * balapan. Tiga pertimbangan, berurutan:
+   *
+   *  1. **Terjepit** — ada mobil tepat di samping: jangan pindah lajur
+   *     sekarang, tunggu (kalau dipaksa, dua mobil berebut satu titik).
+   *  2. **Terhalang** — ada mobil lebih lambat < 22 m persis di depan: joker
+   *     memberi udara bersih dan jalur yang lebih pendek, jadi diambil.
+   *  3. **Wajib** — sudah `jokerEvery` lap tidak lewat joker: ambil sekarang
+   *     supaya pilihannya tidak "hilang" sepanjang balapan.
+   *
+   * Selain itu dia tetap di garis utama (biasanya lebih cepat kalau lengang),
+   * dan `jokerBias` membuat sebagian pembalap lebih gemar joker.
+   */
+  private updateJokerChoice(car: PilotCar, others: ReadonlyArray<TrafficCar>, speed: number) {
+    const o = this.options;
+    if (o.jokerPolicy === 'static') return;
+    if (o.jokerPolicy === 'never') {
+      this.setUseJoker(false);
+      return;
+    }
+    // Jendela keputusan: 12–48 m sebelum titik belah.
+    const here = this.sample.distance;
+    const toSplit = (this.splitDistance - here + this.length) % this.length;
+    if (toSplit < 12 || toSplit > 48) return;
+    if (this.jokerDecidedLap === this.lap) return;
+
+    const fwd = tmpFwd.set(0, 0, 1).applyQuaternion(car.quaternion);
+    let blocked = false;
+    let squeezed = false;
+    let tailgated = false;
+    for (const other of others) {
+      const dx = other.position.x - car.position.x;
+      const dz = other.position.z - car.position.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist < 0.01 || dist > 24) continue;
+      const ahead = dx * fwd.x + dz * fwd.z;
+      if (Math.abs(ahead) < 5.5 && dist < 6.5) squeezed = true;
+      if (ahead > 1 && dist < 22 && other.speed < speed + 1) blocked = true;
+      // Ada yang menempel di belakang: kalau kita belok ke joker sekarang,
+      // dia ikut terjepit ke lajur sempit dan gampang menabrak kita. Tunggu.
+      if (ahead < -2 && dist < 11 && Math.abs(dist) < 13) tailgated = true;
+    }
+
+    const lapsSince = this.lap - this.jokerUsedLap;
+    const due = o.jokerEvery > 0 && lapsSince >= o.jokerEvery;
+    const keen = o.jokerBias > 0.6 && lapsSince >= 1;
+    const take = !squeezed && !tailgated && (blocked || due || keen);
+    this.setUseJoker(take);
+    if (take) this.jokerUsedLap = this.lap;
+    this.jokerDecidedLap = this.lap;
+    this.jokerReason = squeezed
+      ? 'terjepit'
+      : tailgated
+        ? 'ditempel'
+        : blocked
+          ? 'terhalang'
+          : due
+            ? 'wajib'
+            : take
+              ? 'selera'
+              : 'bebas';
+  }
+
   private drive(
     dt: number,
     car: PilotCar,
@@ -563,14 +662,32 @@ export class AutoPilot {
       const slower = blockerSpeed < speed + 1.5;
       // Saat memburu, penyusulan disiapkan lebih awal (16 m, bukan 12 m):
       // pemburu keluar dari slipstream dan memilih sisi sebelum terlalu dekat.
-      const close = blockerGap < 12;
+      // Di tikungan penyusulan disiapkan lebih awal (24 m): geseran lajur di
+      // tikungan sengaja pelan, jadi kalau menunggu 12 m seperti di lurus,
+      // celahnya baru terbentuk setelah mobil sudah berada di samping lawan.
+      const close = blockerGap < (cornerSoon ? 24 : 12);
       // Mau menyalip kalau yang di depan lebih lambat, kita sudah dekat, dan
       // kecepatannya sudah cukup untuk pindah lajur dengan aman. Kalau tidak,
       // cukup jaga jarak (jangan menabrak bagian belakangnya). Di tikungan
       // sempit kami tidak pindah lajur: radius yang harus dilalui berubah dan
       // mobil hampir selalu keluar trek. Menyalip terjadi di lurus.
+      // Menyalip di tikungan: boleh, asal tikungannya tidak terlalu tajam dan
+      // jaraknya tidak terlalu mepet. Geserannya lebih kecil & lebih lambat,
+      // dan kecepatan diturunkan sedikit (lihat di bawah) karena radius yang
+      // harus dilalui berubah saat lajurnya bergeser.
+      // Menyalip di tikungan hanya ke **sisi dalam**: lajur itu dipakai sampai
+      // apex dan keluar, sedangkan di sisi luar mobil kekurangan ruang dan
+      // melebar (itu yang dulu membuatnya menabrak pagar T2).
+      const inside = -Math.sign(cornerCurv);
+      const cornerRoom =
+        o.overtakeInCorners && cornerAhead < o.cornerOvertakeLimit && speed > 8;
       const wantOvertake =
-        o.overtake && !cornerSoon && slower && close && speed > 7 && blockerGap > 3.2;
+        o.overtake &&
+        slower &&
+        close &&
+        speed > 7 &&
+        blockerGap > (cornerSoon ? 4.5 : 3.2) &&
+        (!cornerSoon || cornerRoom);
       if (wantOvertake) {
         // Pilih sisi yang lapang: kalau dia di sisi + kita, lewat sisi −.
         const prefer = blockerSide >= 0 ? -1 : 1;
@@ -583,8 +700,20 @@ export class AutoPilot {
         let side = prefer > 0 ? (roomPos > 1.6 ? 1 : -1) : roomNeg > 1.6 ? -1 : 1;
         // Jangan menyalip ke sisi tempat sudah ada mobil sejajar.
         if (besideSide !== 0 && side === besideSide) side = -side;
-        const room = Math.max(0, side > 0 ? roomPos : roomNeg);
-        if (Math.min(roomPos, roomNeg) < 1.6 && besideSide !== 0) {
+        let room = Math.max(0, side > 0 ? roomPos : roomNeg);
+        if (cornerSoon) {
+          // Di tikungan: wajib sisi dalam, dan ruangnya harus lega.
+          if (side !== inside) {
+            const insideRoom = inside > 0 ? roomPos : roomNeg;
+            if (insideRoom > 2.2) {
+              side = inside;
+              room = insideRoom;
+            } else {
+              room = 0;
+            }
+          }
+        }
+        if (room < (cornerSoon ? 2.2 : 1.6) && besideSide !== 0) {
           // Sempit dan ada mobil di samping: lebih baik mengikuti dulu.
           this.overtakeSide = 0;
           this.laneShift += clamp(-this.laneShift, -recentre, recentre);
@@ -592,10 +721,16 @@ export class AutoPilot {
           this.overtakeSide = side;
           // Di tikungan geserannya dipersempit: pindah lajur sambil berbelok
           // berarti mengubah radius, dan itu cara tercepat keluar trek.
-          const shift =
-            Math.min(2.4, Math.max(1.4, Math.abs(blockerSide) + 1.5), room) *
-            (cornerSoon ? 1 : 1);
-          this.laneShift += clamp(side * shift - this.laneShift, -dt * 3.2, dt * 3.2);
+          const shift = Math.min(
+            cornerSoon ? o.cornerShift : 2.4,
+            Math.max(1.4, Math.abs(blockerSide) + 1.5),
+            room,
+          );
+          // Di tikungan geserannya lebih pelan: pindah lajur sambil berbelok
+          // berarti mengubah radius, dan sentakan kecil saja sudah cukup untuk
+          // membuat mobil melebar keluar.
+          const shiftRate = cornerSoon ? dt * 2.8 : dt * 3.2;
+          this.laneShift += clamp(side * shift - this.laneShift, -shiftRate, shiftRate);
         }
         // Kecepatan tidak dinaikkan: batas tikungan tetap yang berlaku. Yang
         // dihilangkan hanya "rem karena ada mobil di depan", supaya kita
@@ -621,6 +756,13 @@ export class AutoPilot {
       this.laneShift += clamp(hold - this.laneShift, -recentre, recentre);
     }
     target *= o.pace;
+
+    // Menyalip sambil berbelok membuat radius efektif mengecil, jadi target
+    // kecepatan diturunkan selama lajurnya masih bergeser. Tanpa ini mobil
+    // melebar keluar trek di detik-detik terakhir.
+    if (cornerSoon && Math.abs(this.laneShift) > 0.15) {
+      target *= 1 - 0.09 * Math.min(1, Math.abs(this.laneShift));
+    }
 
     // NGEJAR: mobil di depan masih 8–22 m dan jalannya lurus → berani sedikit
     // lebih cepat (maks +5 %) supaya benar-benar menempel dan mencoba menyalip,
@@ -653,6 +795,9 @@ export class AutoPilot {
     // Di luar trek: jangan mengejar titik jauh ke depan. Titik jauh membuat
     // sudutnya kecil, jadi mobil justru jalan lurus makin jauh. Tuju titik
     // dekat di garis supaya sudutnya besar dan mobil benar-benar kembali.
+    // Menjelang ramp: titik pandang dipendekkan supaya mobil cepat kembali ke
+    // garis tengah. Ramp punya bibir tegak di kedua sisinya — melebar 1 m saja
+    // di bibir lompatan berarti roda memukul tepi dan mobil terbalik.
     const look = recover ? clamp(4 + speed * 0.3, 5, 11) : look0 * (0.45 + 0.55 * tight);
     const aimIndex = this.indexAt(this.index, look);
     const aim = this.path[aimIndex];

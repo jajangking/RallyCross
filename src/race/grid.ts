@@ -23,17 +23,25 @@ export interface RivalPlan {
   behind: number;
   /** Geseran ke samping dari garis tengah pada barisnya, meter. */
   side: number;
-  /** Selalu lewat joker? Kalau tidak, ikut garis utama tiap lap. */
-  jokerEachLap: boolean;
+  /**
+   * Seberapa gemar joker (0..1). Bukan lagi "selalu/never": AI memutuskan per
+   * lap berdasarkan lalu lintas, dan angka ini hanya bias kepribadiannya.
+   */
+  jokerBias: number;
+  /** Jangan biarkan lebih dari N lap tanpa lewat joker. */
+  jokerEvery: number;
 }
 
 /** Lima lawan, sengaja beda karakter: pebalap cepat, pemburu joker, pemula. */
 export const RIVAL_PLANS: readonly RivalPlan[] = [
-  { name: 'Krisna', color: 0xc22a1c, pace: 1.0, laneOffset: -1.2, behind: 18, side: -3.6, jokerEachLap: true },
-  { name: 'Bagas', color: 0x2d7ce0, pace: 0.985, laneOffset: 1.2, behind: 18, side: 3.6, jokerEachLap: false },
-  { name: 'Sari', color: 0xf2c53d, pace: 0.97, laneOffset: -0.6, behind: 25, side: -3.6, jokerEachLap: true },
-  { name: 'Damar', color: 0x3fbf7f, pace: 0.955, laneOffset: 0.6, behind: 25, side: 3.6, jokerEachLap: false },
-  { name: 'Nadia', color: 0xb56cff, pace: 0.94, laneOffset: 0, behind: 32, side: 0, jokerEachLap: true },
+  // `jokerBias` = kepribadian (gemar joker atau tidak), `jokerEvery` = batas
+  // maksimal berapa lap boleh tanpa joker. Keputusan tiap lap tetap diambil
+  // oleh AutoPilot berdasarkan lalu lintas — bukan dijadwalkan di sini.
+  { name: 'Krisna', color: 0xc22a1c, pace: 1.0, laneOffset: -1.2, behind: 18, side: -3.6, jokerBias: 0.8, jokerEvery: 1 },
+  { name: 'Bagas', color: 0x2d7ce0, pace: 0.985, laneOffset: 1.2, behind: 18, side: 3.6, jokerBias: 0.15, jokerEvery: 3 },
+  { name: 'Sari', color: 0xf2c53d, pace: 0.97, laneOffset: -0.6, behind: 25, side: -3.6, jokerBias: 0.65, jokerEvery: 2 },
+  { name: 'Damar', color: 0x3fbf7f, pace: 0.955, laneOffset: 0.6, behind: 25, side: 3.6, jokerBias: 0.3, jokerEvery: 2 },
+  { name: 'Nadia', color: 0xb56cff, pace: 0.94, laneOffset: 0, behind: 32, side: 0, jokerBias: 0.5, jokerEvery: 2 },
 ];
 
 /** Pose grid untuk satu peserta. Pemain memakai baris paling depan. */

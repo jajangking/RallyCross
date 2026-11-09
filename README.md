@@ -266,15 +266,25 @@ Cara kerjanya (`src/ai/AutoPilot.ts`, murni matematika, tanpa DOM):
 - **Garis balap** — di tikungan, titik tujuan digeser sedikit ke sisi dalam (`lineCut`, 3 % lebar trek) supaya jalurnya terlihat seperti pembalap yang mencari apex. Mobil lawan tidak ikut memotong karena lajurnya sudah digeser `laneOffset`.
 - **Melebar** — di luar > 60 % lebar trek target kecepatan dipotong; kalau sudah keluar trek, titik tujuan justru didekatkan dan tarikan garis dimatikan supaya mobil benar-benar berbelok kembali ke garis (titik jauh membuat sudutnya kecil dan mobil malah jalan lurus makin jauh).
 - **Menyalip** — kalau ada mobil lebih lambat < 12 m di depan dan jalurnya sudah cukup cepat, AI menggeser **seluruh garisnya** ke sisi yang lapang (maks. selebar ruang yang tersisa), lalu kembali ke garis. Geseran itu dihitung ulang frame-nya: kalau hanya posisi yang digeser, kecepatan tikungan tetap dihitung dari radius garis lama dan mobil keluar trek.
-- **Tidak menyalip di tikungan sempit** — kalau lengkung 45 m ke depan > 0,013 (radius < 77 m), AI batal menggeser lajur dan (kalau sedang bergeser) kembali ke garis 2,5× lebih cepat. Pindah lajur sambil berbelok berarti radius yang harus dilalui berubah; di uji 6 mobil inilah penyebab satu-satunya mobil yang keluar trek lalu perlu di-rescue. Setelah aturan ini: **0 rescue, 0 tabrakan, seluruh grid finis**.
+- **Menyalip di tikungan** — kalau lengkung 45 m ke depan < 0,03 (radius > 33 m) AI **boleh** mencari celah di tikungan: penyusulan disiapkan 24 m lebih awal (di lurus 12 m) karena geseran lajur di tikungan sengaja pelan, **wajib** ke sisi dalam, ruang minimal 2,2 m (di lurus 1,6 m), geseran maks 2 m, dan target kecepatan dipotong sampai 9 % selama lajur masih bergeser — radius efektif mengecil kalau lajur digeser sambil berbelok. Tikungan yang lebih tajam dari itu tetap dilarang menyalip dan lajur ditarik balik ke garis 2,5× lebih cepat.
 - **Macet** — diam < 1,2 m/s selama 1,6 s → mundur sebentar lalu maju lagi.
 - **Terbalik / menabrak: tidak ada reset.** Mobil dibiarkan apa adanya — sama sekali tidak ada teleportasi ke garis atau ke grid. AI cuma melepas semua pedal (gas, rem, setir) selama mobilnya miring lebih dari ~69°, lalu langsung lanjut balapan begitu rodanya kembali ke bawah. Satu-satunya pengecualian: mobil yang jatuh di bawah dunia (y < −20, artinya bug fisika, bukan kecelakaan) dikembalikan ke garis.
-- **Joker** — pilihan joker dievaluasi ulang tiap putaran (checkbox *joker lap*), dan HUD menampilkan status AI + lap + waktu lap/best.
+- **Joker taktis** — lawan **memutuskan sendiri tiap lap** (`jokerPolicy: 'tactical'`), bukan lagi flag tetap per mobil. Jendela keputusan 12–48 m sebelum persimpangan, sekali per lap:
+  | keputusan | arti |
+  | --- | --- |
+  | `wajib` | sudah `jokerEvery` lap tidak lewat joker → wajib ambil |
+  | `terhalang` | ada mobil < 22 m di depan yang lebih lambat → joker dipakai untuk melewatinya |
+  | `selera` | mobil berkarakter `jokerBias` > 0,6 ambil kesempatan |
+  | `terjepit` | ada mobil < 6,5 m di samping → **dilarang** pindah lajur |
+  | `ditempel` | ada mobil < 11 m menempel di belakang → tunda, dia akan ikut terjepit |
+  | `bebas` | tidak ambil joker lap ini |
+
+  Karakter tiap lawan ada di `src/race/grid.ts` (`jokerBias`, `jokerEvery`): Krisna 0,8/1 lap, Sari 0,65/2, Nadia 0,5/2, **Bagas (biru) 0,15/3**, **Damar (hijau) 0,3/2** — jadi biru & hijau tetap paling jarang lewat joker, tapi sekarang karena **pilihan**, bukan karena dikunci. HUD menampilkan alasan terakhir (`terhalang`, `wajib`, …) di samping status joker.
 - **Sadar kerusakan** — `Rival.applyWear()` membaca grip nyata tiap roda dan tenaga mesin yang tersisa, lalu menurunkan asumsi grip/rem perencana kecepatan (`v ∝ √(μ·g·r)`). Lawan dengan ban kempes otomatis lebih pelan, titik remnya lebih awal, dan tetap di dalam trek — dulu ia tetap merencanakan seperti mobil sehat lalu melebar keluar. Mobil sehat tidak disentuh sama sekali, jadi pace hasil uji tidak berubah.
 
 Jadi AI-nya **bukan animasi atau jalur rekaman**: setiap frame ia membaca posisi, kecepatan, yaw, slip, roda mana yang menyentuh tanah, dan mobil lain di sekitarnya, lalu memutuskan setir/gas/rem sendiri. Yang "dihafal" hanya geometri sirkuit (sampel garis balap), bukan gerakan.
 
-Yang **belum** ada (jujur): AI tidak memilih joker secara taktis (pilihan joker ditentukan per lawan, bukan berdasarkan lalu lintas atau selisih waktu), belum belajar garis balap sendiri (yang naik hanya pace, asumsi grip, dan kerapian lajur), dan belum memprediksi gerakan lawan (hanya jarak & kecepatan saat ini). Itu semua bisa ditambahkan tanpa menyentuh fisika.
+Yang **belum** ada (jujur): keputusan joker belum memperhitungkan **waktu tempuh** kedua rute (hanya lalu lintas + riwayat lap), AI belum belajar garis balap sendiri (yang naik hanya pace, asumsi grip, dan kerapian lajur), dan belum memprediksi gerakan lawan (hanya jarak & kecepatan saat ini; menyalip di tikungan masih memakai celah yang terlihat sekarang, bukan lintasan lawan 1 detik ke depan). Itu semua bisa ditambahkan tanpa menyentuh fisika.
 
 Hasil uji headless dengan fisika asli: **satu putaran 29,9 s**, tidak pernah keluar tepi trek, 0 reset, dan stabil di 6 putaran berturut-turut (aspal & gravel, dengan/tanpa joker). Diuji juga dari 30 titik start berbeda (offset ±3 m): semuanya menyelesaikan putaran.
 
@@ -503,6 +513,8 @@ terbalik beberapa puluh meter kemudian.
 - asap: partikel lahir, hidup, dan habis sesuai umurnya, semuanya di satu buffer tetap
 - papan klasemen: urut finis → lap → odometer, selisih diukur ke pemimpin; papan rekor: lap pertama jadi rekor, lap lebih lambat tidak mencuri rekor, rekor bertahan setelah reload, dan tetap jalan tanpa `localStorage`
 - **grid 6 mobil**: lima lawan finis satu putaran, tidak ada yang melebar > 12 m, tidak ada yang berakhir terbalik, jarak terdekat > 1,2 m, dan papan klasemen memuat keenam mobil berurutan
+- **joker taktis**: mobil yang terhalang memilih joker (`terhalang`), yang sudah lewat batas `jokerEvery` lap wajib ambil (`wajib`), yang dijepit mobil di samping dilarang pindah lajur (`terjepit`), dan dua lawan berkarakter rendah joker (biru & hijau) tetap bisa memilih sendiri
+- **menyalip di tikungan**: AI melewati mobil yang berhenti di dalam tikungan tanpa keluar tepi (0 m) dan tanpa menyerempet (jarak terdekat > 1,8 m); dengan `overtakeInCorners` dimatikan ia tidak menggeser lajur (`overtakeSide` 1 vs 0)
 - penghitung lap menambah tepat satu lap per putaran, odometer cocok dengan panjang trek
 - **lawan AI menyelesaikan putaran** (31–33 s), tetap di dekat trek, dan dua mobil tidak saling menembus
 - 9 kamera TV berdiri di luar trek, sutradara memakai ≥5 kamera berbeda, tidak ada shot < 1,6 s, dan mobil yang dibidik tidak pernah lebih dari 220 m
@@ -518,7 +530,7 @@ Status terakhir: **semua lolos**.
 
 1. **Track sungguhan** — heightmap/trimesh + spline, bukan plane datar (layout-nya sekarang sudah berupa data, jadi tinggal ganti sumbernya).
 2. **Suara** — mesin, ban, tabrakan (WebAudio), plus kamera shake.
-3. **AI** — strategi joker per lap (sudah ada, belum dioptimalkan), dan menyalip di tikungan sempit (sekarang sengaja dihindari).
+3. **AI** — keputusan joker berbasis waktu tempuh (sekarang berbasis lalu lintas + riwayat), dan menyalip di tikungan yang lebih tajam (sekarang dibatasi lengkung < 0,03).
 4. **Multiplayer** — Rapier headless di server (kode fisika sudah DOM-free).
 5. **Optimasi mobile lanjutan** — LOD, KTX2, dan tekstur atlas (draw call sudah ditekan ke ~55 untuk seluruh arena).
 

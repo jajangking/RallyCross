@@ -48,7 +48,24 @@ const MAIN_LENGTH = MAIN[MAIN.length - 1].distance;
 /** Lap distance of the start/finish line. */
 const START_DIST = MAIN[nearestSample(MAIN, START)].distance;
 
+/** Jarak horizontal ke pusat jalur terdekat, meter. */
+function distanceToPath(path: PathSample[], x: number, z: number): { d: number; halfWidth: number } {
+  let best = Infinity;
+  let halfWidth = 7;
+  for (const s of path) {
+    const dx = s.pos.x - x;
+    const dz = s.pos.z - z;
+    const d = dx * dx + dz * dz;
+    if (d < best) {
+      best = d;
+      halfWidth = s.halfWidth;
+    }
+  }
+  return { d: Math.sqrt(best), halfWidth };
+}
+
 const MAIN_ROAD = roadRibbon(MAIN);
+
 const JOKER_ROAD = roadRibbon(JOKER);
 /**
  * Grass banks: wide where the road is at ground level, but they pull in where
@@ -86,22 +103,6 @@ const OUTER_FENCE = offsetWall(MAIN.filter(isWalled), -1, WALL_GAP, WALL_HEIGHT)
 
 /** Jarak minimum dinding ke tepi jalan di kedua sisinya, meter. */
 const EDGE_CLEARANCE = 1.6;
-
-/** Jarak horizontal ke pusat jalur terdekat, meter. */
-function distanceToPath(path: PathSample[], x: number, z: number): { d: number; halfWidth: number } {
-  let best = Infinity;
-  let halfWidth = 7;
-  for (const s of path) {
-    const dx = s.pos.x - x;
-    const dz = s.pos.z - z;
-    const d = dx * dx + dz * dz;
-    if (d < best) {
-      best = d;
-      halfWidth = s.halfWidth;
-    }
-  }
-  return { d: Math.sqrt(best), halfWidth };
-}
 
 /**
  * Dinding pemisah antara jalur joker dan garis balap utama.

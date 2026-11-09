@@ -23,7 +23,12 @@ export interface RivalSetup {
   pace?: number;
   /** Geser garis lawan ke samping (meter) supaya tidak berebut garis. */
   laneOffset?: number;
+  /** `true` = selalu joker, `false` = tidak pernah; kosong = taktis. */
   jokerEachLap?: boolean;
+  /** Seberapa gemar joker (0..1) saat taktis. */
+  jokerBias?: number;
+  /** Maksimal berapa lap boleh tanpa joker (0 = bebas). */
+  jokerEvery?: number;
 }
 
 /**
@@ -92,6 +97,10 @@ export class Rival {
       pace: setup.pace ?? 0.94,
       laneOffset: setup.laneOffset ?? -2.0,
       useJoker: setup.jokerEachLap ?? true,
+      jokerPolicy:
+        setup.jokerEachLap === true ? 'static' : setup.jokerEachLap === false ? 'never' : 'tactical',
+      jokerBias: setup.jokerBias ?? 0.5,
+      jokerEvery: setup.jokerEvery ?? 2,
     });
     this.counter = new LapCounter(setup.main, setup.startDistance, setup.position);
     this.pilot.reset(this.car.position);
