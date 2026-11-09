@@ -22,7 +22,7 @@ import { LapRecords, standings, type StandingsCar } from '../src/race/Standings'
 import { SkidMarks } from '../src/fx/SkidMarks';
 import { SmokePuffs } from '../src/fx/Smoke';
 import { CarEffects } from '../src/fx/CarEffects';
-import { toon, toonFrom, toonRamp, PALETTE } from '../src/world/style';
+import { getLook, isPbrLook, setLook, toon, toonFrom, toonRamp, PALETTE } from '../src/world/style';
 import { Helicopter } from '../src/world/Heli';
 import { createSunRig } from '../src/world/style';
 import { CameraRig } from '../src/camera';
@@ -604,6 +604,41 @@ async function run() {
     'imported model materials convert to toon without losing colour/alpha',
     `#${converted.color.getHexString()} · opacity ${converted.opacity}`,
   );
+
+  /* ---------------------------------------------------------------- */
+  console.log('\n— mode PBR (setengah-AC) —');
+  setLook('pbr');
+  check(getLook() === 'pbr' && isPbrLook(), 'gaya permukaan bisa dipindah ke PBR', 'look = pbr');
+  const pbrMat = toon({ color: 0x3366cc, roughness: 0.5, metalness: 0.3 }) as unknown as THREE.MeshStandardMaterial;
+  check(
+    pbrMat.isMeshStandardMaterial && pbrMat.roughness === 0.5 && pbrMat.metalness === 0.3,
+    'di mode PBR, toon() menghasilkan material fisik dengan roughness/metalness asli',
+    `rough ${pbrMat.roughness} · metal ${pbrMat.metalness}`,
+  );
+  const nm = new THREE.Texture();
+  const rm = new THREE.Texture();
+  const pbrFrom = toonFrom(
+    new THREE.MeshStandardMaterial({ color: 0xffffff, normalMap: nm, roughnessMap: rm, metalnessMap: rm }),
+    new THREE.Color(0xd8402f),
+  ) as unknown as THREE.MeshStandardMaterial;
+  check(
+    pbrFrom.isMeshStandardMaterial && pbrFrom.normalMap === nm && pbrFrom.roughnessMap === rm,
+    'peta normal & roughness model impor tetap dipakai di mode PBR',
+    'normalMap + roughnessMap dipertahankan',
+  );
+  check(
+    (pbrFrom as unknown as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial &&
+      (pbrFrom as unknown as THREE.MeshPhysicalMaterial).clearcoat > 0.3,
+    'cat bodi dapat lapisan clearcoat tipis',
+    `clearcoat ${(pbrFrom as unknown as THREE.MeshPhysicalMaterial).clearcoat}`,
+  );
+  check(
+    pbrFrom.color.getHex() === 0xd8402f && pbrFrom.envMapIntensity > 1,
+    'warna livery tetap dan pantulan langit lebih kuat di bodi',
+    `#${pbrFrom.color.getHexString()} · env ${pbrFrom.envMapIntensity}`,
+  );
+  setLook('toon');
+  check(getLook() === 'toon', 'gaya bisa dikembalikan ke kartun', 'look = toon');
 
   /* Mobil terbalik: tidak di-reset, AI hanya melepas pedal. */
   const flippedPilot = new AutoPilot(TRACK.main, TRACK.joker);

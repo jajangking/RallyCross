@@ -36,6 +36,28 @@ export const PALETTE = {
 /** Arah matahari (dipakai light rig, bayangan, dan sprite matahari). */
 export const SUN_DIRECTION = new THREE.Vector3(45, 66, 26).normalize();
 
+/**
+ * Gaya permukaan: `toon` (kartun, paling ringan) atau `pbr` (fisik, untuk
+ * "setengah-AC"): material PBR + environment map + post-processing.
+ * Dipilih sekali saat boot lewat `?look=pbr|toon` atau `?quality=low`.
+ */
+export type LookMode = 'toon' | 'pbr';
+
+let look: LookMode = 'toon';
+
+export function setLook(mode: LookMode) {
+  look = mode;
+}
+
+export function getLook(): LookMode {
+  return look;
+}
+
+/** Sedang memakai permukaan PBR? (dipakai untuk memutuskan environment map) */
+export function isPbrLook(): boolean {
+  return look === 'pbr';
+}
+
 let ramp: THREE.DataTexture | null = null;
 
 /**
@@ -83,10 +105,12 @@ export interface ToonOptions {
 }
 
 /**
- * Material toon. Mengganti `MeshStandardMaterial` di mana-mana: hasilnya warna
- * rata dengan 4 tingkat terang/gelap, dan biaya shader-nya jauh lebih kecil.
+ * Material permukaan. Di mode kartun hasilnya `MeshToonMaterial` (warna rata,
+ * shader paling murah). Di mode PBR hasilnya `MeshStandardMaterial` dengan
+ * peta/warna yang sama, plus environment map + bloom/SSAO dari post-processing.
  */
 export function toon(options: ToonOptions = {}): THREE.MeshToonMaterial {
+  if (look === 'pbr') return toStandard(options) as unknown as THREE.MeshToonMaterial;
   const material = new THREE.MeshToonMaterial({
     color: options.color ?? 0xffffff,
     map: options.map ?? null,
@@ -106,13 +130,65 @@ export function toon(options: ToonOptions = {}): THREE.MeshToonMaterial {
 }
 
 /**
- * Ubah material apa pun (termasuk material bawaan model GLB) jadi toon, dengan
- * warna/peta/emisi yang sama. Dipakai untuk bodi mobil impor supaya ikut
- * bergaya kartun tanpa mengubah modelnya.
+ * Material PBR dengan parameter yang masuk akal untuk gaya sinematik: aspal
+ * sedikit kasar, logam/pagar memantul, dan semua peta dari model GLB (normal,
+ * roughness, metalness, AO) tetap dipakai — inilah yang membuat bodi mobil
+ * terlihat "berbentuk" dan bukan sekadar bidang berwarna.
+ */
+export function toStandard(options: ToonOptions = {}): THREE.MeshStandardMaterial {
+  const clearcoat = options.clearcoat as number | undefined;
+  const base = {
+    color: options.color ?? 0xffffff,
+    map: options.map ?? null,
+    roughness: (options.roughness as number) ?? 0.78,
+    metalness: (options.metalness as number) ?? 0.06,
+    side: options.side ?? THREE.FrontSide,
+    transparent: options.transparent ?? false,
+    opacity: options.opacity ?? 1,
+    alphaTest: options.alphaTest ?? 0,
+    depthWrite: options.depthWrite ?? true,
+    fog: options.fog ?? true,
+    envMapIntensity: (options.envMapIntensity as number) ?? 0.6,
+  };
+  // Clearcoat hanya ada di MeshPhysicalMaterial; dipakai khusus cat bodi.
+  const material =
+    clearcoat === undefined
+      ? new THREE.MeshStandardMaterial(base)
+      : new THREE.MeshPhysicalMaterial({
+          ...base,
+          clearcoat,
+          clearcoatRoughness: (options.clearcoatRoughness as number) ?? 0.12,
+        });
+  if (options.normalMap) {
+    material.normalMap = options.normalMap as THREE.Texture;
+    if (options.normalScale) material.normalScale = options.normalScale as THREE.Vector2;
+  }
+  if (options.roughnessMap) material.roughnessMap = options.roughnessMap as THREE.Texture;
+  if (options.metalnessMap) material.metalnessMap = options.metalnessMap as THREE.Texture;
+  if (options.aoMap) {
+    material.aoMap = options.aoMap as THREE.Texture;
+    material.aoMapIntensity = (options.aoMapIntensity as number) ?? 1;
+  }
+  if (options.emissive !== undefined) material.emissive = new THREE.Color(options.emissive);
+  if (options.emissiveIntensity !== undefined) material.emissiveIntensity = options.emissiveIntensity;
+  if (options.emissiveMap) material.emissiveMap = options.emissiveMap;
+  if (options.name) material.name = options.name;
+  return material;
+}
+
+/**
+ * Ubah material apa pun (termasuk material bawaan model GLB) jadi gaya arena,
+ * dengan warna/peta/emisi yang sama. Di mode toon hasilnya `MeshToonMaterial`
+ * (shader murah); di mode PBR hasilnya material PBR yang **mempertahankan**
+ * peta normal/roughness/metalness/AO bawaan model, jadi bodi mobil impor
+ * terlihat seperti di game balap, bukan seperti plastik.
+ *
+ * Cat bodi (`paint` diisi) dapat lapisan clearcoat tipis: pantulan tajam di
+ * atas warna livery — detail kecil yang paling terasa "mahal".
  */
 export function toonFrom(source: THREE.Material, paint?: THREE.Color): THREE.MeshToonMaterial {
   const src = source as THREE.MeshStandardMaterial;
-  const out = toon({
+  const shared: ToonOptions = {
     color: paint ?? src.color ?? 0xffffff,
     map: src.map ?? null,
     side: src.side,
@@ -124,8 +200,83 @@ export function toonFrom(source: THREE.Material, paint?: THREE.Color): THREE.Mes
     emissiveMap: src.emissiveMap ?? null,
     depthWrite: src.depthWrite,
     name: src.name,
+  };
+  if (look === 'pbr') {
+    const standard = toStandard({
+      ...shared,
+      roughness: paint ? 0.34 : (src.roughness ?? 0.8),
+      metalness: paint ? 0.22 : (src.metalness ?? 0.04),
+      envMapIntensity: paint ? 1.15 : 0.75,
+      clearcoat: paint ? 0.55 : undefined,
+      normalMap: src.normalMap ?? null,
+      normalScale: src.normalScale,
+      roughnessMap: src.roughnessMap ?? null,
+      metalnessMap: src.metalnessMap ?? null,
+      aoMap: src.aoMap ?? null,
+    });
+    return standard as unknown as THREE.MeshToonMaterial;
+  }
+  const out = toon({
+    ...shared,
+    roughness: src.roughness,
+    metalness: src.metalness,
   });
   return out;
+}
+
+/**
+ * Peta lingkungan untuk mode PBR: langit gradasi + matahari terang, di-bake
+ * sekali jadi PMREM. Tanpa ini material PBR terlihat matte dan kusam; dengan
+ * ini logam/kaca memantulkan langit seperti di game balap sungguhan.
+ *
+ * Biayanya satu kali saat boot (render 6 sisi ke kubus kecil), bukan per frame.
+ */
+export function createEnvironment(
+  renderer: THREE.WebGLRenderer,
+  top: number,
+  horizon: number,
+  sun: number,
+): THREE.Texture | null {
+  try {
+    const skyScene = new THREE.Scene();
+    const domeMat = new THREE.MeshBasicMaterial({ color: horizon, side: THREE.BackSide, fog: false });
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(50, 16, 12), domeMat);
+    skyScene.add(dome);
+
+    // Piringan matahari: sumber utama kilau di bodi mobil dan kaca.
+    const sunMat = new THREE.MeshBasicMaterial({ color: sun, fog: false });
+    sunMat.color.multiplyScalar(6);
+    const disc = new THREE.Mesh(new THREE.SphereGeometry(6, 12, 8), sunMat);
+    disc.position.copy(SUN_DIRECTION).multiplyScalar(44);
+    skyScene.add(disc);
+
+    // Gradasi langit: dari biru tua di atas ke pucat di horizon.
+    const canvas = document.createElement('canvas');
+    canvas.width = 4;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      const g = ctx.createLinearGradient(0, 0, 0, 64);
+      g.addColorStop(0, new THREE.Color(top).getStyle());
+      g.addColorStop(0.55, new THREE.Color(top).lerp(new THREE.Color(horizon), 0.6).getStyle());
+      g.addColorStop(1, new THREE.Color(horizon).getStyle());
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 4, 64);
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      dome.material = new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, fog: false });
+    }
+
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const target = pmrem.fromScene(skyScene, 0, 0.5, 120);
+    pmrem.dispose();
+    dome.geometry.dispose();
+    disc.geometry.dispose();
+    return target.texture;
+  } catch {
+    // Tanpa PMREM pun materialnya tetap jalan (cuma kurang memantul).
+    return null;
+  }
 }
 
 /**
@@ -145,10 +296,13 @@ export interface SunRig {
 }
 
 export function createSunRig(scene: THREE.Scene, lowQuality = false): SunRig {
-  const hemi = new THREE.HemisphereLight(0xdaf0ff, 0x6f7f4a, 0.72);
+  // Mode PBR dapat langit sebagai environment map, jadi cahaya langsungnya
+  // diturunkan sedikit — kalau tidak, aspal dan bodi mobil jadi "gebyar".
+  const pbr = look === 'pbr';
+  const hemi = new THREE.HemisphereLight(0xdaf0ff, 0x6f7f4a, pbr ? 0.42 : 0.72);
   scene.add(hemi);
 
-  const sun = new THREE.DirectionalLight(0xfff2d6, 1.55);
+  const sun = new THREE.DirectionalLight(0xfff2d6, pbr ? 1.35 : 1.55);
   const direction = SUN_DIRECTION;
   sun.position.copy(direction).multiplyScalar(120);
   scene.add(sun);

@@ -9,7 +9,7 @@ npm install
 npm run dev        # buka http://localhost:5173
 ```
 
-Di Android/Termux: jalankan `npm run dev`, lalu buka `http://localhost:5173` di Chrome HP. Tambah `?quality=low` kalau GPU-nya lemah (pixel ratio 1x, tanpa anti-alias, pohon lebih sedikit); `?quality=high` memaksa detail. Di HP kecil, mode ringan dipilih otomatis.
+Di Android/Termux: jalankan `npm run dev`, lalu buka `http://localhost:5173` di Chrome HP. Tambah `?quality=low` kalau GPU-nya lemah (pixel ratio 1x, tanpa anti-alias, pohon lebih sedikit); `?quality=high` memaksa detail. Di HP kecil, mode ringan dipilih otomatis. Gaya permukaan: `?look=pbr` (default desktop, "setengah-Assetto Corsa") atau `?look=toon` (kartun, paling ringan); bisa dipindah dari panel ⚙ → **Grafis**.
 
 ```bash
 npm run build      # type-check + bundle
@@ -383,10 +383,29 @@ tanpa browser: `npm run shot -- car` → `shots/car-damage.png`.
 Yang belum ada: kaca pecah, panel bodi yang lepas, suara benturan, dan api dari
 mesin yang mati.
 
-## Gaya kartun & performa render
+## Gaya visual: PBR "setengah-AC" atau kartun
 
-Seluruh arena sekarang bergaya kartun (`src/world/style.ts`), dan itu sekaligus
-cara paling murah untuk merender:
+Ada **dua** gaya permukaan, dipilih sekali saat boot (`src/world/style.ts`,
+`?look=pbr|toon`):
+
+- **PBR (default di desktop)** — semua material jadi `MeshStandardMaterial`
+  (bodi mobil: `MeshPhysicalMaterial` dengan clearcoat), memakai **environment
+  map** yang dipanggang dari langitnya sendiri (`createEnvironment`, PMREM satu
+  kali saat boot), lalu dirender lewat **`EffectComposer`**: AO kontak (GTAO) +
+  bloom halus + tone mapping netral, plus MSAA 4× di buffer composer. Peta
+  normal/roughness/metalness/AO bawaan model GLB **dipertahankan**, jadi bodi
+  mobil punya bentuk dan pantulan, bukan warna rata. Ini yang bikin tampilannya
+  mendekati game balap sungguhan.
+- **Kartun (default di HP lemah, `?quality=low`)** — `MeshToonMaterial` 5
+  langkah, tanpa environment map, tanpa composer.
+
+Yang **tidak** dipakai (sengaja, supaya HP tetap enak): DOF, motion blur, TAA,
+dan ray tracing. Semuanya bisa ditambahkan nanti lewat WebGPU.
+
+Kalau frame rate turun di bawah ~34 fps, efek dimundurkan bertahap sendiri:
+AO → composer → resolusi 1×.
+
+Detail gaya kartun yang tersisa (dipakai penuh di mode `toon`):
 
 - **Cel shading** — semua material trek, props, dan mobil memakai
   `MeshToonMaterial` dengan satu gradasi **5 langkah** (`NearestFilter`, jadi
@@ -407,11 +426,14 @@ cara paling murah untuk merender:
   transparan: nol z-fighting, nol draw call ekstra), tekstur rumput diulang tiap
   30 m (sebelumnya satu petak menutupi 840 m!), dan **±540 penonton 3D** di
   barisan tribun (instanced, 1 draw call per tribun, warna jersey acak).
-- **Grade sinematik** — lapisan CSS vignette + hangat di tengah (`#grade`), dan
-  tone mapping netral dengan exposure 1,06.
-- **Tanpa environment map** — `PMREMGenerator` + `RoomEnvironment` dihapus:
-  material toon tidak butuh pantulan, dan render kubah lingkungan saat boot
-  termasuk biaya terbesar di HP.
+- **Grade sinematik** — lapisan CSS vignette + hangat di tengah (`#grade`, lebih
+  dalam di mode PBR), dan tone mapping netral dengan exposure 1,06 (1,1 di mode
+  PBR).
+- **Environment map murah** — di mode PBR, `PMREMGenerator` memanggang kubah
+  langit + piringan matahari (sphere 16×12, bukan `RoomEnvironment`) sekali saat
+  boot. Di mode toon langkah ini dilewati total: material toon tidak butuh
+  pantulan, dan render kubah lingkungan saat boot termasuk biaya terbesar di
+  HP.
 - **Satu directional light** (plus satu hemisphere). Dua `SpotLight` per mobil
   (12 lampu untuk grid 6 mobil) dihapus — setiap fragment harus menghitung
   semuanya, padahal lampu emissive sudah cukup.

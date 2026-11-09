@@ -54,6 +54,14 @@ body.is-low #grade {
   display: none;
 }
 
+/* Mode PBR: "grade" sinematik — highlight hangat, bayangan agak kebiruan, dan
+   vignette sedikit lebih dalam. Gratis (CSS), tidak menyentuh render 3D. */
+body.is-pbr #grade {
+  background:
+    radial-gradient(115% 95% at 50% 34%, rgba(255, 228, 182, 0.1) 0%, rgba(255, 228, 182, 0) 50%),
+    radial-gradient(125% 105% at 50% 46%, rgba(0, 0, 0, 0) 50%, rgba(3, 10, 20, 0.44) 100%);
+}
+
 /* ---------- HUD ---------- */
 
 /* Semua overlay HUD di atas lapisan grade (#grade z-index 1). */

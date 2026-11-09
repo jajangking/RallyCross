@@ -21,9 +21,21 @@ import { CarEffects } from './fx/CarEffects';
 import { Input } from './input';
 import { Hud } from './hud';
 import { CameraRig, type CameraMode } from './camera';
+import { createPost, type PostStack } from './render/post';
 import { FocusDirector } from './camera/FocusDirector';
 import type { CarLightState } from './vehicle/CarLights';
-import { createBlobShadow, createSky, createSunRig, createSunSprite, PALETTE } from './world/style';
+import {
+  createBlobShadow,
+  createEnvironment,
+  createSky,
+  createSunRig,
+  createSunSprite,
+  getLook,
+  isPbrLook,
+  PALETTE,
+  setLook,
+  type LookMode,
+} from './world/style';
 import { Helicopter } from './world/Heli';
 
 const FIXED_DT = 1 / 60;
@@ -63,6 +75,14 @@ async function boot() {
   const lowQuality = qualityParam === 'low' || (qualityParam === null && weakDevice);
   document.body.classList.toggle('is-low', lowQuality);
 
+  // Gaya permukaan: `?look=toon` mengembalikan tampilan kartun, `?look=pbr`
+  // memaksa PBR walau di HP. Default: PBR di desktop, toon di HP lemah.
+  const lookParam = new URLSearchParams(location.search).get('look');
+  const look: LookMode = lookParam === 'toon' ? 'toon' : lookParam === 'pbr' ? 'pbr' : lowQuality ? 'toon' : 'pbr';
+  setLook(look);
+  const pbr = isPbrLook();
+  document.body.classList.toggle('is-pbr', pbr);
+
   /* ---------------- renderer ---------------- */
   let renderer: THREE.WebGLRenderer;
   try {
@@ -86,9 +106,10 @@ async function boot() {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   // Tone mapping "neutral": warna tetap pekat (tidak pudar seperti ACES),
-  // tapi bagian yang sangat terang tidak langsung menjadi putih rata.
+  // tapi bagian yang sangat terang tidak langsung menjadi putih rata. Di mode
+  // PBR ia dipakai oleh OutputPass di ujung composer.
   renderer.toneMapping = THREE.NeutralToneMapping;
-  renderer.toneMappingExposure = 1.06;
+  renderer.toneMappingExposure = pbr ? 1.1 : 1.06;
   app.appendChild(renderer.domElement);
 
   /* ---------------- scene ---------------- */
@@ -107,9 +128,16 @@ async function boot() {
   const sunRig = createSunRig(scene, lowQuality);
   renderer.shadowMap.enabled = sunRig.shadows;
 
-  // Tidak ada environment map (PMREM): material toon memang tidak butuh
-  // pantulan, dan render kubah lingkungan saat boot termasuk biaya terbesar
-  // di HP.
+  // Environment map dari langit sendiri (di-bake sekali): bodi mobil, kaca, dan
+  // pagar logam jadi punya pantulan langit seperti material PBR sungguhan.
+  if (pbr) {
+    const env = createEnvironment(renderer, PALETTE.skyTop, PALETTE.skyHorizon, 0xfff2d6);
+    if (env) {
+      scene.environment = env;
+      scene.environmentIntensity = 0.55;
+    }
+  }
+
 
 
   /* ---------------- physics + world + car ---------------- */
@@ -351,6 +379,72 @@ async function boot() {
 
   /* ---------------- camera / input / hud ---------------- */
   const cameraRig = new CameraRig(window.innerWidth / window.innerHeight, BROADCAST_SPOTS);
+
+  // "Setengah-AC": AO kontak + bloom + tone mapping lewat composer. Tanpa DOF,
+  // motion blur, dan TAA — tiga efek itu yang paling mahal di browser.
+  let post: PostStack | null = pbr
+    ? createPost({
+        renderer,
+        scene,
+        camera: cameraRig.camera,
+        width: window.innerWidth,
+        height: window.innerHeight,
+        pixelRatio: maxPixelRatio,
+        bloomStrength: 0.26,
+        msaa: lowQuality ? 0 : 4,
+      })
+    : null;
+  // Saklar cepat untuk membandingkan mode composer vs render langsung.
+  let usePost = post !== null;
+  const drawFrame = () => {
+    if (post && usePost) post.render();
+    else renderer.render(scene, cameraRig.camera);
+  };
+
+  let pixelRatio = maxPixelRatio;
+
+  /**
+   * Penjaga frame rate. Efek baru (AO, bloom, MSAA) bisa terasa berat di GPU
+   * pas-pasan, jadi kalau frame rate jatuh, efeknya dimundurkan bertahap:
+   * AO dulu, lalu composer, terakhir resolusi. Sekali turun tidak naik lagi —
+   * lebih baik stabil 45 fps daripada naik-turun.
+   */
+  let perfClock = 0;
+  let perfFrames = 0;
+  let warmup = 0;
+  let degradeLevel = 0;
+  const watchFrame = (dt: number) => {
+    if (!post) return;
+    warmup += dt;
+    if (warmup < 4) return; // beri waktu kompilasi shader & PMREM
+    perfClock += dt;
+    perfFrames++;
+    if (perfClock < 2.5) return;
+    const fps = perfFrames / perfClock;
+    perfClock = 0;
+    perfFrames = 0;
+    if (fps > 34) return;
+    if (degradeLevel === 0) {
+      post.setAo(false);
+      console.info('grafis: AO dimatikan (fps', fps.toFixed(0), ')');
+    } else if (degradeLevel === 1) {
+      usePost = false;
+      console.info('grafis: post-processing dimatikan (fps', fps.toFixed(0), ')');
+    } else if (degradeLevel === 2) {
+      pixelRatio = Math.min(pixelRatio, 1);
+      applyResolution();
+      console.info('grafis: resolusi diturunkan ke 1x (fps', fps.toFixed(0), ')');
+    }
+    degradeLevel++;
+  };
+
+  const applyResolution = () => {
+    renderer.setPixelRatio(pixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    smoke.setPixelRatio(pixelRatio);
+    cameraRig.resize(window.innerWidth / window.innerHeight);
+    post?.setSize(window.innerWidth, window.innerHeight, pixelRatio);
+  };
   cameraRig.snap(car);
 
   const hud = new Hud(car.cfg.mass);
@@ -546,6 +640,61 @@ async function boot() {
     .name('tonton AI vs AI (V)')
     .onChange((v: boolean) => setSpectate(v));
 
+  /* Grafis: saklar hidup untuk efek yang paling mahal, plus tombol pindah
+   * gaya permukaan (butuh reload karena semua material dibangun ulang). */
+  const gfx = {
+    get gaya() {
+      return getLook() === 'pbr' ? 'PBR (setengah-AC)' : 'kartun (ringan)';
+    },
+    get piksel() {
+      return pixelRatio;
+    },
+    set piksel(v: number) {
+      pixelRatio = v;
+      applyResolution();
+    },
+    get postFx() {
+      return usePost;
+    },
+    set postFx(v: boolean) {
+      usePost = v;
+    },
+    get ao() {
+      return post ? post.gtao.enabled : false;
+    },
+    set ao(v: boolean) {
+      post?.setAo(v);
+    },
+    get bloom() {
+      return post ? post.bloom.strength : 0;
+    },
+    set bloom(v: number) {
+      if (post) post.bloom.strength = v;
+    },
+  };
+  const fGfx = gui.addFolder('Grafis');
+  fGfx.add(gfx, 'gaya').name('gaya permukaan').disable();
+  fGfx
+    .add(
+      {
+        ganti: () => {
+          const next = getLook() === 'pbr' ? 'toon' : 'pbr';
+          const url = new URL(window.location.href);
+          url.searchParams.set('look', next);
+          window.location.href = url.toString();
+        },
+      },
+      'ganti',
+    )
+    .name('pindah PBR ⇄ kartun');
+  fGfx.add(gfx, 'piksel', 0.75, 2, 0.05).name('rasio piksel');
+  if (post) {
+    fGfx.add(gfx, 'postFx').name('post-processing');
+    fGfx.add(gfx, 'ao').name('AO kontak');
+    fGfx.add(gfx, 'bloom', 0, 1, 0.01).name('bloom');
+  }
+  fGfx.close();
+
   const actions = {
     Tarmac: () => applyPreset('tarmac'),
     Gravel: () => applyPreset('gravel'),
@@ -677,6 +826,7 @@ async function boot() {
   renderer.setAnimationLoop((time) => {
     timer.update(time);
     const raw = Math.min(timer.getDelta(), 0.1);
+    watchFrame(raw);
 
     input.update(raw);
     accumulator += raw;
@@ -929,16 +1079,11 @@ async function boot() {
 
     sky.position.copy(cameraRig.camera.position);
 
-    renderer.render(scene, cameraRig.camera);
+    drawFrame();
   });
 
   /* ---------------- resize ---------------- */
-  window.addEventListener('resize', () => {
-    renderer.setPixelRatio(maxPixelRatio);
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    smoke.setPixelRatio(maxPixelRatio);
-    cameraRig.resize(window.innerWidth / window.innerHeight);
-  });
+  window.addEventListener('resize', applyResolution);
 
   /* ---------------- debug handle ---------------- */
   (window as unknown as Record<string, unknown>).rc = {
@@ -964,6 +1109,8 @@ async function boot() {
     raceControl,
     safetyCar,
     ambulance,
+    look: getLook(),
+    post,
     skidMarks,
     smoke,
     cameraRig,
@@ -971,7 +1118,7 @@ async function boot() {
     renderer,
     scene,
     snap: () => {
-      renderer.render(scene, cameraRig.camera);
+      drawFrame();
       return renderer.domElement.toDataURL('image/png');
     },
   };
