@@ -12,7 +12,8 @@
     "shot": "tsx scripts/preview.ts",
     "check:browser": "node scripts/browser-check.mjs",
     "check:order": "node scripts/order-check.mjs",
-    "check:boot": "tsx scripts/boot-check.ts"
+    "check:boot": "tsx scripts/boot-check.ts",
+    "audit:track": "tsx scripts/track-audit.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",

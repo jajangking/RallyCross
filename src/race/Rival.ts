@@ -55,6 +55,11 @@ export class Rival {
   private parked = false;
   /** Pace dasar dari nalar AI + panel (tanpa agresivitas balapan). */
   private basePace: number;
+  /** Asumsi grip/rem dari nalar AI, sebelum dikurangi kerusakan mobil. */
+  private baseGrip = 8.6;
+  private baseBrake = 8.0;
+  /** Pengali kecepatan dari kondisi mobil (1 = sehat). */
+  private wear = 1;
   /** Geseran lajur bawaan dari `grid.ts`, meter. */
   private readonly laneOffset: number;
   /**
@@ -100,8 +105,9 @@ export class Rival {
 
   /** Terapkan hasil belajar: pace, asumsi grip/rem, dan garis yang makin rapi. */
   applySkill(tuning: { pace: number; gripTarmac: number; brakeTarmac: number; laneTighten: number }, paceScale = 1) {
-    this.pilot.options.gripTarmac = tuning.gripTarmac;
-    this.pilot.options.brakeTarmac = tuning.brakeTarmac;
+    this.baseGrip = tuning.gripTarmac;
+    this.baseBrake = tuning.brakeTarmac;
+    this.applyWear();
     // Makin berpengalaman, makin kecil geseran lajurnya: dia mendekati garis
     // tercepat dan hanya bergeser saat benar-benar menyalip.
     this.pilot.setLaneOffset(this.laneOffset * (1 - 0.75 * tuning.laneTighten));
@@ -114,6 +120,36 @@ export class Rival {
     this.applyPace();
   }
 
+  /**
+   * Nalar AI yang **melihat kondisi mobilnya sendiri**. Tanpa ini, lawan dengan
+   * ban kempes tetap merencanakan kecepatan seperti mobil sehat: dia masuk
+   * tikungan terlalu cepat, melebar keluar, lalu menabrak. Grip nyata tiap roda
+   * (dan tenaga mesin yang tersisa) sekarang dipakai untuk menurunkan asumsi
+   * grip/rem di perencana kecepatan — jadi mobil rusak otomatis lebih pelan,
+   * titik remnya lebih awal, dan dia tetap di dalam trek.
+   */
+  private applyWear() {
+    const d = this.car.damage;
+    const grip = (d.wheelGrip(0) + d.wheelGrip(1) + d.wheelGrip(2) + d.wheelGrip(3)) / 4;
+    // Mobil sehat: jangan sentuh setelan hasil uji (pace/grip/rem). Ini penting —
+    // nilai default kelas pilot berbeda tipis dari nilai yang sudah diuji, dan
+    // menyentuhnya mengubah garis balap mobil yang sebenarnya tidak rusak.
+    if (grip > 0.999 && d.topSpeedScale > 0.999) {
+      if (this.wear !== 1) {
+        this.wear = 1;
+        this.applyPace();
+      }
+      return;
+    }
+    // v ∝ √(μ·g·r): grip turun 40 % → kecepatan tikungan turun ±23 %.
+    const gripScale = Math.max(0.35, Math.sqrt(Math.max(0.05, grip)));
+    const engineScale = 0.6 + 0.4 * d.topSpeedScale;
+    this.wear = Math.max(0.3, Math.min(1, gripScale * engineScale));
+    this.pilot.options.gripTarmac = this.baseGrip * Math.max(0.3, grip);
+    this.pilot.options.brakeTarmac = this.baseBrake * Math.max(0.3, gripScale);
+    this.applyPace();
+  }
+
   /** Pengawas balapan memperlambat semua mobil (bendera kuning). */
   setControlScale(scale: number) {
     this.controlScale = scale;
@@ -121,7 +157,7 @@ export class Rival {
   }
 
   private applyPace() {
-    this.pilot.options.pace = this.basePace * this.craft * this.controlScale;
+    this.pilot.options.pace = this.basePace * this.craft * this.controlScale * this.wear;
   }
 
   /** Sedang di area servis? (main memakainya untuk tidak memanggil dua kali) */
@@ -183,6 +219,10 @@ export class Rival {
     // adanya. Yang jatuh jauh di bawah dunia (keluar peta) tetap dikembalikan
     // ke garis, karena itu bukan kecelakaan melainkan bug fisika.
     if (this.car.position.y < -20) this.respawn();
+    // Kerusakan berubah kapan saja (tabrakan, ban kempes): perbarui asumsi
+    // grip/pace mobil ini sekali per langkah — murah, dan AI langsung sopan
+    // pada mobilnya sendiri.
+    this.applyWear();
     if (this.pitPhase !== 'none' && this.pit) return this.pitStep(dt);
     const command = this.pilot.update(dt, this.car, others);
     this.car.fixedStep(dt, command);

@@ -84,18 +84,142 @@ function offsetWall(samples: PathSample[], sideSign: number, gap: number, height
 
 const OUTER_FENCE = offsetWall(MAIN.filter(isWalled), -1, WALL_GAP, WALL_HEIGHT);
 
-/** Lane walls that separate the joker from the racing line. */
-const JOKER_WALLS = (() => {
-  const out: Ribbon[] = [];
+/** Jarak minimum dinding ke tepi jalan di kedua sisinya, meter. */
+const EDGE_CLEARANCE = 1.6;
+
+/** Jarak horizontal ke pusat jalur terdekat, meter. */
+function distanceToPath(path: PathSample[], x: number, z: number): { d: number; halfWidth: number } {
+  let best = Infinity;
+  let halfWidth = 7;
+  for (const s of path) {
+    const dx = s.pos.x - x;
+    const dz = s.pos.z - z;
+    const d = dx * dx + dz * dz;
+    if (d < best) {
+      best = d;
+      halfWidth = s.halfWidth;
+    }
+  }
+  return { d: Math.sqrt(best), halfWidth };
+}
+
+/**
+ * Dinding pemisah antara jalur joker dan garis balap utama.
+ *
+ * Dulu geserannya tetap (½lebar + 1,4 m) — dan itu **salah**: di bagian tengah
+ * kedua jalur hanya berjarak ~8,7 m pusat-ke-pusat, jadi dindingnya berdiri
+ * 4,5 m di dalam aspal garis balap. Mobil yang lewat jalur utama menabrak
+ * dinding yang tidak seharusnya ada di sana.
+ *
+ * Sekarang geserannya dihitung dari ruang kosong yang benar-benar tersedia
+ * antara tepi kedua jalan, lalu ditaruh di tengah-tengahnya. Kalau kedua jalur
+ * sudah menyatu (ruang < 1,4 m), dindingnya berhenti dan menyambung lagi
+ * setelah jalurnya berpisah — hasilnya bisa beberapa potong.
+ */
+const JOKER_DIVIDERS: Ribbon[] = (() => {
   const length = JOKER[JOKER.length - 1].distance;
-  // keep the walls clear of both junctions so neither line is blocked
+  // Beri ruang di kedua persimpangan: di sana garis balap dan joker memang
+  // menyatu, kalau diberi dinding justru memblokir jalur masuk/keluar.
   const mid = JOKER.filter((s) => s.distance > 26 && s.distance < length - 26);
-  if (mid.length < 4) return out;
-  out.push(offsetWall(mid, 1, 1.4, 0.85));
-  out.push(offsetWall(mid, -1, 1.4, 0.85));
-  return out;
+  if (mid.length < 4) return [];
+
+  // Ke sisi mana garis balap utama berada? Diukur, bukan ditebak: geser titik
+  // sampel ke kedua arah lalu lihat mana yang lebih dekat ke trek utama.
+  const probe = mid[Math.floor(mid.length / 2)];
+  const toMain = (sign: number) => {
+    const p = probe.pos.clone().addScaledVector(probe.side, sign * 3);
+    return distanceToPath(MAIN, p.x, p.z).d;
+  };
+  const sideSign = toMain(1) < toMain(-1) ? 1 : -1;
+
+  const runs: Ribbon[] = [];
+  let run: PathSample[] = [];
+  let runOffsets: number[] = [];
+  const flush = () => {
+    if (run.length >= 4) {
+      const ribbon: Ribbon = { positions: [], uvs: [], distances: [], indices: [] };
+      for (let i = 0; i < run.length; i++) {
+        const s = run[i];
+        const p = s.pos.clone().addScaledVector(s.side, sideSign * runOffsets[i]);
+        ribbon.positions.push(p.x, 0.01, p.z, p.x, 0.01 + 0.85, p.z);
+        ribbon.uvs.push(s.distance * 0.12, 0, s.distance * 0.12, 1);
+        ribbon.distances.push(s.distance);
+      }
+      for (let k = 0; k < run.length - 1; k++) {
+        const i = k * 2;
+        ribbon.indices.push(i, i + 1, i + 3, i, i + 3, i + 2);
+      }
+      runs.push(ribbon);
+    }
+    run = [];
+    runOffsets = [];
+  };
+  for (const s of mid) {
+    const other = distanceToPath(MAIN, s.pos.x, s.pos.z);
+    // Ruang bebas antara tepi joker dan tepi garis balap.
+    const gap = other.d - other.halfWidth - s.halfWidth;
+    // Dinding harus punya jarak **untuk mobil**, bukan cuma untuk titik:
+    // 1,6 m tiap sisi (setengah lebar mobil + margin). Kalau ruangnya tidak
+    // cukup, dindingnya berhenti — dan di situ kedua jalur memang sudah
+    // menyatu, jadi tidak ada gunanya memisahkan.
+    if (gap < EDGE_CLEARANCE * 2) {
+      flush();
+      continue;
+    }
+    run.push(s);
+    runOffsets.push(s.halfWidth + Math.max(EDGE_CLEARANCE, gap / 2));
+  }
+  flush();
+  return runs;
 })();
 
+/** Dinding di sisi dalam joker: memisahkannya dari rumput infield. */
+const JOKER_LANE_WALLS: Ribbon[] = (() => {
+  const length = JOKER[JOKER.length - 1].distance;
+  const mid = JOKER.filter((s) => s.distance > 26 && s.distance < length - 26);
+  if (mid.length < 4) return [];
+  const probe = mid[Math.floor(mid.length / 2)];
+  const toMain = (sign: number) => {
+    const p = probe.pos.clone().addScaledVector(probe.side, sign * 3);
+    return distanceToPath(MAIN, p.x, p.z).d;
+  };
+  // Sisi yang justru menjauh dari garis balap = sisi infield.
+  const away = toMain(1) < toMain(-1) ? -1 : 1;
+  return [offsetWall(mid, away, 1.4, 0.85)];
+})();
+
+/** Semua dinding jalur cabang (joker), dipakai mesh dan collider. */
+const JOKER_WALLS: Ribbon[] = [...JOKER_DIVIDERS, ...JOKER_LANE_WALLS];
+
+
+/**
+ * Semua dinding yang bisa ditabrak, dengan nama — dipakai skrip audit
+ * (`npm run audit:track`) dan cek smoke untuk memastikan tidak ada dinding
+ * yang berdiri di atas aspal dan tidak ada celah di pagar pengaman.
+ */
+export interface TrackWall {
+  name: string;
+  /** Sisi relatif terhadap garis: +1 sisi dalam, -1 sisi luar. */
+  side: number;
+  height: number;
+  ribbon: Ribbon;
+}
+
+export const TRACK_WALLS: TrackWall[] = [
+  { name: 'catch-fence', side: -1, height: FENCE_TOP, ribbon: OUTER_FENCE },
+  ...JOKER_DIVIDERS.map((ribbon, i) => ({
+    name: `joker-divider-${i + 1}`,
+    side: -1,
+    height: 0.85,
+    ribbon,
+  })),
+  ...JOKER_LANE_WALLS.map((ribbon, i) => ({
+    name: `joker-infield-${i + 1}`,
+    side: 1,
+    height: 0.85,
+    ribbon,
+  })),
+];
 
 /* ------------------------------------------------------------------ */
 /* colliders                                                           */
@@ -134,6 +258,11 @@ export function buildTrackColliders(world: RAPIER.World) {
   addTrimesh(world, MAIN_ROAD.tarmac, SURFACE_MU.tarmac);
   addTrimesh(world, MAIN_ROAD.gravel, SURFACE_MU.gravel);
   addTrimesh(world, JOKER_ROAD.gravel, SURFACE_MU.gravel);
+  // Catatan (audit): bagian aspal di ekor joker sengaja **tidak** diberi
+  // collider sendiri. Potongan itu menumpang 8 mm di atas aspal trek utama dan
+  // seluruhnya berada di dalam lebarnya, jadi collider trek utama sudah menahan
+  // mobil di sana. Menambah collider kedua (dua permukaan berjarak 8 mm) membuat
+  // solver Rapier memantul di sambungan: mobil terlempar dan terbalik di T3.
   addTrimesh(world, VERGE, GRASS_MU);
   // Apron pit = aspal sungguhan, bukan rumput: ban mencengkeram saat servis.
   addTrimesh(world, PIT.apron, SURFACE_MU.tarmac);

@@ -5,7 +5,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import { defaultConfig, VehiclePhysics, type VehicleInput } from '../src/vehicle/VehiclePhysics';
-import { BROADCAST_SPOTS, buildTrackColliders, PIT, pitPose, TRACK } from '../src/world/track';
+import { BROADCAST_SPOTS, buildTrackColliders, PIT, pitPose, TRACK, TRACK_WALLS } from '../src/world/track';
 import { FocusDirector } from '../src/camera/FocusDirector';
 import { PitStop, serviceTimeFor } from '../src/race/PitStop';
 import { RaceControl, type ServiceHandle } from '../src/race/RaceControl';
@@ -423,6 +423,107 @@ async function run() {
   // melepas pedal sampai rodanya kembali ke bawah.
   check(upright > 0.5, 'the AI never ends up on its roof', `lowest tilt ${upright.toFixed(2)}`);
   check(pilot.bestLap < 45, 'AI lap time is sane', `best ${pilot.bestLap.toFixed(1)} s`);
+
+  /* ---- dinding: tidak boleh ada yang berdiri di atas aspal ---- */
+  {
+    const roads = [TRACK.main, TRACK.joker];
+    let worstClear = Infinity;
+    let worstName = '';
+    for (const wall of TRACK_WALLS) {
+      const pos = wall.ribbon.positions;
+      for (let i = 0; i < pos.length; i += 3) {
+        for (const road of roads) {
+          let bestD = Infinity;
+          let half = 7;
+          for (const s of road) {
+            const d = Math.hypot(s.pos.x - pos[i], s.pos.z - pos[i + 2]);
+            if (d < bestD) {
+              bestD = d;
+              half = s.halfWidth;
+            }
+          }
+          const clear = bestD - half;
+          if (clear < worstClear) {
+            worstClear = clear;
+            worstName = wall.name;
+          }
+        }
+      }
+    }
+    check(
+      worstClear > 0.3,
+      'tidak ada dinding yang berdiri di atas aspal',
+      `paling rapat: ${worstName} ${worstClear.toFixed(2)} m dari tepi jalan`,
+    );
+  }
+
+  /* ---- garis balap utama (tanpa joker) harus bersih ---- */
+  {
+    const plainWorld = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    plainWorld.timestep = DT;
+    buildTrackColliders(plainWorld);
+    const plainCar = new VehiclePhysics(plainWorld, defaultConfig, new THREE.Vector3(0, 0.95, -10));
+    const plainPilot = new AutoPilot(TRACK.main, TRACK.joker, { useJoker: false });
+    let minBody = 1;
+    let halfLaps = 0;
+    for (let i = 0; i < Math.round(90 / DT) && plainPilot.lap < 1; i++) {
+      const command = plainPilot.update(DT, plainCar);
+      plainCar.fixedStep(DT, command);
+      plainWorld.step();
+      plainCar.sync();
+      minBody = Math.min(minBody, plainCar.damage.bodyHealth);
+    }
+    halfLaps = plainPilot.lap;
+    check(halfLaps >= 1, 'garis balap utama (tanpa joker) bisa diselesaikan', `${plainPilot.lastLap.toFixed(1)} s`);
+    check(
+      minBody > 0.995,
+      'tidak menabrak dinding di tengah garis balap utama',
+      `bodi ${(minBody * 100).toFixed(0)} %`,
+    );
+  }
+
+  /* ---- AI sadar kerusakan: ban kempes = lebih pelan, tetap di trek ---- */
+  {
+    const wornWorld = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    wornWorld.timestep = DT;
+    buildTrackColliders(wornWorld);
+    const pose = gridPose(RIVAL_PLANS[0]);
+    const rival = new Rival(wornWorld, {
+      name: 'UjiRusak',
+      position: pose.position,
+      yaw: pose.yaw,
+      main: TRACK.main,
+      joker: TRACK.joker,
+      startDistance: TRACK.start,
+      pace: 1,
+      laneOffset: 0,
+      jokerEachLap: false,
+    });
+    // Ban depan kanan kempes: grip turun, tapi AI harus tetap tahu itu.
+    rival.car.damage.wheels[1].punctured = true;
+    rival.car.damage.wheels[1].health = 0.1;
+    const punctures = rival.car.damage.puncturedCount;
+    const healthyPace = rival.pilot.options.pace;
+    let wornExcess = 0;
+    for (let i = 0; i < Math.round(40 / DT); i++) {
+      rival.step(DT);
+      wornWorld.step();
+      rival.sync();
+      wornExcess = Math.max(wornExcess, Math.abs(rival.pilot.lateral) - rival.pilot.sample.halfWidth);
+    }
+    check(punctures > 0, 'ban kempes terpasang untuk uji AI', `${punctures} ban kempes`);
+    check(
+      rival.pilot.options.pace < healthyPace - 1e-4,
+      'AI memperlambat diri saat mobilnya rusak',
+      `pace ${healthyPace.toFixed(3)} → ${rival.pilot.options.pace.toFixed(3)}`,
+    );
+    check(wornExcess < 4, 'AI dengan ban kempes tetap di dalam trek', `maks ${wornExcess.toFixed(1)} m lewat tepi`);
+    const stillHurt =
+      rival.car.damage.puncturedCount > 0 ||
+      rival.car.damage.lostCount > 0 ||
+      rival.car.damage.bodyHealth < 0.999;
+    check(stillHurt, 'mobil uji tidak sembuh sendiri di tengah jalan', `bodi ${(rival.car.damage.bodyHealth * 100).toFixed(0)} %`);
+  }
 
   /* ---------------------------------------------------------------- */
   console.log('\n— lap counter & rival —');

@@ -270,6 +270,11 @@ Cara kerjanya (`src/ai/AutoPilot.ts`, murni matematika, tanpa DOM):
 - **Macet** — diam < 1,2 m/s selama 1,6 s → mundur sebentar lalu maju lagi.
 - **Terbalik / menabrak: tidak ada reset.** Mobil dibiarkan apa adanya — sama sekali tidak ada teleportasi ke garis atau ke grid. AI cuma melepas semua pedal (gas, rem, setir) selama mobilnya miring lebih dari ~69°, lalu langsung lanjut balapan begitu rodanya kembali ke bawah. Satu-satunya pengecualian: mobil yang jatuh di bawah dunia (y < −20, artinya bug fisika, bukan kecelakaan) dikembalikan ke garis.
 - **Joker** — pilihan joker dievaluasi ulang tiap putaran (checkbox *joker lap*), dan HUD menampilkan status AI + lap + waktu lap/best.
+- **Sadar kerusakan** — `Rival.applyWear()` membaca grip nyata tiap roda dan tenaga mesin yang tersisa, lalu menurunkan asumsi grip/rem perencana kecepatan (`v ∝ √(μ·g·r)`). Lawan dengan ban kempes otomatis lebih pelan, titik remnya lebih awal, dan tetap di dalam trek — dulu ia tetap merencanakan seperti mobil sehat lalu melebar keluar. Mobil sehat tidak disentuh sama sekali, jadi pace hasil uji tidak berubah.
+
+Jadi AI-nya **bukan animasi atau jalur rekaman**: setiap frame ia membaca posisi, kecepatan, yaw, slip, roda mana yang menyentuh tanah, dan mobil lain di sekitarnya, lalu memutuskan setir/gas/rem sendiri. Yang "dihafal" hanya geometri sirkuit (sampel garis balap), bukan gerakan.
+
+Yang **belum** ada (jujur): AI tidak memilih joker secara taktis (pilihan joker ditentukan per lawan, bukan berdasarkan lalu lintas atau selisih waktu), belum belajar garis balap sendiri (yang naik hanya pace, asumsi grip, dan kerapian lajur), dan belum memprediksi gerakan lawan (hanya jarak & kecepatan saat ini). Itu semua bisa ditambahkan tanpa menyentuh fisika.
 
 Hasil uji headless dengan fisika asli: **satu putaran 29,9 s**, tidak pernah keluar tepi trek, 0 reset, dan stabil di 6 putaran berturut-turut (aspal & gravel, dengan/tanpa joker). Diuji juga dari 30 titik start berbeda (offset ±3 m): semuanya menyelesaikan putaran.
 
@@ -450,6 +455,29 @@ Detail gaya kartun yang tersisa (dipakai penuh di mode `toon`):
   `?quality=low` / `?quality=high` memaksa pilihan itu.
 - Warna: aspal biru-gelap, gravel pasir hangat, rumput hijau cerah dengan pola
   potong, langit gradasi dengan kubah yang mengikuti kamera.
+
+## Audit trek
+
+`npm run audit:track` (`scripts/track-audit.ts`) memeriksa geometri — tanpa DOM,
+tanpa render — lalu keluar dengan kode ≠ 0 kalau ada temuan:
+
+1. **Tidak ada dinding yang berdiri di atas aspal**, baik di garis balap utama
+   maupun di jalur joker. Inilah yang menangkap bug nyata: dinding pemisah joker
+   dulu berjarak tetap 1,4 m dari tepi joker, padahal di bagian tengah kedua
+   jalur hanya berjarak ~8,7 m pusat-ke-pusat — dindingnya berdiri **4,5 m di
+   dalam aspal garis balap**. Sekarang geserannya dihitung dari ruang kosong
+   yang benar-benar ada (dan dindingnya berhenti di tempat kedua jalur menyatu).
+2. **Kesinambungan pagar** — celah > 3 m dianggap bocor (sekarang 0 m).
+3. **Sisi dalam** — seberapa jauh mobil bisa menyetir ke dalam sebelum ditahan;
+   angka besar = jalan pintas memotong lapangan.
+4. **Persimpangan cabang** — sudut masuk/keluar joker (sekarang 11,8° dan 6,0°:
+   tangensial, tidak menusuk pagar).
+
+Catatan dari audit: ekor aspal joker **tidak** diberi collider sendiri. Bagian
+itu menumpang 8 mm di atas aspal trek utama dan seluruhnya berada di dalam
+lebarnya, jadi collider trek utama sudah menahan mobil; menambah collider kedua
+(diuji) membuat solver memantul di sambungan sehingga mobil terlempar dan
+terbalik beberapa puluh meter kemudian.
 
 ## Verifikasi
 
