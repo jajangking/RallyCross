@@ -122,6 +122,16 @@ export function toon(options: ToonOptions = {}): THREE.MeshToonMaterial {
     depthWrite: options.depthWrite ?? true,
     fog: options.fog ?? true,
   });
+  // MeshToonMaterial punya normal map & AO map, jadi tonjolan aspal/kerikil
+  // tetap terlihat di mode kartun (tanpa biaya material PBR).
+  if (options.normalMap) {
+    material.normalMap = options.normalMap as THREE.Texture;
+    if (options.normalScale) material.normalScale = options.normalScale as THREE.Vector2;
+  }
+  if (options.aoMap) {
+    material.aoMap = options.aoMap as THREE.Texture;
+    material.aoMapIntensity = (options.aoMapIntensity as number) ?? 1;
+  }
   if (options.emissive !== undefined) material.emissive = new THREE.Color(options.emissive);
   if (options.emissiveIntensity !== undefined) material.emissiveIntensity = options.emissiveIntensity;
   if (options.emissiveMap) material.emissiveMap = options.emissiveMap;

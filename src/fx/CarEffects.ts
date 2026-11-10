@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { VehiclePhysics, VehicleInput } from '../vehicle/VehiclePhysics';
 import type { SkidMarks } from './SkidMarks';
 import type { SmokePuffs } from './Smoke';
+import type { GravelSpray } from './Spray';
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
@@ -9,6 +10,9 @@ const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(mi
 const TARMAC_SMOKE = 0xd8d8dc;
 const GRAVEL_DUST = 0xa08a68;
 const GRASS_DUST = 0x7f8a5c;
+
+/** Warna butir gravel yang terlempar — batu abu, coklat, dan pasir terang. */
+const CLOD_COLORS = [0xbda680, 0xa8916c, 0x8d7a5e, 0xcdb894, 0x7d6f57];
 
 interface WheelTrail {
   /** Tepi kiri/kanan tapak pada frame sebelumnya. */
@@ -42,6 +46,8 @@ export class CarEffects {
     private readonly car: VehiclePhysics,
     private readonly marks: SkidMarks,
     private readonly smoke: SmokePuffs,
+    /** Percikan butir gravel (opsional: uji headless bisa melewatinya). */
+    private readonly spray?: GravelSpray,
   ) {
     for (let i = 0; i < 4; i++) {
       this.trails.push({
@@ -57,6 +63,31 @@ export class CarEffects {
     for (const t of this.trails) t.active = false;
     this.airTime = 0;
     this.wasAirborne = false;
+  }
+
+  /**
+   * Lempar beberapa butir gravel dari satu ban. Arah lemparnya ke belakang
+   * mobil (searah jejak), bukan radial: roda menggali ke belakang, persis
+   * seperti roost di gravel sungguhan.
+   */
+  private throwClods(w: VehiclePhysics['wheels'][number], speed: number, count: number): void {
+    const spray = this.spray;
+    if (!spray || count <= 0) return;
+    this.tmpPush.set(-w.forward.x, 0, -w.forward.z);
+    if (this.tmpPush.lengthSq() < 1e-4) return;
+    this.tmpPush.normalize();
+    this.tmpP.copy(w.contactPoint).addScaledVector(w.normal, 0.08);
+    for (let i = 0; i < count; i++) {
+      const ok = spray.spawn(this.tmpP, this.tmpPush, speed, {
+        size: 0.17 + Math.random() * 0.16,
+        color: CLOD_COLORS[Math.floor(Math.random() * CLOD_COLORS.length)],
+        life: 0.42 + Math.random() * 0.22,
+        up: 2.2 + Math.random() * 1.6,
+        spread: 1.7,
+        back: 0.26,
+      });
+      if (!ok) return;
+    }
   }
 
   update(dt: number, command?: VehicleInput): void {
@@ -174,6 +205,22 @@ export class CarEffects {
           );
         }
       }
+      /* ---------- percikan butir gravel ---------- */
+      // Hanya di gravel (bukan aspal, bukan rumput). Roda belakang melempar
+      // paling banyak karena merekalah yang menggali; roda depan ikut sedikit
+      // saat mobil cepat. Makin cepat dan makin selip, makin banyak butirnya.
+      const onGravel = w.surfaceMu > 0.45 && w.surfaceMu < 0.85;
+      if (onGravel && speed > 3.2) {
+        const rear = !w.isFront;
+        const rate = rear
+          ? clamp((speed - 2) / 14, 0, 1) * (0.7 + Math.min(0.9, amount * 0.22))
+          : clamp((speed - 12) / 26, 0, 1) * 0.5;
+        const chance = rate * (rear ? 1.5 : 0.8);
+        let count = Math.floor(chance);
+        if (Math.random() < chance - count) count++;
+        this.throwClods(w, speed, count);
+      }
+
       // BAN PECAH: ban kempes berasap tipis terus-menerus selama mobil jalan.
       const dmg = car.damage.wheels[i];
       if (dmg.punctured && !dmg.lost && speed > 4.5 && this.smokeBudget > 0 && Math.random() < 0.5) {
@@ -206,6 +253,15 @@ export class CarEffects {
       this.airTime += dt;
     } else {
       if (this.wasAirborne && this.airTime > 0.12) {
+        // Mendarat di gravel = hujan butir: makin lama melayang, makin banyak.
+        if (this.spray) {
+          const splash = Math.round(clamp(3 + this.airTime * 6, 3, 14));
+          for (let i = 0; i < 4; i++) {
+            const w = car.wheels[i];
+            if (!w.contact || w.surfaceMu <= 0.45 || w.surfaceMu >= 0.85) continue;
+            this.throwClods(w, Math.max(4, speed), Math.ceil(splash / 4));
+          }
+        }
         // Makin lama melayang, makin tebal debu yang naik saat menyentuh tanah.
         const burst = Math.round(clamp(4 + this.airTime * 9, 4, 18));
         for (let i = 0; i < burst; i++) {

@@ -187,8 +187,25 @@ const materialColor = (material: THREE.Material): { color: Rgba; alpha: number }
   if (m.map) {
     let avg = mapColor.get(m.map);
     if (!avg) {
-      const canvas = (m.map as unknown as { image?: StubCanvas }).image;
-      avg = canvas?.average ? canvas.average() : [200, 200, 200, 1];
+      const image = (m.map as unknown as { image?: StubCanvas & { data?: Uint8Array } }).image;
+      // Tekstur trek sekarang `DataTexture` (buffer piksel, lihat
+      // `src/world/surface-maps.ts`), bukan canvas: rata-ratanya dihitung
+      // langsung dari buffer supaya warna aspal/gravel di shot tetap benar.
+      if (image?.data) {
+        const d = image.data;
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        const n = d.length / 4;
+        for (let i = 0; i < d.length; i += 4) {
+          r += d[i];
+          g += d[i + 1];
+          b += d[i + 2];
+        }
+        avg = [r / n, g / n, b / n, 1];
+      } else {
+        avg = image?.average ? image.average() : [200, 200, 200, 1];
+      }
       mapColor.set(m.map, avg);
     }
     base[0] = (base[0] * avg[0]) / 255;

@@ -335,7 +335,8 @@ Untuk setiap mobil (`src/fx/`):
 - **Jejak ban** (`SkidMarks.ts`) — satu mesh untuk seluruh arena, buffer quad dipakai bergiliran (6000 potong; 2600 di `?quality=low`). Tiap potong ditarik dari tepi tapak ban frame sebelumnya ke frame sekarang, jadi hasilnya strip kontinu yang mengikuti arah ban — bukan decal yang ditempel per titik. Alpha per titik: di aspal pekat, di gravel/rumput tipis dan berwarna debu. Kalau buffer penuh, potongan tertua yang ditimpa (jejak lama memudar sendiri, tanpa biaya per frame). Upload ke GPU dibatasi ke rentang yang berubah saja.
 - **Asap & debu** (`Smoke.ts`) — satu `Points` dengan kolam partikel tetap (480; 220 di low). Partikel lahir dari titik kontak ban, membesar, naik, dan memudar; warna mengikuti jenis permukaan (aspal = asap kelabu, gravel = debu coklat, rumput = debu kehijauan).
 - **Pemicunya fisika, bukan animasi** (`CarEffects.ts`) — semuanya dibaca dari `WheelState`: `vLat` (selip lateral), `slipAngle`, `traction` (ban berputar di tempat saat start), `handbrake`, `surfaceMu`, dan `contactPoint`. Jadi handbrake di aspal mengasapi ban belakang, mobil yang melebar ke gravel menyemburkan debu walau tidak selip, dan pendaratan setelah lompatan mengepulkan debu sesuai lama melayang.
-- **Anggaran per mobil** (2 kepulan/frame) menjamin enam mobil drifting sekaligus tidak membanjiri kolam partikel. Panel → *Lawan* → **hapus jejak ban** membersihkan sisa goresan.
+- **Percikan gravel** (`Spray.ts`) — di permukaan gravel, roda **melempar butir tanah**: satu `Points` terpisah (420 butir; 180 di low) dengan gravitasi, tepi keras (bukan kabut), dan warna batu (abu, coklat, pasir terang). Butir lahir dari titik kontak roda, terbang ke belakang searah jejak, melengkung turun, lalu mati begitu menyentuh tanah — tidak menembus permukaan. Roda belakang melempar paling banyak (merekalah yang menggali); roda depan ikut saat mobil cepat. Mendarat setelah lompatan di gravel = hujan butir tambahan, makin lama melayang makin banyak.
+- **Anggaran** per frame: 2 kepulan asap/debu per mobil, dan 8 butir gravel untuk **seluruh grid** (4 di low). Enam mobil drifting di gravel tidak akan membanjiri kolam partikel. Panel → *Lawan* → **hapus jejak ban** membersihkan sisa goresan.
 
 ## Kerusakan mobil
 
@@ -397,6 +398,42 @@ tanpa browser: `npm run shot -- car` → `shots/car-damage.png`.
 
 Yang belum ada: kaca pecah, panel bodi yang lepas, suara benturan, dan api dari
 mesin yang mati.
+
+## Tekstur permukaan (aspal, gravel, kerban, bahu)
+
+Trek tidak lagi memakai warna rata. Semua permukaan jalan dihitung
+**prosedural ke buffer piksel** di `src/world/surface-maps.ts` — bukan gambar
+yang diunduh, bukan canvas 2D:
+
+| permukaan | isi peta | resolusi |
+| --- | --- | --- |
+| aspal | abu netral + butiran batu, retak rambut, tambalan tua, **dua jalur ban** yang lebih gelap & lebih mengkilap | warna 512², normal 256², kekasaran 512² |
+| gravel | pasir hangat + tiga lapis kerikil (bongkah 12–30 cm, kerikil, butir lepas terang) dengan bayangan kontak; jalur ban **terpadatkan** dan lebih halus | warna 512², normal 512², kekasaran 512² |
+| kerban | merah-putih pudar, kotor, bercak debu | warna 128² |
+| bahu trek | rumput yang terkelupas jadi tanah, bercak & butiran | warna 256² |
+
+Kenapa prosedural dan bukan tekstur foto:
+
+- **Bisa diuji tanpa GPU/DOM.** Semua fungsi murni angka, jadi `npm run smoke`
+  mengukur hasilnya (rata-rata warna, jalur ban memang lebih gelap, ada batu
+  terang dan gelap, normal map wajar, peta bisa diulang tanpa jahitan).
+- **Deterministik.** Keacakan lewat `mulberry32` dengan benih tetap: trek
+  terlihat sama di setiap muat halaman.
+- **Sekalian dapat normal map & peta kekasaran.** Tinggi permukaan dihitung
+  untuk membentuk normal map (tonjolan kerikil, butiran aspal), dan kekasaran
+  dipakai membedakan jalur ban yang terpoles (0,58) dari aspal di luarnya
+  (0,92). Di mode PBR inilah yang membuat jalan terlihat "berbahan", bukan
+  sekadar gelap.
+
+**Skala tekstur ikut diperbaiki.** Dulu uv jalan memakai `v = jarak`, artinya
+satu petak tekstur = **1 m** — butiran 3 piksel jadi garis tipis sepanjang
+meteran (inilah kenapa aspal lama terlihat seperti goresan). Sekarang
+`v = jarak / 12` untuk aspal dan `/ 9` untuk gravel, jadi satu petak = 12 m
+(atau 9 m) dan butiran berukuran sentimeter yang sebenarnya. U tetap 0–1
+melintang, karena di situlah jalur ban dipanggang.
+
+Biaya: ±150 ms untuk aspal dan ±230 ms untuk gravel saat boot (256² di
+`?quality=low`, jadi ±70 ms). Memori tekstur ±5 MB termasuk mipmap.
 
 ## Gaya visual: PBR "setengah-AC" atau kartun
 
@@ -520,6 +557,8 @@ terbalik beberapa puluh meter kemudian.
 - 9 kamera TV berdiri di luar trek, sutradara memakai ≥5 kamera berbeda, tidak ada shot < 1,6 s, dan mobil yang dibidik tidak pernah lebih dari 220 m
 - **tidak ada kamera TV yang tertutup bangunan**: tiap segmen kamera → titik bidik diuji terhadap kotak pembatas (OBB) tribun utama, tribun kedua, dan race control; kamera garis start juga diperiksa berada di atas atap tribun (> 10 m)
 - **kerusakan**: mengemudi normal tidak merusak apa pun; tabrak tembok di 92 km/h → bodi 41 %, mesin 22 %, 1 ban pecah, 1 roda copot; roda copot kehilangan seluruh grip sementara ban pecah masih 29 %; kerusakan **tidak** pulih sendiri selama balapan; mesin mati = bergeser 0,00 m dalam 4 s; reset memperbaiki semuanya; kerusakan bisa dimatikan lewat setelan; setelan 0,5× memangkas kerusakan (bodi 71 % vs 41 %); ban depan pecah menarik setir 2,1°; **dua lap AI tanpa satu pun kerusakan** (tidak ada false positive); dan lima lawan memakai model kerusakan yang sama
+- **tekstur permukaan**: peta aspal/gravel lengkap (warna + normal + kekasaran) dengan ukuran benar, aspal gelap netral, **jalur ban memang lebih gelap** dari bagian tengah trek (55 vs 72), gravel hangat (135/125/103) dengan 5 % batu terang dan 9 % batu gelap, normal map gravel dominan menghadap atas (128/128/254), peta bisa diulang **tanpa jahitan** (selisih tepi 0,2 vs 0,5 antar kolom), dan hasilnya deterministik (dua kali bikin = piksel identik)
+- **percikan gravel**: jatah per frame dihormati, butir hidup setelah dilempar, lalu jatuh dan habis (tidak menggantung di udara), dan berhenti di permukaan (tidak menembus tanah)
 - **helikopter**: menjaga jarak 18–40 m dari mobil pada ketinggian > 20 m, ikut mengikuti mobil sepanjang putaran (< 60 m), posisi kameranya valid, dan dalam 90 detik siaran TV ia mendapat ≥ 5 shot udara yang masing-masing 4–7,5 detik (≈ 30 % dari waktu siaran), kameranya menempel di lensa heli, dan tanpa heli siaran tetap 100 % kamera darat
 
 `npm run check:browser` (opsional, perlu Chromium) menambah cek UI: bukaan gas/rem 1:1 (50 %, 85 %, 70 %), gas dan rem saling independen, rem tidak menambah throttle, semuanya menutup saat dilepas, slider setir balik ke tengah, tombol D/R memindah gigi + HUD menampilkan `R` saat mundur, rem tidak membalikkan mobil, dan arah setir cocok dengan layar. Untuk detail visual: lampu rem menguat saat pedal ditekan, sein kiri berkedip sementara kanan tetap mati, repeater HUD menyala, lampu utama menyala, lampu mundur menyala di gigi R, empat hub suspensi berada di rentang travel, dan setir berputar.

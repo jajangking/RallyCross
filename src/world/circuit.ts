@@ -206,7 +206,12 @@ function ribbonBetween(
       tmpA.y = yOf(s);
       tmpB.y = yOf(s);
       ribbon.positions.push(tmpA.x, tmpA.y, tmpA.z, tmpB.x, tmpB.y, tmpB.z);
-      ribbon.uvs.push(0, s.distance, 1, s.distance);
+      // U melintang 0..1 (satu tekstur selebar trek: di sinilah jalur ban
+      // dipanggang), V memakai jarak **meter**: satu petak tekstur = 12 m
+      // sepanjang jalan, jadi butiran aspal tidak tertarik jadi garis panjang
+      // seperti dulu (dulu V = jarak, artinya satu petak tiap 1 m).
+      const tile = s.surface === 'gravel' ? 9 : 12;
+      ribbon.uvs.push(0, s.distance / tile, 1, s.distance / tile);
       ribbon.distances.push(s.distance);
     }
     const verts = (i - start) * 2;

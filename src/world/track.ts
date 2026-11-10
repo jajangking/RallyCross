@@ -1,6 +1,13 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import {
+  dataTexture,
+  makeAsphaltMaps,
+  makeGravelMaps,
+  makeKerbMaps,
+  makeVergeMaps,
+} from './surface-maps';
+import {
   JOKER_NODES,
   JOKER_START,
   MAIN_NODES,
@@ -298,61 +305,26 @@ function canvasTexture(
   return tex;
 }
 
-const noise = (ctx: CanvasRenderingContext2D, size: number, count: number, alpha: number) => {
-  for (let i = 0; i < count; i++) {
-    const v = Math.floor(Math.random() * 60);
-    ctx.fillStyle = `rgba(${v},${v},${v},${alpha})`;
-    ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
-  }
-};
-
-function asphaltTexture() {
-  // Aspal kartun: satu warna dasar + bintik halus, bukan bising foto.
-  return canvasTexture((ctx, size) => {
-    ctx.fillStyle = '#565d66';
-    ctx.fillRect(0, 0, size, size);
-    ctx.fillStyle = 'rgba(38,43,50,0.35)';
-    for (let i = 0; i < 900; i++) {
-      ctx.fillRect(Math.random() * size, Math.random() * size, 3, 3);
-    }
-    ctx.fillStyle = 'rgba(255,255,255,0.05)';
-    for (let i = 0; i < 400; i++) {
-      ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
-    }
-    // Dua jalur karet ban (kiri/kanan) — dipanggang ke tekstur, jadi tidak ada
-    // mesh tambahan, tidak ada z-fighting, dan ikut menyempit di tikungan.
-    for (const centre of [0.29, 0.71]) {
-      const half = 0.15;
-      const grad = ctx.createLinearGradient((centre - half) * size, 0, (centre + half) * size, 0);
-      grad.addColorStop(0, 'rgba(22,26,31,0)');
-      grad.addColorStop(0.5, 'rgba(22,26,31,0.4)');
-      grad.addColorStop(1, 'rgba(22,26,31,0)');
-      ctx.fillStyle = grad;
-      ctx.fillRect((centre - half) * size, 0, half * 2 * size, size);
-    }
-  }, 256, 1);
-}
-
-function gravelTexture() {
-  // Gravel: pasir hangat dengan kerikil besar-besar (gaya kartun).
-  return canvasTexture((ctx, size) => {
-    ctx.fillStyle = '#c9a878';
-    ctx.fillRect(0, 0, size, size);
-    ctx.fillStyle = 'rgba(233,207,164,0.85)';
-    for (let i = 0; i < 700; i++) {
-      const r = 1.5 + Math.random() * 3;
-      ctx.beginPath();
-      ctx.arc(Math.random() * size, Math.random() * size, r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.fillStyle = 'rgba(160,131,94,0.8)';
-    for (let i = 0; i < 500; i++) {
-      const r = 1 + Math.random() * 2.4;
-      ctx.beginPath();
-      ctx.arc(Math.random() * size, Math.random() * size, r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }, 256, 1);
+/**
+ * Material jalan: peta warna + normal map + peta kekasaran dari
+ * `surface-maps.ts`. Ketiganya dipakai di mode PBR; di mode toon, three hanya
+ * memakai warna + normal (MeshToonMaterial tidak punya roughness map).
+ */
+function roadMaps(size = 512) {
+  const asphalt = makeAsphaltMaps(size);
+  const gravel = makeGravelMaps(size);
+  return {
+    asphalt: {
+      map: dataTexture(asphalt.map, asphalt.size, true),
+      normalMap: dataTexture(asphalt.normal!, asphalt.normalSize, false),
+      roughnessMap: dataTexture(asphalt.rough!, asphalt.roughSize, false),
+    },
+    gravel: {
+      map: dataTexture(gravel.map, gravel.size, true),
+      normalMap: dataTexture(gravel.normal!, gravel.normalSize, false),
+      roughnessMap: dataTexture(gravel.rough!, gravel.roughSize, false),
+    },
+  };
 }
 
 function grassTexture() {
@@ -373,13 +345,15 @@ function grassTexture() {
 }
 
 function kerbTexture() {
-  return canvasTexture((ctx, size) => {
-    ctx.fillStyle = '#e6e6e6';
-    ctx.fillRect(0, 0, size, size);
-    ctx.fillStyle = '#cf2a1f';
-    ctx.fillRect(0, 0, size, size / 2);
-    noise(ctx, size, 400, 0.06);
-  }, 64, 1);
+  // Kerban merah-putih yang sudah kotor (lihat `makeKerbMaps`).
+  const maps = makeKerbMaps(128);
+  return dataTexture(maps.map, maps.size, true);
+}
+
+function vergeTexture() {
+  // Bahu trek: rumput terkelupas jadi tanah, diulang tiap 10 m (uv dunia ×0,1).
+  const maps = makeVergeMaps(256);
+  return dataTexture(maps.map, maps.size, true);
 }
 
 function checkerTexture() {
@@ -703,8 +677,9 @@ function spectatorGeometry(): THREE.BufferGeometry {
 }
 
 export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandle {
-  const asphalt = asphaltTexture();
-  const gravelTex = gravelTexture();
+  // Di HP lemah (`?quality=low`) teksturnya 256²: sepertiga biaya hitung saat
+  // boot, dan di layar kecil bedanya hampir tidak terlihat.
+  const surfaces = roadMaps(detail ? 512 : 256);
   const grass = grassTexture();
   const crowd = crowdTexture();
 
@@ -735,7 +710,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   groundMesh.receiveShadow = true;
   scene.add(groundMesh);
 
-  const vergeMat = toon({ color: PALETTE.verge });
+  const vergeMat = toon({ map: vergeTexture(), roughness: 0.98, metalness: 0 });
   for (const ribbon of [VERGE, JOKER_VERGE]) {
     const mesh = new THREE.Mesh(ribbonGeometry(ribbon), vergeMat);
     mesh.receiveShadow = true;
@@ -743,8 +718,22 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   }
 
   const roadMaterials: Record<Surface, THREE.MeshToonMaterial> = {
-    tarmac: toon({ map: asphalt, roughness: 0.92, metalness: 0 }),
-    gravel: toon({ map: gravelTex, roughness: 1, metalness: 0 }),
+    tarmac: toon({
+      map: surfaces.asphalt.map,
+      normalMap: surfaces.asphalt.normalMap,
+      normalScale: new THREE.Vector2(0.7, 0.7),
+      roughnessMap: surfaces.asphalt.roughnessMap,
+      roughness: 1,
+      metalness: 0,
+    }),
+    gravel: toon({
+      map: surfaces.gravel.map,
+      normalMap: surfaces.gravel.normalMap,
+      normalScale: new THREE.Vector2(1.1, 1.1),
+      roughnessMap: surfaces.gravel.roughnessMap,
+      roughness: 1,
+      metalness: 0,
+    }),
   };
   for (const surface of ['tarmac', 'gravel'] as Surface[]) {
     for (const ribbon of [MAIN_ROAD[surface], JOKER_ROAD[surface]]) {
@@ -1231,11 +1220,15 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
 
   /* ---------------- paddock in the infield ---------------- */
   const paddock = new THREE.Group();
+  // Apron paddock: tekstur aspal yang sama, diulang lebih rapat (petaknya
+  // ±8 m, bukan 12 m) supaya terasa berbeda dari permukaan sirkuit.
+  const apronTex = surfaces.asphalt.map.clone();
+  apronTex.needsUpdate = true;
+  apronTex.repeat.set(8, 5);
   const apron = new THREE.Mesh(
     new THREE.PlaneGeometry(64, 38),
-    toon({ map: asphalt.clone(), roughness: 0.95 }),
+    toon({ map: apronTex, roughness: 0.95 }),
   );
-  apron.material.map!.repeat.set(10, 6);
   apron.rotation.x = -Math.PI / 2;
   apron.position.set(62, 0.008, 4);
   apron.receiveShadow = true;

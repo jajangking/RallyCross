@@ -17,6 +17,7 @@ import { standings, LapRecords } from './race/Standings';
 import { AiSkills, skillForPace } from './race/AiSkill';
 import { SkidMarks } from './fx/SkidMarks';
 import { SmokePuffs } from './fx/Smoke';
+import { GravelSpray } from './fx/Spray';
 import { CarEffects } from './fx/CarEffects';
 import { Input } from './input';
 import { Hud } from './hud';
@@ -157,7 +158,12 @@ async function boot() {
   const smoke = new SmokePuffs(lowQuality ? 220 : 480);
   smoke.setPixelRatio(renderer.getPixelRatio());
   scene.add(smoke.points);
-  const playerEffects = new CarEffects(car, skidMarks, smoke);
+  // Percikan butir gravel: kolam kecil terpisah dari debu, karena butirnya
+  // punya gravitasi dan tepi keras (debu tidak).
+  const spray = new GravelSpray(lowQuality ? 180 : 420);
+  spray.setPixelRatio(renderer.getPixelRatio());
+  scene.add(spray.points);
+  const playerEffects = new CarEffects(car, skidMarks, smoke, spray);
   // Bayangan "blob": pengganti shadow map, satu bidang per mobil.
   // Bayangan blob cuma dipakai kalau shadow map tidak aktif (HP lemah); kalau
   // aktif, bayangan asli dari matahari yang dipakai — jangan dobel.
@@ -241,7 +247,7 @@ async function boot() {
       get visual() {
         return visual;
       },
-      effects: new CarEffects(rival.car, skidMarks, smoke),
+      effects: new CarEffects(rival.car, skidMarks, smoke, spray),
       damageView: new CarDamageVisual(rival.car.cfg, plan.color),
       shadow: createBlobShadow(1.5, 0.34),
       /** Lap terbaik yang sudah dikirim ke papan rekor. */
@@ -443,6 +449,7 @@ async function boot() {
     renderer.setPixelRatio(pixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     smoke.setPixelRatio(pixelRatio);
+    spray.setPixelRatio(pixelRatio);
     cameraRig.resize(window.innerWidth / window.innerHeight);
     post?.setSize(window.innerWidth, window.innerHeight, pixelRatio);
   };
@@ -976,6 +983,9 @@ async function boot() {
     lightState.headlights = input.lights.headlights;
 
     track.update(raw);
+    // Jatah butir gravel untuk seluruh grid frame ini: cukup untuk membentuk
+    // roost yang jelas, tapi tidak menghabiskan kolam saat enam mobil di gravel.
+    spray.beginFrame(lowQuality ? 4 : 8);
     carVisual.update(car, raw, lightState);
     playerDamageView.sync(carVisual, car.damage);
     playerEffects.update(raw, command);
@@ -1016,9 +1026,11 @@ async function boot() {
       if (race.rivals) for (const r of rivals) followShadow(r.shadow, r.rival.car);
     }
 
-    // Jejak ban + asap di-upload sekali per frame, setelah semua mobil menulis.
+    // Jejak ban + asap + percikan gravel di-upload sekali per frame, setelah
+    // semua mobil menulis.
     skidMarks.flush();
     smoke.update(raw);
+    spray.update(raw);
 
     // Heli selalu terbang mengelilingi mobil yang disorot; lensanya jadi salah
     // satu kamera siaran TV (sutradara menyelipkannya tiap 8–15 detik).
@@ -1114,6 +1126,7 @@ async function boot() {
     post,
     skidMarks,
     smoke,
+    spray,
     cameraRig,
     heli,
     renderer,

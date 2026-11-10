@@ -22,6 +22,14 @@ import { LapRecords, standings, type StandingsCar } from '../src/race/Standings'
 import { SkidMarks } from '../src/fx/SkidMarks';
 import { SmokePuffs } from '../src/fx/Smoke';
 import { CarEffects } from '../src/fx/CarEffects';
+import { GravelSpray } from '../src/fx/Spray';
+import {
+  averageColor,
+  makeAsphaltMaps,
+  makeGravelMaps,
+  makeKerbMaps,
+  makeVergeMaps,
+} from '../src/world/surface-maps';
 import { getLook, isPbrLook, setLook, toon, toonFrom, toonRamp, PALETTE } from '../src/world/style';
 import { Helicopter } from '../src/world/Heli';
 import { createSunRig } from '../src/world/style';
@@ -398,6 +406,129 @@ async function run() {
     'the joker lap is the shorter way round',
     `${(pathLength(plainPath) - pathLength(jokerPath)).toFixed(1)} m shorter`,
   );
+
+  /* ---------------- tekstur permukaan (tanpa DOM) ---------------- */
+  console.log('\n— tekstur permukaan —');
+  const lum = (d: Uint8Array, i: number) => d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+  /** Rata-rata terang kolom ke-`x` (kolom = posisi melintang di trek). */
+  const columnMean = (d: Uint8Array, size: number, x: number) => {
+    let sum = 0;
+    for (let y = 0; y < size; y++) sum += lum(d, (y * size + x) * 4);
+    return sum / size;
+  };
+  /** Selisih rata-rata antar kolom tetangga — dipakai mengukur jahitan. */
+  const seamGap = (d: Uint8Array, size: number) => {
+    const wrap = (x: number) => columnMean(d, size, ((x % size) + size) % size);
+    const seam = Math.abs(wrap(size - 1) - wrap(0));
+    let inner = 0;
+    for (let x = 40; x < 60; x++) inner += Math.abs(wrap(x) - wrap(x + 1));
+    return { seam, inner: inner / 20 };
+  };
+
+  const asphaltMaps = makeAsphaltMaps(512);
+  const gravelMaps = makeGravelMaps(512);
+  check(
+    asphaltMaps.map.length === 512 * 512 * 4 &&
+      asphaltMaps.normal!.length === 256 * 256 * 4 &&
+      asphaltMaps.rough!.length === 512 * 512 * 4,
+    'aspal punya peta warna + normal + kekasaran dengan ukuran benar',
+    `warna ${asphaltMaps.size}² · normal ${asphaltMaps.normalSize}² · kasar ${asphaltMaps.roughSize}²`,
+  );
+  const asphaltAvg = averageColor(asphaltMaps.map);
+  check(
+    asphaltAvg[0] < 110 && asphaltAvg[0] > 40 && Math.abs(asphaltAvg[2] - asphaltAvg[0]) < 24,
+    'aspal gelap dan netral (bukan abu-abu terang atau kebiruan)',
+    `rata-rata ${asphaltAvg.map((v) => v.toFixed(0)).join('/')}`,
+  );
+  // Jalur ban dipanggang di 29 % dan 71 % lebar: harus lebih gelap dari tengah.
+  const centre = columnMean(asphaltMaps.map, 512, 256);
+  const wheel = (columnMean(asphaltMaps.map, 512, 148) + columnMean(asphaltMaps.map, 512, 364)) / 2;
+  check(
+    wheel < centre - 4,
+    'jalur ban di aspal lebih gelap daripada bagian tengah trek',
+    `jalur ${wheel.toFixed(0)} vs tengah ${centre.toFixed(0)}`,
+  );
+
+  const gravelAvg = averageColor(gravelMaps.map);
+  check(
+    gravelAvg[0] > gravelAvg[1] && gravelAvg[1] > gravelAvg[2] && gravelAvg[0] > 110,
+    'gravel hangat (coklat keemasan), bukan abu atau hijau',
+    `rata-rata ${gravelAvg.map((v) => v.toFixed(0)).join('/')}`,
+  );
+  let bright = 0;
+  let dark = 0;
+  for (let i = 0; i < gravelMaps.map.length; i += 4) {
+    const l = lum(gravelMaps.map, i);
+    if (l > 170) bright++;
+    else if (l < 80) dark++;
+  }
+  const total = gravelMaps.map.length / 4;
+  check(
+    bright / total > 0.01 && dark / total > 0.004,
+    'gravel punya batu terang dan batu gelap (bukan pasir rata)',
+    `${((bright / total) * 100).toFixed(1)} % terang · ${((dark / total) * 100).toFixed(1)} % gelap`,
+  );
+  const normalAvg = averageColor(gravelMaps.normal!);
+  check(
+    Math.abs(normalAvg[0] - 128) < 6 && Math.abs(normalAvg[1] - 128) < 6 && normalAvg[2] > 200,
+    'normal map gravel wajar (dominan menghadap atas)',
+    `rata-rata ${normalAvg.map((v) => v.toFixed(0)).join('/')}`,
+  );
+
+  const asphaltSeam = seamGap(asphaltMaps.map, 512);
+  const gravelSeam = seamGap(gravelMaps.map, 512);
+  check(
+    asphaltSeam.seam < asphaltSeam.inner * 3 + 2 && gravelSeam.seam < gravelSeam.inner * 3 + 2,
+    'peta bisa diulang tanpa jahitan (tepi kiri menyambung tepi kanan)',
+    `aspal ${asphaltSeam.seam.toFixed(1)} vs ${asphaltSeam.inner.toFixed(1)} · gravel ${gravelSeam.seam.toFixed(1)} vs ${gravelSeam.inner.toFixed(1)}`,
+  );
+
+  const again = makeAsphaltMaps(512);
+  let identical = true;
+  for (let i = 0; i < again.map.length; i++) {
+    if (again.map[i] !== asphaltMaps.map[i]) {
+      identical = false;
+      break;
+    }
+  }
+  check(identical, 'tekstur deterministik (dua kali bikin = piksel sama)');
+
+  const kerbMaps = makeKerbMaps(128);
+  const kerbTop = columnMean(kerbMaps.map, 128, 64);
+  const vergeMaps = makeVergeMaps(256);
+  const vergeAvg = averageColor(vergeMaps.map);
+  check(
+    kerbMaps.map.length === 128 * 128 * 4 && vergeAvg[1] > vergeAvg[0] && vergeAvg[1] > vergeAvg[2],
+    'kerban & bahu trek punya peta sendiri (bahu masih kehijauan)',
+    `kerban ${kerbTop.toFixed(0)} · bahu ${vergeAvg.map((v) => v.toFixed(0)).join('/')}`,
+  );
+
+  /* ---------------- percikan gravel ---------------- */
+  console.log('\n— percikan gravel —');
+  const spray = new GravelSpray(64);
+  spray.beginFrame(4);
+  const origin = new THREE.Vector3(0, 0.1, 0);
+  const backDir = new THREE.Vector3(0, 0, -1);
+  const style = { size: 0.2, color: 0xa8916c, life: 0.4, up: 3, spread: 0.5, back: 0.3 };
+  let spawned = 0;
+  for (let i = 0; i < 10; i++) if (spray.spawn(origin, backDir, 20, style)) spawned++;
+  check(spawned === 4, 'jatah per frame dihormati (tidak membanjiri kolam)', `${spawned} butir dari jatah 4`);
+  spray.update(1 / 60);
+  check(spray.alive > 0, 'butir gravel hidup setelah dilempar', `${spray.alive} butir`);
+  // Butir harus melengkung turun: lama-lama habis dan posisinya tidak naik terus.
+  for (let i = 0; i < 60; i++) spray.update(1 / 60);
+  check(spray.alive === 0, 'butir gravel jatuh lalu habis (tidak menggantung)', `sisa ${spray.alive}`);
+
+  const landed = new GravelSpray(8);
+  landed.beginFrame(8);
+  landed.spawn(origin, backDir, 20, { ...style, life: 5, up: 1 });
+  let minY = Infinity;
+  for (let i = 0; i < 120; i++) {
+    landed.update(1 / 60);
+    const y = (landed.points.geometry.getAttribute('position') as THREE.BufferAttribute).getY(0);
+    minY = Math.min(minY, y);
+  }
+  check(minY > -0.05, 'butir berhenti di permukaan, tidak menembus tanah', `terendah ${minY.toFixed(2)} m`);
 
   const aiWorld = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
   aiWorld.timestep = DT;
