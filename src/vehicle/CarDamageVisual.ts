@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { toon } from '../world/style';
+import { surface } from '../world/style';
 import type { VehicleConfig } from './VehiclePhysics';
 import type { VehicleDamage } from './Damage';
 
@@ -48,7 +48,7 @@ export class CarDamageVisual {
     // Penyok = cat yang sama, tapi jauh lebih gelap: di mobil merah kelihatan
     // merah tua, di mobil putih kelihatan abu tua. Bukan tempelan hitam.
     const dentColor = new THREE.Color(paint).multiplyScalar(0.42);
-    const material = toon({ color: dentColor.getHex() });
+    const material = surface({ color: dentColor.getHex() });
     const geometry = new THREE.SphereGeometry(0.24, 8, 6);
     for (const spec of DENTS(cfg)) {
       const mesh = new THREE.Mesh(geometry, material);

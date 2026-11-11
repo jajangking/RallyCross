@@ -1,13 +1,14 @@
 import * as THREE from 'three';
 
 /**
- * Gaya visual: kartun.
+ * Gaya visual: **PBR sinematik** (bukan kartun).
  *
- * Dua tujuan sekaligus: (1) seluruh arena terlihat seperti game arcade —
- * warna pekat, bayangan bertingkat (cel shading), langit gradasi, dan bayangan
- * "blob" di bawah mobil; (2) render jadi jauh lebih ringan, karena
- * `MeshToonMaterial` tidak menghitung PBR, tidak butuh environment map, dan
- * tidak menghitung normal map.
+ * Seluruh arena memakai `MeshStandardMaterial`/`MeshPhysicalMaterial`: ada
+ * environment map yang dipanggang dari langitnya sendiri, peta normal (jalan,
+ * gravel, bodi mobil), peta kekasaran, dan post-processing (AO kontak +
+ * bloom + tone mapping). Tidak ada lagi cel shading, gradasi bertingkat, atau
+ * `MeshStandardMaterial` di mana pun — itulah yang membuat tampilannya terbaca
+ * sebagai game balap, bukan mainan.
  *
  * Modul ini **tidak menyentuh DOM** sampai `createSky()`/`createBlobShadow()`
  * dipanggil, jadi `buildTrackColliders()` tetap bisa jalan di Node.
@@ -36,57 +37,7 @@ export const PALETTE = {
 /** Arah matahari (dipakai light rig, bayangan, dan sprite matahari). */
 export const SUN_DIRECTION = new THREE.Vector3(45, 66, 26).normalize();
 
-/**
- * Gaya permukaan: `toon` (kartun, paling ringan) atau `pbr` (fisik, untuk
- * "setengah-AC"): material PBR + environment map + post-processing.
- * Dipilih sekali saat boot lewat `?look=pbr|toon` atau `?quality=low`.
- */
-export type LookMode = 'toon' | 'pbr';
-
-let look: LookMode = 'toon';
-
-export function setLook(mode: LookMode) {
-  look = mode;
-}
-
-export function getLook(): LookMode {
-  return look;
-}
-
-/** Sedang memakai permukaan PBR? (dipakai untuk memutuskan environment map) */
-export function isPbrLook(): boolean {
-  return look === 'pbr';
-}
-
-let ramp: THREE.DataTexture | null = null;
-
-/**
- * Gradasi 4 langkah untuk cel shading. `NearestFilter` yang membuat batas
- * antar-langkah tajam — itulah yang membuat permukaan terlihat "digambar",
- * bukan di-blur.
- */
-export function toonRamp(): THREE.DataTexture {
-  if (ramp) return ramp;
-  // Lima langkah: cukup posterisasi untuk gaya kartun, tapi tidak "pita" kasar
-  // seperti 3–4 langkah.
-  const steps = [92, 140, 186, 224, 252];
-  const data = new Uint8Array(steps.length * 4);
-  for (let i = 0; i < steps.length; i++) {
-    data[i * 4 + 0] = steps[i];
-    data[i * 4 + 1] = steps[i];
-    data[i * 4 + 2] = steps[i];
-    data[i * 4 + 3] = 255;
-  }
-  const tex = new THREE.DataTexture(data, steps.length, 1, THREE.RGBAFormat);
-  tex.minFilter = THREE.NearestFilter;
-  tex.magFilter = THREE.NearestFilter;
-  tex.generateMipmaps = false;
-  tex.needsUpdate = true;
-  ramp = tex;
-  return tex;
-}
-
-export interface ToonOptions {
+export interface SurfaceOptions {
   color?: THREE.ColorRepresentation;
   map?: THREE.Texture | null;
   side?: THREE.Side;
@@ -105,47 +56,15 @@ export interface ToonOptions {
 }
 
 /**
- * Material permukaan. Di mode kartun hasilnya `MeshToonMaterial` (warna rata,
- * shader paling murah). Di mode PBR hasilnya `MeshStandardMaterial` dengan
- * peta/warna yang sama, plus environment map + bloom/SSAO dari post-processing.
+ * Material permukaan: **selalu PBR**. Aspal sedikit kasar, logam/pagar
+ * memantul, dan semua peta dari model GLB (normal, roughness, metalness, AO)
+ * tetap dipakai — inilah yang membuat bodi mobil terlihat "berbentuk" dan
+ * bukan sekadar bidang berwarna.
+ *
+ * (Dulu fungsi ini punya kembaran `MeshStandardMaterial` untuk gaya kartun; jalur
+ * itu sudah dihapus — satu gaya, satu jalur kode.)
  */
-export function toon(options: ToonOptions = {}): THREE.MeshToonMaterial {
-  if (look === 'pbr') return toStandard(options) as unknown as THREE.MeshToonMaterial;
-  const material = new THREE.MeshToonMaterial({
-    color: options.color ?? 0xffffff,
-    map: options.map ?? null,
-    gradientMap: toonRamp(),
-    side: options.side ?? THREE.FrontSide,
-    transparent: options.transparent ?? false,
-    opacity: options.opacity ?? 1,
-    alphaTest: options.alphaTest ?? 0,
-    depthWrite: options.depthWrite ?? true,
-    fog: options.fog ?? true,
-  });
-  // MeshToonMaterial punya normal map & AO map, jadi tonjolan aspal/kerikil
-  // tetap terlihat di mode kartun (tanpa biaya material PBR).
-  if (options.normalMap) {
-    material.normalMap = options.normalMap as THREE.Texture;
-    if (options.normalScale) material.normalScale = options.normalScale as THREE.Vector2;
-  }
-  if (options.aoMap) {
-    material.aoMap = options.aoMap as THREE.Texture;
-    material.aoMapIntensity = (options.aoMapIntensity as number) ?? 1;
-  }
-  if (options.emissive !== undefined) material.emissive = new THREE.Color(options.emissive);
-  if (options.emissiveIntensity !== undefined) material.emissiveIntensity = options.emissiveIntensity;
-  if (options.emissiveMap) material.emissiveMap = options.emissiveMap;
-  if (options.name) material.name = options.name;
-  return material;
-}
-
-/**
- * Material PBR dengan parameter yang masuk akal untuk gaya sinematik: aspal
- * sedikit kasar, logam/pagar memantul, dan semua peta dari model GLB (normal,
- * roughness, metalness, AO) tetap dipakai — inilah yang membuat bodi mobil
- * terlihat "berbentuk" dan bukan sekadar bidang berwarna.
- */
-export function toStandard(options: ToonOptions = {}): THREE.MeshStandardMaterial {
+export function surface(options: SurfaceOptions = {}): THREE.MeshStandardMaterial {
   const clearcoat = options.clearcoat as number | undefined;
   const base = {
     color: options.color ?? 0xffffff,
@@ -187,18 +106,17 @@ export function toStandard(options: ToonOptions = {}): THREE.MeshStandardMateria
 }
 
 /**
- * Ubah material apa pun (termasuk material bawaan model GLB) jadi gaya arena,
- * dengan warna/peta/emisi yang sama. Di mode toon hasilnya `MeshToonMaterial`
- * (shader murah); di mode PBR hasilnya material PBR yang **mempertahankan**
- * peta normal/roughness/metalness/AO bawaan model, jadi bodi mobil impor
- * terlihat seperti di game balap, bukan seperti plastik.
+ * Ubah material apa pun (termasuk material bawaan model GLB) jadi gaya arena:
+ * material PBR yang **mempertahankan** peta normal/roughness/metalness/AO
+ * bawaan model, jadi bodi mobil impor terlihat seperti di game balap, bukan
+ * seperti plastik.
  *
  * Cat bodi (`paint` diisi) dapat lapisan clearcoat tipis: pantulan tajam di
  * atas warna livery — detail kecil yang paling terasa "mahal".
  */
-export function toonFrom(source: THREE.Material, paint?: THREE.Color): THREE.MeshToonMaterial {
+export function surfaceFrom(source: THREE.Material, paint?: THREE.Color): THREE.MeshStandardMaterial {
   const src = source as THREE.MeshStandardMaterial;
-  const shared: ToonOptions = {
+  const shared: SurfaceOptions = {
     color: paint ?? src.color ?? 0xffffff,
     map: src.map ?? null,
     side: src.side,
@@ -211,8 +129,8 @@ export function toonFrom(source: THREE.Material, paint?: THREE.Color): THREE.Mes
     depthWrite: src.depthWrite,
     name: src.name,
   };
-  if (look === 'pbr') {
-    const standard = toStandard({
+  {
+    const standard = surface({
       ...shared,
       roughness: paint ? 0.34 : (src.roughness ?? 0.8),
       metalness: paint ? 0.22 : (src.metalness ?? 0.04),
@@ -224,14 +142,8 @@ export function toonFrom(source: THREE.Material, paint?: THREE.Color): THREE.Mes
       metalnessMap: src.metalnessMap ?? null,
       aoMap: src.aoMap ?? null,
     });
-    return standard as unknown as THREE.MeshToonMaterial;
+    return standard;
   }
-  const out = toon({
-    ...shared,
-    roughness: src.roughness,
-    metalness: src.metalness,
-  });
-  return out;
 }
 
 /**
@@ -306,13 +218,12 @@ export interface SunRig {
 }
 
 export function createSunRig(scene: THREE.Scene, lowQuality = false): SunRig {
-  // Mode PBR dapat langit sebagai environment map, jadi cahaya langsungnya
-  // diturunkan sedikit — kalau tidak, aspal dan bodi mobil jadi "gebyar".
-  const pbr = look === 'pbr';
-  const hemi = new THREE.HemisphereLight(0xdaf0ff, 0x6f7f4a, pbr ? 0.42 : 0.72);
+  // Langit dipakai sebagai environment map, jadi cahaya langsungnya diturunkan
+  // sedikit — kalau tidak, aspal dan bodi mobil jadi "gebyar".
+  const hemi = new THREE.HemisphereLight(0xdaf0ff, 0x6f7f4a, 0.42);
   scene.add(hemi);
 
-  const sun = new THREE.DirectionalLight(0xfff2d6, pbr ? 1.35 : 1.55);
+  const sun = new THREE.DirectionalLight(0xfff2d6, 1.35);
   const direction = SUN_DIRECTION;
   sun.position.copy(direction).multiplyScalar(120);
   scene.add(sun);
@@ -354,7 +265,7 @@ export function createSunRig(scene: THREE.Scene, lowQuality = false): SunRig {
   return { sun, hemi, shadows, follow };
 }
 
-/** Bayangan mobil versi kartun: lingkaran hitam lembut, bukan shadow map. */
+/** Bayangan mobil murah (blob) untuk perangkat lemah, bukan shadow map. */
 export function createBlobShadow(radius = 1.45, opacity = 0.34): THREE.Mesh {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 64;
@@ -413,7 +324,7 @@ export function createSunSprite(radius = 340): THREE.Sprite {
 }
 
 /**
- * Langit kartun: kubah dengan gradasi dua warna. Satu draw call, tanpa
+ * Langit: kubah dengan gradasi dua warna. Satu draw call, tanpa
  * pencahayaan, dan tidak terkena kabut (kalau terkena, horizon jadi abu-abu).
  */
 export function createSky(top: number, horizon: number, radius = 520): THREE.Mesh {

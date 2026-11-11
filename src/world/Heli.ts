@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { toon } from './style';
+import { surface } from './style';
 
 /**
  * Helikopter siaran: kamera udara yang terbang mengelilingi mobil yang sedang
@@ -13,7 +13,7 @@ import { toon } from './style';
  *
  * Rotor utama dan rotor ekor berputar; masing-masing punya cakram kabur
  * transparan supaya terbaca "berputar cepat" dari jauh — lebih murah daripada
- * motion blur, dan gaya kartunnya cocok.
+ * motion blur, dan materialnya PBR seperti sisa scene.
  *
  * Tidak menyentuh DOM, jadi bisa diuji di Node.
  */
@@ -105,11 +105,11 @@ export class Helicopter {
   private yaw = 0;
 
   constructor() {
-    const paint = toon({ color: PAINT });
-    const paintDark = toon({ color: PAINT_DARK });
-    const metal = toon({ color: METAL });
-    const trim = toon({ color: TRIM });
-    const glass = toon({
+    const paint = surface({ color: PAINT });
+    const paintDark = surface({ color: PAINT_DARK });
+    const metal = surface({ color: METAL });
+    const trim = surface({ color: TRIM });
+    const glass = surface({
       color: GLASS,
       emissive: 0x0d2b3a,
       emissiveIntensity: 0.45,
@@ -117,21 +117,21 @@ export class Helicopter {
       opacity: 0.7,
       depthWrite: false,
     });
-    const blur = toon({
+    const blur = surface({
       color: 0x1b2026,
       transparent: true,
       opacity: 0.12,
       depthWrite: false,
       side: THREE.DoubleSide,
     });
-    const rotorBlur = toon({
+    const rotorBlur = surface({
       color: 0x20262c,
       transparent: true,
       opacity: 0.12,
       depthWrite: false,
       side: THREE.DoubleSide,
     });
-    const beaconMat = toon({ color: 0x7a0f0a, emissive: 0xff2a15, emissiveIntensity: 2 });
+    const beaconMat = surface({ color: 0x7a0f0a, emissive: 0xff2a15, emissiveIntensity: 2 });
 
     /* ---------- badan (lathe) ---------- */
     const latheOf = (profile: Array<[number, number]>, grow = 0) =>
@@ -322,7 +322,7 @@ export class Helicopter {
     this.body.add(gimbal);
     const lens = new THREE.Mesh(
       new THREE.CylinderGeometry(0.13, 0.15, 0.2, 10),
-      toon({ color: 0x0d1218, emissive: 0x0a1a24, emissiveIntensity: 0.6 }),
+      surface({ color: 0x0d1218, emissive: 0x0a1a24, emissiveIntensity: 0.6 }),
     );
     lens.rotation.x = Math.PI / 2;
     lens.position.set(0, -0.66, 1.72);
@@ -419,7 +419,7 @@ export class Helicopter {
     // Lampu anti-tabrakan: kedip 1×/detik.
     const blink = Math.sin(this.spin * Math.PI * 2) > 0.55 ? 2.4 : 0.05;
     for (const beacon of this.beacons) {
-      (beacon.material as THREE.MeshToonMaterial).emissiveIntensity = blink;
+      (beacon.material as THREE.MeshStandardMaterial).emissiveIntensity = blink;
     }
 
     this.lensPosition();

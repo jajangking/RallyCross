@@ -118,8 +118,11 @@ export interface AutoPilotOptions {
  * hampir terbalik lagi (up 0,90 vs −0,05).
  */
 export const defaultPilotOptions: AutoPilotOptions = {
-  gripTarmac: 9.0,
-  gripGravel: 5.6,
+  // Perencana kecepatan sengaja memakai cengkeraman **di bawah** batas ban
+  // (tarmac nyata ~10 m/s², gravel ~6). Tanpa cadangan itu AI masuk tikungan
+  // tepat di ambang dan melintir begitu permukaannya berganti di tengah tikungan.
+  gripTarmac: 8.0,
+  gripGravel: 4.8,
   brakeTarmac: 8.4,
   brakeGravel: 5.4,
   horizon: 110,

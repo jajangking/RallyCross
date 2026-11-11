@@ -174,13 +174,13 @@ const writePng = (path: string, w: number, h: number, rgb: Uint8Array) => {
 const W = 640;
 const H = 400;
 const LIGHT = new THREE.Vector3(0.45, 0.82, 0.36).normalize();
-/** Empat langkah cel shading, seperti `toonRamp()`. */
-const BANDS = [0.62, 0.82, 1.0, 1.18];
+/** Pencahayaan halus (bukan lagi bertingkat): 0,55 di bayangan → 1,15 di terang. */
+const shadeFor = (dot: number) => 0.55 + Math.max(0, dot) * 0.6 + 0.08;
 
 const mapColor = new WeakMap<THREE.Texture, Rgba>();
 
 const materialColor = (material: THREE.Material): { color: Rgba; alpha: number } => {
-  const m = material as THREE.MeshToonMaterial;
+  const m = material as THREE.MeshStandardMaterial;
   const base: Rgba = m.color
     ? [m.color.r * 255, m.color.g * 255, m.color.b * 255, 1]
     : [200, 200, 200, 1];
@@ -333,7 +333,7 @@ const render = (root: THREE.Object3D, cam: Cam, sky: [number, number, number], p
         eye.subVectors(cam.eye, a);
         // Dua sisi: normal selalu dibalik menghadap kamera (z-buffer yang urus).
         if (normal.dot(eye) < 0) normal.negate();
-        const band = BANDS[Math.min(3, Math.floor(Math.max(0, normal.dot(LIGHT)) * 4))];
+        const band = shadeFor(normal.dot(LIGHT));
         const col: Rgba = [
           Math.min(255, base[0] * band),
           Math.min(255, base[1] * band),

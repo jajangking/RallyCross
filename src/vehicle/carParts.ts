@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { toon } from '../world/style';
+import { surface } from '../world/style';
 
 export const UP_AXIS = new THREE.Vector3(0, 1, 0);
 const tmpDir = new THREE.Vector3();
@@ -54,44 +54,44 @@ export function helixGeometry(
   return new THREE.TubeGeometry(curve, steps, wire, detail ? 6 : 4, false);
 }
 
-/** Semua material bodi bergaya toon (kartun) — lihat `src/world/style.ts`. */
+/** Semua material bodi lewat jalur PBR — lihat `src/world/style.ts`. */
 export interface CarMaterials {
-  paint: THREE.MeshToonMaterial;
-  paintDark: THREE.MeshToonMaterial;
-  trim: THREE.MeshToonMaterial;
-  carbon: THREE.MeshToonMaterial;
-  glass: THREE.MeshToonMaterial;
-  rubber: THREE.MeshToonMaterial;
-  rim: THREE.MeshToonMaterial;
-  disc: THREE.MeshToonMaterial;
-  caliper: THREE.MeshToonMaterial;
-  interior: THREE.MeshToonMaterial;
-  cage: THREE.MeshToonMaterial;
-  spring: THREE.MeshToonMaterial;
-  plate: THREE.MeshToonMaterial;
+  paint: THREE.MeshStandardMaterial;
+  paintDark: THREE.MeshStandardMaterial;
+  trim: THREE.MeshStandardMaterial;
+  carbon: THREE.MeshStandardMaterial;
+  glass: THREE.MeshStandardMaterial;
+  rubber: THREE.MeshStandardMaterial;
+  rim: THREE.MeshStandardMaterial;
+  disc: THREE.MeshStandardMaterial;
+  caliper: THREE.MeshStandardMaterial;
+  interior: THREE.MeshStandardMaterial;
+  cage: THREE.MeshStandardMaterial;
+  spring: THREE.MeshStandardMaterial;
+  plate: THREE.MeshStandardMaterial;
 }
 
 export function createCarMaterials(detail: boolean, paint = 0xd8402f): CarMaterials {
   return {
-    paint: toon({ color: paint }),
-    paintDark: toon({ color: 0x1a1e24 }),
-    trim: toon({ color: 0xe8eef6 }),
-    carbon: toon({ color: 0x101317 }),
-    glass: toon({
+    paint: surface({ color: paint }),
+    paintDark: surface({ color: 0x1a1e24 }),
+    trim: surface({ color: 0xe8eef6 }),
+    carbon: surface({ color: 0x101317 }),
+    glass: surface({
       color: 0x2a4a63,
       transparent: true,
       opacity: 0.62,
       side: THREE.DoubleSide,
       depthWrite: false,
     }),
-    rubber: toon({ color: 0x0c0e10 }),
-    rim: toon({ color: 0xc2c9d1 }),
-    disc: toon({ color: 0x6d737b, emissive: 0xff3b12, emissiveIntensity: 0 }),
-    caliper: toon({ color: 0xe0a12a }),
-    interior: toon({ color: 0x15181c }),
-    cage: toon({ color: detail ? 0xd7dce3 : 0x9aa2ac }),
-    spring: toon({ color: 0xe3b325 }),
-    plate: toon({ color: 0xf2f4f7 }),
+    rubber: surface({ color: 0x0c0e10 }),
+    rim: surface({ color: 0xc2c9d1 }),
+    disc: surface({ color: 0x6d737b, emissive: 0xff3b12, emissiveIntensity: 0 }),
+    caliper: surface({ color: 0xe0a12a }),
+    interior: surface({ color: 0x15181c }),
+    cage: surface({ color: detail ? 0xd7dce3 : 0x9aa2ac }),
+    spring: surface({ color: 0xe3b325 }),
+    plate: surface({ color: 0xf2f4f7 }),
   };
 }
 

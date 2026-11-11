@@ -31,11 +31,7 @@ import {
   createSky,
   createSunRig,
   createSunSprite,
-  getLook,
-  isPbrLook,
   PALETTE,
-  setLook,
-  type LookMode,
 } from './world/style';
 import { Helicopter } from './world/Heli';
 
@@ -76,13 +72,10 @@ async function boot() {
   const lowQuality = qualityParam === 'low' || (qualityParam === null && weakDevice);
   document.body.classList.toggle('is-low', lowQuality);
 
-  // Gaya permukaan: `?look=toon` mengembalikan tampilan kartun, `?look=pbr`
-  // memaksa PBR walau di HP. Default: PBR di desktop, toon di HP lemah.
-  const lookParam = new URLSearchParams(location.search).get('look');
-  const look: LookMode = lookParam === 'toon' ? 'toon' : lookParam === 'pbr' ? 'pbr' : lowQuality ? 'toon' : 'pbr';
-  setLook(look);
-  const pbr = isPbrLook();
-  document.body.classList.toggle('is-pbr', pbr);
+  // Satu gaya permukaan saja: PBR. `?look=toon` sudah tidak ada — mode kartun
+  // dihapus sepenuhnya (lihat `src/world/style.ts`).
+  const pbr = true;
+  document.body.classList.add('is-pbr');
 
   /* ---------------- renderer ---------------- */
   let renderer: THREE.WebGLRenderer;
@@ -651,9 +644,6 @@ async function boot() {
   /* Grafis: saklar hidup untuk efek yang paling mahal, plus tombol pindah
    * gaya permukaan (butuh reload karena semua material dibangun ulang). */
   const gfx = {
-    get gaya() {
-      return getLook() === 'pbr' ? 'PBR (setengah-AC)' : 'kartun (ringan)';
-    },
     get piksel() {
       return pixelRatio;
     },
@@ -681,20 +671,6 @@ async function boot() {
     },
   };
   const fGfx = gui.addFolder('Grafis');
-  fGfx.add(gfx, 'gaya').name('gaya permukaan').disable();
-  fGfx
-    .add(
-      {
-        ganti: () => {
-          const next = getLook() === 'pbr' ? 'toon' : 'pbr';
-          const url = new URL(window.location.href);
-          url.searchParams.set('look', next);
-          window.location.href = url.toString();
-        },
-      },
-      'ganti',
-    )
-    .name('pindah PBR ⇄ kartun');
   fGfx.add(gfx, 'piksel', 0.75, 2, 0.05).name('rasio piksel');
   if (post) {
     fGfx.add(gfx, 'postFx').name('post-processing');
@@ -1122,7 +1098,6 @@ async function boot() {
     raceControl,
     safetyCar,
     ambulance,
-    look: getLook(),
     post,
     skidMarks,
     smoke,

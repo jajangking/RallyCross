@@ -9,7 +9,10 @@ const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(mi
 export type CameraMode = 'chase' | 'hood' | 'tv';
 
 /** Jeda gambar darat sebelum siaran "naik" ke helikopter (detik). */
-const AERIAL_EVERY: [number, number] = [8, 15];
+// Jeda antar-selipan udara (detik). Trek baru ~780 m dan satu putaran cuma
+// ~32 s, jadi jeda 8–15 s membuat helikopter jarang muncul; 6–11 s memberi
+// ±3 selipan per putaran seperti siaran sungguhan.
+const AERIAL_EVERY: [number, number] = [6, 11];
 /** Berapa lama gambar udara bertahan (detik). */
 const AERIAL_HOLD: [number, number] = [4.5, 7];
 /** Kamera darat harus sudah tampil selama ini sebelum boleh ditinggalkan. */
@@ -212,7 +215,7 @@ export class CameraRig {
 
     // Lensa tele saat mobilnya jauh, sudut lebar saat lewat dekat kamera.
     const distance = this.pos.distanceTo(focus);
-    const targetFov = clamp(30 + (45 - distance) * 0.55, 16, 62);
+    const targetFov = clamp(30 + (45 - distance) * 0.55, 30, 62);
     const k = cut ? 1 : 1 - Math.exp(-4 * dt);
     this.tvFov += (targetFov - this.tvFov) * k;
     this.camera.fov = this.tvFov;

@@ -380,69 +380,110 @@ export function slicePath(
  * bottom), so the infield is always on the `side` (+1) hand.
  */
 export const MAIN_NODES: PathNode[] = [
-  { x: 0, z: -38, width: 16, surface: 'tarmac' }, // out of the final corner
-  { x: 0, z: 0, width: 16 }, // START / FINISH
-  { x: 0, z: 30, width: 15 },
-  { x: 2, z: 54, width: 15 }, // brake marker into T1
-  { x: 14, z: 72, width: 14.5 }, // T1: medium right onto the gravel straight
-  { x: 34, z: 82, width: 14 },
-  { x: 56, z: 84, width: 13.5, surface: 'gravel' }, // gravel-out begins
-  { x: 76, z: 84, y: 0.55, width: 13.5 }, // gravel bump
-  { x: 92, z: 80, y: 0.15, width: 13.5 },
-  { x: 110, z: 70, width: 13 }, // T2: fast right, the joker cuts inside it
-  { x: 122, z: 56, width: 13 },
-  { x: 130, z: 38, width: 13 },
-  { x: 132, z: 20, width: 13, surface: 'tarmac' }, // back onto tarmac
-  { x: 132, z: 14, width: 13 },
-  { x: 132, z: 10, y: 0.25, width: 13 }, // JUMP 1: take-off ramp
-  { x: 132, z: 7.5, y: 0.9, width: 13 }, // steep face
-  { x: 132, z: 6, y: 1.35, width: 13 }, // lip
-  { x: 132, z: 3, y: 0.85, width: 13 }, // landing face
-  { x: 132, z: -3, y: 0.15, width: 13 },
-  { x: 132, z: -10, width: 13 },
-  { x: 131, z: -20, width: 13 },
-  { x: 126, z: -36, width: 13 }, // T3
-  { x: 112, z: -50, width: 13.5 },
-  { x: 94, z: -60, width: 14, surface: 'gravel' }, // gravel-in begins
-  { x: 86, z: -61, width: 14 },
-  { x: 80, z: -62, y: 0.25, width: 14 }, // JUMP 2: take-off ramp
-  { x: 77, z: -62, y: 0.9, width: 14 }, // steep face
-  { x: 75, z: -62, y: 1.3, width: 14 }, // lip
-  { x: 72, z: -62, y: 0.8, width: 14 }, // landing face
-  { x: 67, z: -61, y: 0.1, width: 14 },
-  { x: 60, z: -60, width: 14 },
-  { x: 50, z: -60, width: 14 },
-  { x: 32, z: -55, width: 14, surface: 'tarmac' }, // onto tarmac for the run home
-  { x: 16, z: -59, width: 14.5 }, // last flick
-  { x: 4, z: -50, width: 15 }, // final corner onto the main straight
+  /* ---- straight utama 150 m, terlebar di sirkuit (17,5-18 m) ---- */
+  { x: 0, z: -100, width: 17.5 },
+  { x: 0, z: -80, width: 17.5 },
+  { x: 0, z: -50, width: 18 },
+  { x: 0, z: -20, width: 18 },
+  { x: 0, z: 0, width: 18 },
+  { x: 0, z: 20, width: 17.5 },
+  { x: 0, z: 40, width: 17.5 },
+  { x: 2.3, z: 54.2, width: 16 },
+  { x: 8.8, z: 67.0, width: 16 },
+  { x: 19.0, z: 77.2, width: 16 },
+  { x: 31.8, z: 83.7, width: 16 },
+  { x: 46.0, z: 86.0, width: 15.5, surface: 'gravel' },
+  { x: 62, z: 88, width: 15.5 },
+  { x: 76, z: 88, width: 15.5, y: 0.3 },
+  { x: 90, z: 88, width: 15.5, y: 0.5 },
+  { x: 104, z: 88, width: 15.5, y: 0.15 },
+  { x: 122, z: 87, width: 15.5 },
+  { x: 138, z: 86, width: 15.5, surface: 'tarmac' },
+  { x: 159.6, z: 82.6, width: 16.5 },
+  { x: 179.1, z: 72.6, width: 16.5 },
+  { x: 194.6, z: 57.1, width: 16.5 },
+  { x: 204.6, z: 37.6, width: 16.5 },
+  { x: 208.0, z: 16.0, width: 16.5 },
+  { x: 208, z: 0, width: 16.5 },
+  { x: 208, z: -30, width: 17 },
+  { x: 208, z: -55, width: 17 },
+  { x: 208, z: -80, width: 17 },
+  { x: 205.1, z: -98.5, width: 17 },
+  { x: 196.5, z: -115.3, width: 17 },
+  { x: 183.3, z: -128.5, width: 17 },
+  { x: 166.5, z: -137.1, width: 17 },
+  { x: 148.0, z: -140.0, width: 17 },
+  { x: 136, z: -140, width: 17 },
+  { x: 122, z: -140, width: 17 },
+  { x: 112, z: -140, width: 17, y: 0.2 },
+  { x: 108, z: -140, width: 17, y: 0.75 },
+  { x: 105, z: -140, width: 17, y: 1.15 },
+  { x: 102, z: -140, width: 17, y: 0.7 },
+  { x: 95, z: -140, width: 16.5, y: 0.1 },
+  { x: 80, z: -140, width: 16.5 },
+  { x: 60, z: -140, width: 16 },
+  { x: 44, z: -140, width: 15.5 },
+  { x: 36, z: -140, width: 15 },
+  { x: 30.0, z: -140.0, width: 15 },
+  { x: 20.7, z: -138.5, width: 15 },
+  { x: 12.4, z: -134.3, width: 15 },
+  { x: 5.7, z: -127.6, width: 15.5 },
+  { x: 1.5, z: -119.3, width: 16 },
+  { x: 0.0, z: -110.0, width: 16 },
 ];
 
 /**
- * Joker lap: leaves the gravel straight just before the yump, runs flat inside
- * the top-right complex and rejoins on the tarmac before T3. It is the same
- * length as the racing line it replaces, so choosing it is a tactical call
- * (clean air vs. the jump) rather than a shortcut.
+ * Joker lap: tali busur di dalam T2 — lebih pendek dari garis balap, tapi
+ * sempit, gravel, dan radiusnya jauh lebih kecil (jadi lebih lambat).
+ * Keputusannya jadi taktis: jalan pintas lawan lompatan/trafik, dibayar dengan
+ * kecepatan keluar tikungan.
  */
-export const JOKER_NODES: PathNode[] = [
-  { x: 56, z: 84, width: 9, surface: 'gravel' }, // splits off the racing line
-  // The first nodes only ease away from the main line: a hard 40° kink at
-  // the split sends the car off the outside of the joker at speed.
-  { x: 66, z: 82, width: 9 },
-  { x: 74, z: 76, width: 9 },
-  { x: 82, z: 70, width: 9 },
-  { x: 90, z: 65, width: 9 },
-  { x: 99, z: 60, width: 9 },
-  { x: 108, z: 53, width: 9 },
-  { x: 117, z: 43, width: 10 },
-  { x: 124, z: 37, width: 10 },
-  { x: 129, z: 32, width: 10 },
-  // The tail sits on the main straight so the merge is tangential instead of
-  // a 45° kink that throws the car into the catch fence.
-  { x: 132, z: 24, width: 10, surface: 'tarmac' },
-  { x: 132, z: 16, width: 10 },
-];
-export const JOKER_START = new THREE.Vector3(56, 0, 84);
-export const JOKER_END = new THREE.Vector3(132, 0, 20);
+/**
+ * Joker di dalam T2 — seluruhnya hasil hitungan, bukan gambar tangan.
+ *
+ * Bentuknya **offset dari busur T2 itu sendiri**: jalur utama adalah busur
+ * r = 70 m dengan pusat (138, 16); joker memakai pusat yang sama dengan radius
+ * yang menyusut sampai 18 m ke dalam (r = 52 m) di bagian tengah, lalu kembali
+ * mulus ke r = 70 m di kedua ujung. Karena selisihnya nol di titik belah dan
+ * titik gabung (dan kemiringannya juga nol), kedua ujungnya menyambung
+ * **tangensial** — tidak ada patahan arah, dan pembalap AI tidak perlu
+ * menebak-nebak sudut masuk.
+ *
+ * Hasilnya jalur yang 7 m lebih pendek dari garis balap, dengan ruang 4 m ke
+ * tepi aspal utama di bagian tengah — cukup untuk memasang dinding pemisah,
+ * jadi mobil joker dan mobil garis balap benar-benar terpisah.
+ */
+export const JOKER_NODES: PathNode[] = (() => {
+  const centre = { x: 138, z: 16 };
+  const radius = 70; // radius busur T2
+  const inset = 18; // berapa meter joker masuk ke dalam
+  const taper = (30 * Math.PI) / 180; // panjang pelebaran di kedua ujung
+  const th0 = Math.PI / 2; // titik belah (138, 86)
+  const th1 = 0; // titik gabung (208, 16)
+  const steps = 72;
+  const nodes: PathNode[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const f = i / steps;
+    const th = th0 + (th1 - th0) * f;
+    let w: number | null = null;
+    if (th > th0 - taper) w = (th0 - th) / taper;
+    else if (th < th1 + taper) w = (th - th1) / taper;
+    // smoothstep: selisih dan kemiringannya nol di ujung-ujungnya
+    const d = w === null ? inset : inset * (3 * w * w - 2 * w * w * w);
+    const r = radius - d;
+    nodes.push({
+      // Tanpa pembulatan: node di sini hanya ~1,4 m berdekatan, jadi selisih
+      // 5 cm pun sudah cukup membuat arah tangen sampel bergetar ±4°.
+      x: centre.x + r * Math.cos(th),
+      z: centre.z + r * Math.sin(th),
+      width: f < 0.2 ? 9.5 : 10,
+      surface: f < 0.25 ? 'gravel' : 'tarmac',
+    });
+  }
+  return nodes;
+})();
+export const JOKER_START = new THREE.Vector3(138, 0, 86);
+export const JOKER_END = new THREE.Vector3(208, 0, 16);
 
 /** Start/finish line: centre of the main straight, cars heading +Z. */
 export const START = new THREE.Vector3(0, 0, 0);

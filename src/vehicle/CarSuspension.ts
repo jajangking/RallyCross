@@ -40,7 +40,7 @@ export class WheelSuspension {
   private readonly spring: THREE.Mesh;
   private readonly damperBody: THREE.Mesh;
   private readonly damperShaft: THREE.Mesh;
-  private readonly discMat: THREE.MeshToonMaterial;
+  private readonly discMat: THREE.MeshStandardMaterial;
 
   private readonly lowerIn = new THREE.Vector3();
   private readonly lowerOut = new THREE.Vector3();

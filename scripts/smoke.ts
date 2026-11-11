@@ -30,7 +30,7 @@ import {
   makeKerbMaps,
   makeVergeMaps,
 } from '../src/world/surface-maps';
-import { getLook, isPbrLook, setLook, toon, toonFrom, toonRamp, PALETTE } from '../src/world/style';
+import { surface, surfaceFrom, PALETTE } from '../src/world/style';
 import { Helicopter } from '../src/world/Heli';
 import { createSunRig } from '../src/world/style';
 import { CameraRig } from '../src/camera';
@@ -957,70 +957,58 @@ async function run() {
   check(fxSmoke.alive > 0, 'a sliding car raises smoke', `${fxSmoke.alive} puffs`);
 
   /* ---------------------------------------------------------------- */
-  console.log('\n— gaya kartun (material) —');
-  const ramp = toonRamp();
+  console.log('\n— material PBR (tanpa jalur kartun) —');
+  const mat = surface({ color: PALETTE.grass, map: null, roughness: 1, metalness: 0.4 });
   check(
-    ramp.image.width === 5 && ramp.image.height === 1,
-    'cel-shading ramp has five hard steps',
-    `${ramp.image.width}x${ramp.image.height} px, nearest filter`,
-  );
-  check(ramp.minFilter === THREE.NearestFilter, 'the ramp does not blur', 'NearestFilter');
-  const toonMat = toon({ color: PALETTE.grass, map: null, roughness: 1, metalness: 0.4 });
-  check(
-    toonMat.isMeshToonMaterial && toonMat.gradientMap === ramp,
-    'toon() builds a toon material that shares one ramp',
-    `colour #${toonMat.color.getHexString()}`,
+    mat.isMeshStandardMaterial && mat.roughness === 1 && mat.metalness === 0.4,
+    'surface() selalu menghasilkan material fisik (roughness/metalness dipakai)',
+    `rough ${mat.roughness} · metal ${mat.metalness}`,
   );
   check(
-    !('metalness' in toonMat) && !('roughness' in toonMat),
-    'legacy PBR keys are ignored, not copied',
-    'no metalness/roughness',
+    !(mat as unknown as { gradientMap?: unknown }).gradientMap,
+    'tidak ada gradient map cel shading lagi',
+    'tanpa gradientMap',
   );
   const standard = new THREE.MeshStandardMaterial({ color: 0x3366cc, transparent: true, opacity: 0.5 });
-  const converted = toonFrom(standard);
+  const converted = surfaceFrom(standard);
   check(
-    converted.isMeshToonMaterial &&
+    converted.isMeshStandardMaterial &&
       converted.color.getHex() === 0x3366cc &&
       converted.transparent &&
       Math.abs(converted.opacity - 0.5) < 1e-6,
-    'imported model materials convert to toon without losing colour/alpha',
+    'material model impor tetap PBR tanpa kehilangan warna/alpha',
     `#${converted.color.getHexString()} · opacity ${converted.opacity}`,
-  );
-
-  /* ---------------------------------------------------------------- */
-  console.log('\n— mode PBR (setengah-AC) —');
-  setLook('pbr');
-  check(getLook() === 'pbr' && isPbrLook(), 'gaya permukaan bisa dipindah ke PBR', 'look = pbr');
-  const pbrMat = toon({ color: 0x3366cc, roughness: 0.5, metalness: 0.3 }) as unknown as THREE.MeshStandardMaterial;
-  check(
-    pbrMat.isMeshStandardMaterial && pbrMat.roughness === 0.5 && pbrMat.metalness === 0.3,
-    'di mode PBR, toon() menghasilkan material fisik dengan roughness/metalness asli',
-    `rough ${pbrMat.roughness} · metal ${pbrMat.metalness}`,
   );
   const nm = new THREE.Texture();
   const rm = new THREE.Texture();
-  const pbrFrom = toonFrom(
+  const paintMat = surfaceFrom(
     new THREE.MeshStandardMaterial({ color: 0xffffff, normalMap: nm, roughnessMap: rm, metalnessMap: rm }),
     new THREE.Color(0xd8402f),
-  ) as unknown as THREE.MeshStandardMaterial;
+  ) as THREE.MeshPhysicalMaterial;
   check(
-    pbrFrom.isMeshStandardMaterial && pbrFrom.normalMap === nm && pbrFrom.roughnessMap === rm,
-    'peta normal & roughness model impor tetap dipakai di mode PBR',
-    'normalMap + roughnessMap dipertahankan',
+    paintMat.normalMap === nm && paintMat.roughnessMap === rm && paintMat.metalnessMap === rm,
+    'peta normal & roughness model impor tetap dipakai',
+    'normalMap + roughnessMap + metalnessMap dipertahankan',
   );
   check(
-    (pbrFrom as unknown as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial &&
-      (pbrFrom as unknown as THREE.MeshPhysicalMaterial).clearcoat > 0.3,
+    paintMat.isMeshPhysicalMaterial && paintMat.clearcoat > 0.3,
     'cat bodi dapat lapisan clearcoat tipis',
-    `clearcoat ${(pbrFrom as unknown as THREE.MeshPhysicalMaterial).clearcoat}`,
+    `clearcoat ${paintMat.clearcoat}`,
   );
   check(
-    pbrFrom.color.getHex() === 0xd8402f && pbrFrom.envMapIntensity > 1,
+    paintMat.color.getHex() === 0xd8402f && paintMat.envMapIntensity > 1,
     'warna livery tetap dan pantulan langit lebih kuat di bodi',
-    `#${pbrFrom.color.getHexString()} · env ${pbrFrom.envMapIntensity}`,
+    `#${paintMat.color.getHexString()} · env ${paintMat.envMapIntensity}`,
   );
-  setLook('toon');
-  check(getLook() === 'toon', 'gaya bisa dikembalikan ke kartun', 'look = toon');
+  // Tidak boleh ada satu pun material kartun yang tertinggal di jalur mana pun.
+  const normalScale = new THREE.Vector2(1, 1);
+  check(
+    surface({ normalMap: nm, normalScale }).isMeshStandardMaterial &&
+      !(surface({ normalMap: nm, normalScale }) as unknown as { isMeshToonMaterial?: boolean })
+        .isMeshToonMaterial,
+    'permukaan ber-normal map tetap material fisik',
+    'MeshToonMaterial sudah dihapus dari kode',
+  );
 
   /* Mobil terbalik: tidak di-reset, AI hanya melepas pedal. */
   const flippedPilot = new AutoPilot(TRACK.main, TRACK.joker);
@@ -1450,6 +1438,8 @@ async function run() {
       if (liveRig.broadcastName === 'HELI') ladder++;
     }
   }
+  // Selipan yang masih berjalan di akhir jendela tetap dihitung sebagai satu
+  // selipan — dulu tidak, jadi hasilnya bergantung pada potongan 90 detik.
   if (run > 0) aerialSegments++;
   check(aerialSegments >= 5, 'the director cuts to the helicopter regularly', `${aerialSegments} aerial shots in 90 s`);
   check(

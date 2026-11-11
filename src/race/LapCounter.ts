@@ -1,4 +1,4 @@
-import type * as THREE from 'three';
+import * as THREE from 'three';
 import type { PathSample } from '../world/circuit';
 
 /**
@@ -18,6 +18,8 @@ export class LapCounter {
   private readonly length: number;
   private index = 0;
   private prevDistance: number;
+  /** Posisi frame sebelumnya: dipakai saat mobil melewati sambungan lingkaran. */
+  private readonly prevPos = new THREE.Vector3();
 
   /** `at` = posisi awal mobil (default: garis start) supaya sample awalnya pas. */
   constructor(
@@ -25,10 +27,15 @@ export class LapCounter {
     private readonly startDistance: number,
     at?: THREE.Vector3,
   ) {
-    this.length = path[path.length - 1].distance;
+    // Panjang putaran = jarak antar-sample + celah penutup dari sample terakhir
+    // kembali ke sample pertama; kalau celah itu tidak dihitung, odometer
+    // kehilangan beberapa sentimeter tiap putaran.
+    const last = path[path.length - 1];
+    this.length = last.distance + last.pos.distanceTo(path[0].pos);
     this.index = this.nearest(path, at ?? this.startPoint(), 0);
     this.odometer = path[this.index].distance - startDistance;
     this.prevDistance = path[this.index].distance;
+    this.prevPos.copy(path[this.index].pos);
   }
 
   /** Meter dari garis start/finish pada putaran yang sedang berjalan (0..length). */
@@ -42,6 +49,7 @@ export class LapCounter {
     this.index = this.nearest(this.path, at ?? this.startPoint(), 0);
     this.odometer = this.path[this.index].distance - this.startDistance;
     this.prevDistance = this.path[this.index].distance;
+    this.prevPos.copy(this.path[this.index].pos);
   }
 
   /**
@@ -56,16 +64,28 @@ export class LapCounter {
 
   /** Panggil sekali per frame setelah posisi mobil diperbarui. */
   update(pos: THREE.Vector3) {
+    const n = this.path.length;
+    const prevIndex = this.index;
     const index = this.nearest(this.path, pos, this.index);
     this.index = index;
     const distance = this.path[index].distance;
 
     let delta = distance - this.prevDistance;
-    if (delta > this.length / 2) delta -= this.length;
+    // Lewat sambungan lingkaran: jarak antar-sample melompat satu putaran
+    // penuh. Dulu kasus ini dibulatkan jadi 0, jadi tiap putaran kehilangan
+    // satu langkah sampel dan penghitung lap bisa ketinggalan satu lap.
+    const forwardWrap = prevIndex > n * 0.75 && index < n * 0.25;
+    const backwardWrap = prevIndex < n * 0.25 && index > n * 0.75;
+    if (forwardWrap) delta = this.length - this.prevDistance + distance;
+    else if (backwardWrap) delta = -(this.length + this.prevDistance - distance);
+    else if (delta > this.length / 2) delta -= this.length;
     else if (delta < -this.length / 2) delta += this.length;
     this.prevDistance = distance;
+    this.prevPos.copy(pos);
     this.odometer += delta;
-    this.lap = Math.max(0, Math.floor(this.odometer / this.length));
+    // `+ 1e-6`: odometer bisa mendarat persis di batas putaran, dan sisa
+    // pembulatan float bisa membuat satu putaran tidak terhitung.
+    this.lap = Math.max(0, Math.floor((this.odometer + 1e-6) / this.length));
   }
 
   private startPoint(): THREE.Vector3 {

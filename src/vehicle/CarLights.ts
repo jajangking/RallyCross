@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { toon } from '../world/style';
+import { surface } from '../world/style';
 import type { VehicleConfig } from './VehiclePhysics';
 import { roundedBox } from './carParts';
 
@@ -105,11 +105,11 @@ export class CarLights {
   readonly group = new THREE.Group();
   readonly lamp = new LampController();
 
-  private readonly headMat: THREE.MeshToonMaterial;
-  private readonly tailMat: THREE.MeshToonMaterial;
-  private readonly reverseMat: THREE.MeshToonMaterial;
-  private readonly amberLeftMat: THREE.MeshToonMaterial;
-  private readonly amberRightMat: THREE.MeshToonMaterial;
+  private readonly headMat: THREE.MeshStandardMaterial;
+  private readonly tailMat: THREE.MeshStandardMaterial;
+  private readonly reverseMat: THREE.MeshStandardMaterial;
+  private readonly amberLeftMat: THREE.MeshStandardMaterial;
+  private readonly amberRightMat: THREE.MeshStandardMaterial;
 
 
   constructor(parent: THREE.Object3D, cfg: VehicleConfig, _detail: boolean) {
@@ -119,7 +119,7 @@ export class CarLights {
       emissive: number,
       intensity: number,
     ) =>
-      toon({ color, emissive, emissiveIntensity: intensity });
+      surface({ color, emissive, emissiveIntensity: intensity });
 
     this.headMat = lampMat(0xdfe4ea, 0xfff4d6, 0.2);
     this.tailMat = lampMat(0x330603, 0xff1508, 0.6);
@@ -154,7 +154,7 @@ export class CarLights {
 
     // Dulu ada dua SpotLight per mobil untuk sorot lampu utama. Dengan enam
     // mobil itu berarti 12 lampu: setiap fragment semua material menghitung
-    // ke-12-nya. Lampu emissive di atas sudah cukup untuk gaya kartun, dan
+    // ke-12-nya. Lampu emissive di atas sudah cukup, dan
     // seluruh scene jadi jauh lebih ringan.
 
     parent.add(this.group);

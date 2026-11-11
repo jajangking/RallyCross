@@ -3,7 +3,7 @@ import type RAPIER from '@dimforge/rapier3d-compat';
 import { AutoPilot, type TrafficCar } from '../ai/AutoPilot';
 import { CarVisual } from '../vehicle/CarVisual';
 import { defaultConfig, VehiclePhysics, type VehicleInput } from '../vehicle/VehiclePhysics';
-import { toon } from '../world/style';
+import { surface } from '../world/style';
 import type { PathSample } from '../world/circuit';
 import type { CarLightState } from '../vehicle/CarLights';
 
@@ -62,7 +62,7 @@ export class ServiceVehicle {
   private chaseRadius = 7;
   /** Sudah berhenti dekat sasaran selama ini (detik) → dianggap sampai. */
   private chaseWait = 0;
-  private readonly barMat: THREE.MeshToonMaterial;
+  private readonly barMat: THREE.MeshStandardMaterial;
   private readonly lights: CarLightState = {
     brake: 0,
     reverse: false,
@@ -93,16 +93,16 @@ export class ServiceVehicle {
       : null;
 
     // Lampu atap: dua balok (merah / biru) yang bergantian menyala.
-    this.barMat = toon({ color: 0xff2d2d });
+    this.barMat = surface({ color: 0xff2d2d });
     if (this.visual) {
       const bar = new THREE.Group();
-      const base = new THREE.Mesh(new THREE.BoxGeometry(1.24, 0.09, 0.26), toon({ color: 0x20242a }));
+      const base = new THREE.Mesh(new THREE.BoxGeometry(1.24, 0.09, 0.26), surface({ color: 0x20242a }));
       base.position.y = 0.75;
       bar.add(base);
       const red = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.13, 0.24), this.barMat);
       red.position.set(-0.3, 0.85, 0);
       bar.add(red);
-      const blue = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.13, 0.24), toon({ color: 0x2f6dff }));
+      const blue = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.13, 0.24), surface({ color: 0x2f6dff }));
       blue.position.set(0.3, 0.85, 0);
       bar.add(blue);
       this.visual.root.add(bar);

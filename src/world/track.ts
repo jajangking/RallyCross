@@ -23,7 +23,7 @@ import {
   type Surface,
 } from './circuit';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { PALETTE, toon } from './style';
+import { PALETTE, surface } from './style';
 
 /**
  * A full rallycross arena: ~950 m mixed-surface circuit with two jumps, a
@@ -49,8 +49,10 @@ function lift(samples: PathSample[], dy: number): PathSample[] {
 }
 
 const MAIN = lift(samplePath(MAIN_NODES, 1.5, true), ROAD_LIFT);
-// the joker rides 8 mm proud of the racing line where the two overlap
-const JOKER = lift(samplePath(JOKER_NODES, 1.2, false), ROAD_LIFT + 0.008);
+// Joker duduk **di bawah** garis balap (6 mm), bukan di atasnya: di dekat
+// titik gabung kedua permukaan bertumpuk, dan kalau gravel joker yang menang
+// mobil di garis balap kehilangan cengkeraman tepat di ujung T2.
+const JOKER = lift(samplePath(JOKER_NODES, 1.2, false), ROAD_LIFT - 0.006);
 const MAIN_LENGTH = MAIN[MAIN.length - 1].distance;
 /** Lap distance of the start/finish line. */
 const START_DIST = MAIN[nearestSample(MAIN, START)].distance;
@@ -181,7 +183,14 @@ const JOKER_DIVIDERS: Ribbon[] = (() => {
   return runs;
 })();
 
-/** Dinding di sisi dalam joker: memisahkannya dari rumput infield. */
+/**
+ * Dinding di sisi dalam joker: memisahkannya dari rumput infield.
+ *
+ * Hanya dipasang selama ruangnya cukup. Di ujung keluar, jalur joker menyatu
+ * kembali dengan garis balap (jaraknya cuma ~1 m), jadi dinding selebar mobil
+ * di sana akan berdiri di tepi aspal utama dan menabrak mobil yang lewat jalur
+ * normal — bukan mobil yang lewat joker.
+ */
 const JOKER_LANE_WALLS: Ribbon[] = (() => {
   const length = JOKER[JOKER.length - 1].distance;
   const mid = JOKER.filter((s) => s.distance > 26 && s.distance < length - 26);
@@ -193,7 +202,28 @@ const JOKER_LANE_WALLS: Ribbon[] = (() => {
   };
   // Sisi yang justru menjauh dari garis balap = sisi infield.
   const away = toMain(1) < toMain(-1) ? -1 : 1;
-  return [offsetWall(mid, away, 1.4, 0.85)];
+
+  const runs: Ribbon[] = [];
+  let run: PathSample[] = [];
+  const flush = () => {
+    if (run.length >= 4) runs.push(offsetWall(run, away, 1.4, 0.85));
+    run = [];
+  };
+  const probePoint = new THREE.Vector3();
+  for (const s of mid) {
+    // Yang diuji bukan jarak kedua sumbu, tapi **titik dindingnya sendiri**:
+    // di ujung keluar jalur joker menyatu dengan garis balap, jadi dinding di
+    // sisi infield pun bisa berdiri di tepi aspal balap kalau dipasang buta.
+    probePoint.copy(s.pos).addScaledVector(s.side, away * (s.halfWidth + 1.4));
+    const other = distanceToPath(MAIN, probePoint.x, probePoint.z);
+    if (other.d - other.halfWidth < 1.2) {
+      flush();
+      continue;
+    }
+    run.push(s);
+  }
+  flush();
+  return runs;
 })();
 
 /** Semua dinding jalur cabang (joker), dipakai mesh dan collider. */
@@ -307,8 +337,8 @@ function canvasTexture(
 
 /**
  * Material jalan: peta warna + normal map + peta kekasaran dari
- * `surface-maps.ts`. Ketiganya dipakai di mode PBR; di mode toon, three hanya
- * memakai warna + normal (MeshToonMaterial tidak punya roughness map).
+ * `surface-maps.ts`. Ketiganya dipakai jalur PBR; three hanya
+ * memakai warna + normal (MeshStandardMaterial tidak punya roughness map).
  */
 function roadMaps(size = 512) {
   const asphalt = makeAsphaltMaps(size);
@@ -598,6 +628,41 @@ export const BROADCAST_SPOTS: BroadcastSpot[] = (() => {
     });
   });
 
+  // Trek penuh (≈780 m) punya empat lurus panjang: tanpa kamera tambahan di
+  // tengah lurus, sutradara terpaksa memakai menara tikungan yang jauhnya
+  // 250 m lebih dan mobilnya jadi titik kecil. Satu kamera tiap ±100 m lurus.
+  const centroid = new THREE.Vector3();
+  for (const s of MAIN) centroid.add(s.pos);
+  centroid.divideScalar(MAIN.length);
+  const edges = zones.map((z) => ({ from: z.from, to: z.to })).sort((a, b) => a.from - b.from);
+  const gaps: Array<{ from: number; to: number }> = [];
+  for (let i = 0; i < edges.length; i++) {
+    const from = edges[i].to;
+    const to = i + 1 < edges.length ? edges[i + 1].from : edges[0].from + MAIN_LENGTH;
+    if (to - from > 40) gaps.push({ from, to });
+  }
+  let straight = 0;
+  for (const gap of gaps) {
+    const span = gap.to - gap.from;
+    const count = Math.max(1, Math.round(span / 110));
+    for (let i = 0; i < count; i++) {
+      const d = gap.from + (span * (i + 0.5)) / count;
+      // Area garis start sudah punya menara sendiri dan padat tribun/race
+      // control: kamera lurus di sini bakal berdiri di atas atap bangunan.
+      if (Math.abs(wrapDistance(d - START_DIST + MAIN_LENGTH / 2) - MAIN_LENGTH / 2) < 60) continue;
+      const p = pointAt(MAIN, d);
+      // Sisi luar = sisi yang menjauh dari pusat infield.
+      const a = p.pos.clone().addScaledVector(p.side, 20);
+      const b = p.pos.clone().addScaledVector(p.side, -20);
+      const outward = a.distanceTo(centroid) > b.distanceTo(centroid) ? 1 : -1;
+      const position = p.pos.clone().addScaledVector(p.side, outward * (p.halfWidth + 12));
+      position.y = p.pos.y + 7;
+      const aim = p.pos.clone();
+      aim.y += 1.2;
+      spots.push({ name: `LURUS ${++straight}`, position, aim, trackDistance: wrapDistance(d - START_DIST) });
+    }
+  }
+
   const start = pointAt(MAIN, START_DIST);
   // Kamera garis start duduk di **atas** tribun utama (tribun itu menutupi
   // sisi kiri sepanjang ±33 m dari garis, jadi kamera 9 m di belakang tribun
@@ -703,22 +768,22 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   /* ---------------- ground + verges + road ---------------- */
   const groundMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(GROUND_HALF * 2, GROUND_HALF * 2),
-    toon({ map: grass, roughness: 1, metalness: 0 }),
+    surface({ map: grass, roughness: 1, metalness: 0 }),
   );
   groundMesh.rotation.x = -Math.PI / 2;
   groundMesh.position.y = -0.005;
   groundMesh.receiveShadow = true;
   scene.add(groundMesh);
 
-  const vergeMat = toon({ map: vergeTexture(), roughness: 0.98, metalness: 0 });
+  const vergeMat = surface({ map: vergeTexture(), roughness: 0.98, metalness: 0 });
   for (const ribbon of [VERGE, JOKER_VERGE]) {
     const mesh = new THREE.Mesh(ribbonGeometry(ribbon), vergeMat);
     mesh.receiveShadow = true;
     scene.add(mesh);
   }
 
-  const roadMaterials: Record<Surface, THREE.MeshToonMaterial> = {
-    tarmac: toon({
+  const roadMaterials: Record<Surface, THREE.MeshStandardMaterial> = {
+    tarmac: surface({
       map: surfaces.asphalt.map,
       normalMap: surfaces.asphalt.normalMap,
       normalScale: new THREE.Vector2(0.7, 0.7),
@@ -726,7 +791,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
       roughness: 1,
       metalness: 0,
     }),
-    gravel: toon({
+    gravel: surface({
       map: surfaces.gravel.map,
       normalMap: surfaces.gravel.normalMap,
       normalScale: new THREE.Vector2(1.1, 1.1),
@@ -745,7 +810,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   }
 
   /* white edge lines, following the width of each section */
-  const white = toon({ color: PALETTE.kerbWhite });
+  const white = surface({ color: PALETTE.kerbWhite });
   for (const sign of [-1, 1]) {
     const line = stripRibbon(MAIN, (s) => sign * (s.halfWidth - 0.32), 0.16, 0.016);
     scene.add(new THREE.Mesh(ribbonGeometry(line), white));
@@ -768,14 +833,14 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
     tex.repeat.set(8, 1);
     const bandMesh = new THREE.Mesh(
       ribbonGeometry(band),
-      toon({ map: tex, roughness: 0.8 }),
+      surface({ map: tex, roughness: 0.8 }),
     );
     bandMesh.receiveShadow = true;
     scene.add(bandMesh);
   }
 
   /* starting grid, staggered boxes behind the line */
-  const gridMat = toon({ color: 0xdfe6ee, roughness: 0.8 });
+  const gridMat = surface({ color: 0xdfe6ee, roughness: 0.8 });
   for (let i = 0; i < 6; i++) {
     const p = pointAt(MAIN, START_DIST - 13 - i * 7);
     const box = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 4.4), gridMat);
@@ -787,7 +852,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   }
 
   /* ---------------- kerbs on the tight corners ---------------- */
-  const kerbMat = toon({ map: kerbTexture(), roughness: 0.75 });
+  const kerbMat = surface({ map: kerbTexture(), roughness: 0.75 });
   for (const zone of cornerSections(MAIN, 1 / 45)) {
     const section = MAIN.filter((s) => s.distance >= zone.from && s.distance <= zone.to);
     if (section.length < 5) continue;
@@ -814,7 +879,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
 
   /* ---------------- pit / service area ---------------- */
   {
-    const apronMat = toon({ color: 0x626b76, side: THREE.DoubleSide });
+    const apronMat = surface({ color: 0x626b76, side: THREE.DoubleSide });
     // Lewat `ribbonGeometry` supaya winding-nya dibetulkan: tanpa itu normalnya
     // menghadap ke bawah dan apron tampak hitam (terbaca seperti rumput).
     const apron = new THREE.Mesh(ribbonGeometry(PIT.apron), apronMat);
@@ -823,7 +888,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
 
     // Marka: garis tepi apron + pita masuk/keluar, biar jalur pit kebaca dari
     // jauh (dan pemain tahu di mana harus berhenti tanpa lihat HUD).
-    const paintMat = toon({ color: PALETTE.kerbWhite, side: THREE.DoubleSide });
+    const paintMat = surface({ color: PALETTE.kerbWhite, side: THREE.DoubleSide });
     const markings: Array<{ positions: number[]; uvs: number[]; distances: number[]; indices: number[] }> = [
       paintStrip(PIT.from + 1, PIT.to - 1, PIT_INNER, PIT_INNER + 0.16, PIT.y + 0.004),
       paintStrip(PIT.from + 1.6, PIT.from + 2.2, PIT_INNER, PIT_OUTER, PIT.y + 0.004, 1),
@@ -857,10 +922,10 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
     scene.add(new THREE.LineSegments(lineGeo, new THREE.LineBasicMaterial({ color: PALETTE.kerbWhite })));
 
     // Kanopi servis + papan tim di belakang tiap kotak.
-    const postMat = toon({ color: 0x8f99a3 });
-    const roofMat = toon({ color: 0x545f6b });
+    const postMat = surface({ color: 0x8f99a3 });
+    const roofMat = surface({ color: 0x545f6b });
     const boardMats = [0xd8402f, 0x2d7ce0, 0xf2c53d, 0x3fbf7f, 0xb56cff, 0xe8eef6].map((color) =>
-      toon({ color }),
+      surface({ color }),
     );
     for (const box of PIT.boxes) {
       const fwd = new THREE.Vector3(Math.sin(box.yaw), 0, Math.cos(box.yaw));
@@ -885,7 +950,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   }
 
   /* ---------------- crash barrier + catch fencing ---------------- */
-  const wallMat = toon({ color: PALETTE.barrier, side: THREE.DoubleSide });
+  const wallMat = surface({ color: PALETTE.barrier, side: THREE.DoubleSide });
   scene.add(new THREE.Mesh(ribbonGeometry(OUTER_FENCE), wallMat));
 
   const fenceTex = canvasTexture((ctx, size) => {
@@ -906,7 +971,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
       ctx.stroke();
     }
   }, 128, 1);
-  const meshFenceMat = toon({
+  const meshFenceMat = surface({
     map: fenceTex,
     transparent: true,
     alphaTest: 0.05,
@@ -918,7 +983,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   });
   scene.add(new THREE.Mesh(ribbonGeometry(raiseBand(OUTER_FENCE, WALL_HEIGHT, FENCE_TOP)), meshFenceMat));
 
-  const jokerWallMat = toon({
+  const jokerWallMat = surface({
     color: 0xe6e9ee,
     roughness: 0.7,
     side: THREE.DoubleSide,
@@ -938,7 +1003,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   ];
   const bannerMats = sponsors.map(
     ([text, bg, fg]) =>
-      toon({
+      surface({
         map: bannerTexture(text, bg, fg),
         roughness: 0.85,
         side: THREE.DoubleSide,
@@ -955,7 +1020,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
 
   /* ---------------- tyre walls at the corner exits ---------------- */
   const tyreGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.34, 12, 1, true);
-  const tyreMat = toon({ color: PALETTE.tyre, side: THREE.DoubleSide });
+  const tyreMat = surface({ color: PALETTE.tyre, side: THREE.DoubleSide });
   const tyreSpots: Array<{ pos: THREE.Vector3; angle: number }> = [];
   for (const zone of cornerSections(MAIN, 1 / 55)) {
     const steps = Math.max(4, Math.round((zone.to - zone.from) / 4));
@@ -986,7 +1051,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
 
   /* ---------------- start gantry + lights ---------------- */
   const gantry = new THREE.Group();
-  const steelMat = toon({ color: 0x2b323b, roughness: 0.6, metalness: 0.45 });
+  const steelMat = surface({ color: 0x2b323b, roughness: 0.6, metalness: 0.45 });
   const postGeo = new THREE.BoxGeometry(0.5, 7, 0.5);
   for (const sign of [-1, 1]) {
     const post = new THREE.Mesh(postGeo, steelMat);
@@ -1005,7 +1070,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
 
   const board = new THREE.Mesh(
     new THREE.PlaneGeometry(Math.min(14, beamLen - 2), 1.7),
-    toon({
+    surface({
       map: bannerTexture('RALLYCROSS ARENA', '#101720', '#ffd24a'),
       roughness: 0.8,
       side: THREE.DoubleSide,
@@ -1019,14 +1084,14 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
 
   const lightPanel = new THREE.Mesh(
     new THREE.BoxGeometry(3.4, 0.9, 0.3),
-    toon({ color: 0x14171c, roughness: 0.7 }),
+    surface({ color: 0x14171c, roughness: 0.7 }),
   );
   lightPanel.position.copy(start.pos);
   lightPanel.position.y = 5.4;
   lightPanel.rotation.y = startHeading;
   gantry.add(lightPanel);
 
-  const startLampMat = toon({
+  const startLampMat = surface({
     color: 0x2a0a08,
     emissive: 0xff2200,
     emissiveIntensity: 0,
@@ -1045,14 +1110,14 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   scene.add(gantry);
 
   /* ---------------- grandstands ---------------- */
-  const standMat = toon({ color: 0x39414b, roughness: 0.85 });
+  const standMat = surface({ color: 0x39414b, roughness: 0.85 });
   // Atap seng terang + fasia merah: dari kamera heli, tribun jadi bentuk yang
   // terbaca (bukan kotak hitam).
-  const roofMat = toon({ color: 0x9aa5b2, roughness: 0.7 });
-  const fasciaMat = toon({ color: 0xc9382c, roughness: 0.8 });
-  const crowdMat = toon({ map: crowd, roughness: 0.9 });
+  const roofMat = surface({ color: 0x9aa5b2, roughness: 0.7 });
+  const fasciaMat = surface({ color: 0xc9382c, roughness: 0.8 });
+  const crowdMat = surface({ map: crowd, roughness: 0.9 });
   // Warna penonton diambil dari `instanceColor`, jadi materialnya putih.
-  const fanMat = toon({ color: 0xffffff });
+  const fanMat = surface({ color: 0xffffff });
   const makeStand = (length: number, rows: number) => {
     const group = new THREE.Group();
     for (let io = 0; io < rows; io++) {
@@ -1130,14 +1195,14 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
 
   /* ---------------- race control tower ---------------- */
   const tower = new THREE.Group();
-  const towerMat = toon({ color: 0x59636f, roughness: 0.7 });
+  const towerMat = surface({ color: 0x59636f, roughness: 0.7 });
   const shaft = new THREE.Mesh(new THREE.BoxGeometry(3.6, 11, 3.6), towerMat);
   shaft.position.y = 5.5;
   shaft.castShadow = true;
   tower.add(shaft);
   const cab = new THREE.Mesh(
     new THREE.CylinderGeometry(3.1, 3.1, 2.4, 8),
-    toon({
+    surface({
       color: 0x16212c,
       roughness: 0.18,
       metalness: 0.5,
@@ -1149,7 +1214,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   tower.add(cab);
   const towerSign = new THREE.Mesh(
     new THREE.PlaneGeometry(5.2, 1.1),
-    toon({
+    surface({
       map: bannerTexture('RACE CONTROL', '#0b1420', '#7fe3ff'),
       roughness: 0.7,
       side: THREE.DoubleSide,
@@ -1160,14 +1225,14 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   place(tower, pointAt(MAIN, START_DIST - 34), -1, 15);
 
   /* ---------------- marshal posts + flags ---------------- */
-  const hutMat = toon({ color: 0xd8dde4, roughness: 0.8 });
+  const hutMat = surface({ color: 0xd8dde4, roughness: 0.8 });
   const flagMats = [
-    toon({ color: 0xffcc22, roughness: 0.9, side: THREE.DoubleSide }),
-    toon({ color: 0x2f7fe0, roughness: 0.9, side: THREE.DoubleSide }),
-    toon({ color: 0xd8342a, roughness: 0.9, side: THREE.DoubleSide }),
-    toon({ color: 0xf2f4f7, roughness: 0.9, side: THREE.DoubleSide }),
+    surface({ color: 0xffcc22, roughness: 0.9, side: THREE.DoubleSide }),
+    surface({ color: 0x2f7fe0, roughness: 0.9, side: THREE.DoubleSide }),
+    surface({ color: 0xd8342a, roughness: 0.9, side: THREE.DoubleSide }),
+    surface({ color: 0xf2f4f7, roughness: 0.9, side: THREE.DoubleSide }),
   ];
-  const poleMat = toon({ color: 0xc7ccd3, metalness: 0.6, roughness: 0.4 });
+  const poleMat = surface({ color: 0xc7ccd3, metalness: 0.6, roughness: 0.4 });
   for (const zone of cornerSections(MAIN, 1 / 80)) {
     const p = pointAt(MAIN, (zone.from + zone.to) / 2);
     const base = offsetPoint(p, -1, 10.5);
@@ -1190,8 +1255,8 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   }
 
   /* ---------------- floodlight masts ---------------- */
-  const mastMat = toon({ color: 0x39424c, roughness: 0.6, metalness: 0.5 });
-  const lampHeadMat = toon({
+  const mastMat = surface({ color: 0x39424c, roughness: 0.6, metalness: 0.5 });
+  const lampHeadMat = surface({
     color: 0xf4f6f8,
     emissive: 0xfff3d6,
     emissiveIntensity: 0.55,
@@ -1227,15 +1292,15 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   apronTex.repeat.set(8, 5);
   const apron = new THREE.Mesh(
     new THREE.PlaneGeometry(64, 38),
-    toon({ map: apronTex, roughness: 0.95 }),
+    surface({ map: apronTex, roughness: 0.95 }),
   );
   apron.rotation.x = -Math.PI / 2;
   apron.position.set(62, 0.008, 4);
   apron.receiveShadow = true;
   paddock.add(apron);
 
-  const tentMat = toon({ color: 0xeef1f4, roughness: 0.85 });
-  const awningMat = toon({
+  const tentMat = surface({ color: 0xeef1f4, roughness: 0.85 });
+  const awningMat = surface({
     color: 0xd8342a,
     roughness: 0.85,
     side: THREE.DoubleSide,
@@ -1256,7 +1321,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
     }
     const signBoard = new THREE.Mesh(
       new THREE.PlaneGeometry(Math.min(6, w - 1), 1),
-      toon({
+      surface({
         map: bannerTexture(name, '#132033', '#ffd24a'),
         roughness: 0.8,
         side: THREE.DoubleSide,
@@ -1280,8 +1345,8 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   }
 
   /* a couple of service trucks */
-  const truckBodyMat = toon({ color: 0xf0f2f5, roughness: 0.7 });
-  const truckCabMat = toon({ color: 0x1f4f8a, roughness: 0.5, metalness: 0.3 });
+  const truckBodyMat = surface({ color: 0xf0f2f5, roughness: 0.7 });
+  const truckCabMat = surface({ color: 0x1f4f8a, roughness: 0.5, metalness: 0.3 });
   for (const [x, z, rot] of [
     [66, 12, 0.3],
     [88, 2, -0.2],
@@ -1312,8 +1377,8 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   /* ---------------- trees around the venue ---------------- */
   const trunkGeo = new THREE.CylinderGeometry(0.18, 0.26, 2.2, 6);
   const crownGeo = new THREE.ConeGeometry(1.9, 5.2, 7);
-  const trunkMat = toon({ color: PALETTE.trunk });
-  const crownMat = toon({ color: PALETTE.leaf });
+  const trunkMat = surface({ color: PALETTE.trunk });
+  const crownMat = surface({ color: PALETTE.leaf });
   const treeCount = detail ? 190 : 90;
   const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, treeCount);
   const crowns = new THREE.InstancedMesh(crownGeo, crownMat, treeCount);
@@ -1353,7 +1418,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
     // Rumpun rumput di tepi: menjaga permukaan rumput tidak terlihat seperti
     // karpet rata kalau dilihat dari kamera heli.
     const tuftGeo = new THREE.ConeGeometry(0.24, 0.55, 4);
-    const tuftMat = toon({ color: 0x53953a });
+    const tuftMat = surface({ color: 0x53953a });
     const tuftCount = detail ? 1100 : 300;
     const tufts = new THREE.InstancedMesh(tuftGeo, tuftMat, tuftCount);
     tufts.castShadow = false;
@@ -1386,7 +1451,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
       { radius: 330, color: 0xa8c6d0, count: 22, tall: 52 },
     ];
     for (const ring of hillRings) {
-      const hillMat = toon({ color: ring.color, fog: false });
+      const hillMat = surface({ color: ring.color, fog: false });
       const hills = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 7), hillMat, ring.count);
       hills.castShadow = false;
       hills.receiveShadow = false;
@@ -1411,9 +1476,9 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
       scene.add(hills);
     }
 
-    // Awan kartun: gumpalan bola pipih (bukan billboard, jadi tidak perlu
-    // di-orientasi tiap frame) di ketinggian 85–125 m.
-    const cloudMat = toon({ color: 0xffffff, fog: false });
+    // Awan: gumpalan bola pipih (bukan billboard, jadi tidak perlu
+    // di-orientasi tiap frame) di ketinggian 118–160 m, material PBR putih.
+    const cloudMat = surface({ color: 0xffffff, fog: false });
     const puffGeo = new THREE.SphereGeometry(1, 9, 7);
     const clusters = detail ? 7 : 3;
     const puffs = new THREE.InstancedMesh(puffGeo, cloudMat, clusters * 6);
@@ -1451,7 +1516,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
     // Tiga gapura (rallycross selalu punya ini): dua kaki di luar pagar, balok
     // melintang, dan spanduk menggantung di atas trek. Titiknya dicari di
     // bagian trek yang datar & lurus, bukan di puncak lompatan.
-    const archMat = toon({ color: 0x2f3742 });
+    const archMat = surface({ color: 0x2f3742 });
     const lapLength = MAIN[MAIN.length - 1].distance;
     const arches: Array<[number, string, string, string]> = [
       [0.18, 'NITRO OIL', '#0f3f2c', '#d8f0c8'],
@@ -1489,7 +1554,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
 
       const banner = new THREE.Mesh(
         new THREE.PlaneGeometry(span * 1.5, 1.5),
-        toon({
+        surface({
           map: bannerTexture(name, bg, fg),
           side: THREE.DoubleSide,
           roughness: 0.85,
@@ -1506,7 +1571,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   const jokerPoint = pointAt(MAIN, MAIN[nearestSample(MAIN, JOKER_START)].distance - 14);
   const jokerSign = new THREE.Mesh(
     new THREE.PlaneGeometry(5.2, 1.8),
-    toon({
+    surface({
       map: bannerTexture('JOKER', '#101720', '#ffb02e'),
       roughness: 0.8,
       side: THREE.DoubleSide,

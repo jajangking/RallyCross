@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { toonFrom } from '../world/style';
+import { surfaceFrom } from '../world/style';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { VehicleConfig, VehiclePhysics } from './VehiclePhysics';
 import {
@@ -146,13 +146,13 @@ function measureWheel(node: THREE.Object3D, yaw: number): RawWheel {
 /* ------------------------------------------------------------------ */
 
 interface LampSlot {
-  mat: THREE.MeshToonMaterial;
+  mat: THREE.MeshStandardMaterial;
   /** Colour the lamp takes while it is lit. */
   lit: THREE.Color;
 }
 
-function lampMaterial(source: THREE.Mesh): THREE.MeshToonMaterial {
-  const src = source.material as THREE.MeshToonMaterial;
+function lampMaterial(source: THREE.Mesh): THREE.MeshStandardMaterial {
+  const src = source.material as THREE.MeshStandardMaterial;
   const mat = src.clone();
   // emissive straight from the material colour reads better than an emissive
   // map here: the lamp silhouettes come from the model, the glow from us.
@@ -222,9 +222,9 @@ function splitBySide(mesh: THREE.Mesh): SplitLamp {
 }
 
 /** Material a split lamp part is drawn with (already an emissive clone). */
-const lampMaterialOf = (part: THREE.Mesh) => part.material as THREE.MeshToonMaterial;
+const lampMaterialOf = (part: THREE.Mesh) => part.material as THREE.MeshStandardMaterial;
 
-const slot = (mat: THREE.MeshToonMaterial, lit: number): LampSlot => ({
+const slot = (mat: THREE.MeshStandardMaterial, lit: number): LampSlot => ({
   mat,
   lit: new THREE.Color(lit),
 });
@@ -300,7 +300,7 @@ class ModelLampRig implements CarLampRig {
 
     // Lampu sorot 3D sengaja tidak dipakai: dua SpotLight per mobil berarti
     // 12 lampu di grid, dan setiap material harus menghitung semuanya tiap
-    // fragment. Untuk gaya kartun, lampu yang menyala (emissive) sudah cukup.
+    // fragment. Lampu yang menyala (emissive) sudah cukup.
 
     return rig;
   }
@@ -437,13 +437,13 @@ export function assembleCarModel(
   root.updateMatrixWorld(true);
 
   // Seluruh material model (yang aslinya PBR/MeshStandardMaterial) diganti
-  // versi toon: warna & peta dipertahankan, tapi warnanya jadi rata dan
+  // versi PBR: warna & peta dipertahankan
   // shadernya jauh lebih murah. Bodinya tetap di-respray ke warna livery.
   const paint = new THREE.Color(opts.paint ?? DEFAULT_PAINT);
   const convert = (m: THREE.Material): THREE.Material => {
-    if ((m as THREE.MeshToonMaterial).isMeshToonMaterial) return m;
+    if ((m as THREE.MeshStandardMaterial).isMeshStandardMaterial) return m;
     const isPaint = /paint/i.test(m.name);
-    const out = toonFrom(m, isPaint ? paint : undefined);
+    const out = surfaceFrom(m, isPaint ? paint : undefined);
     if (isPaint) {
       out.side = THREE.FrontSide;
       out.name = m.name;
