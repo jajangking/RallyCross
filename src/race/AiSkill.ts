@@ -41,19 +41,21 @@ export interface RivalSkill {
 }
 
 /**
- * Hasil uji putaran (headless, 1 lap dari start berdiri, jalur joker):
+ * Hasil uji putaran (headless, 1 lap dari start berdiri):
  *
- * | nalar | pace | grip | rem  | waktu   |
- * |-------|------|------|------|---------|
- * | 0 %   | 0,95 | 7,8  | 7,4  | 37,00 s |
- * | 50 %  | 0,975| 8,0  | 7,6  | 36,07 s |
- * | 100 % | 1,00 | 8,2  | 7,8  | 35,38 s |
+ * | pace | grip | rem  | waktu   |
+ * |------|------|------|---------|
+ * | 0,95 | 8,60 | 8,00 | 29,78 s |
+ * | 0,97 | 8,80 | 8,20 | 29,37 s |
+ * | 0,99 | 8,90 | 8,30 | 29,30 s |
+ * | 1,00 | 9,00 | 8,40 | 28,90 s |
+ * | 1,00 | 9,15 | 8,55 | 29,25 s |
+ * | 1,00 | 9,30 | 8,70 | 32,80 s |
  *
- * Angka ini **lebih rendah** dari batas nyata ban (tarmac ~10 m/s²) dengan
- * sengaja: perencana kecepatan butuh cadangan, dan uji di trek baru menunjukkan
- * bahwa grip taksiran 9,0 membuat AI masuk tikungan tepat di ambang lalu
- * melebar — putaran 100 % malah jadi 40,6 s, lebih lambat dari pemula.
- * Batas atas pace 1,0: di atas itu AI mulai menabrak ambang yang sama.
+ * Jadi pace naik dan grip/rem **hanya sampai batas nyata mobil** (9,0 / 8,4):
+ * di atas itu perencana menaksir grip terlalu tinggi, mobil melebar, dan
+ * putarannya justru lebih lambat. Batas atas pace 1,0 (bukan 1,03) karena di
+ * atas 1,0 AI mulai masuk tikungan terlalu cepat.
  */
 const PACE_MIN = 0.95;
 const PACE_SPAN = 0.05;
@@ -63,8 +65,8 @@ export function tuningFor(value: number): SkillTuning {
   const v = Math.min(1, Math.max(0, value));
   return {
     pace: PACE_MIN + PACE_SPAN * v,
-    gripTarmac: 7.8 + 0.4 * v,
-    brakeTarmac: 7.4 + 0.4 * v,
+    gripTarmac: 8.6 + 0.4 * v,
+    brakeTarmac: 8.0 + 0.4 * v,
     laneTighten: v,
   };
 }

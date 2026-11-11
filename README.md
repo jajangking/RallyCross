@@ -1,6 +1,6 @@
 # RallyCross — Vehicle Physics Prototype
 
-Prototipe **mobil rally 3D di web** (three.js + Rapier) dengan gaya **fotorealistis PBR** (material standar/PBR, environment map dari langitnya sendiri, bayangan matahari asli, tribun penuh penonton): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel **779,6 m** hasil hitungan dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **grid 6 mobil** (kamu + 5 lawan AI) yang balapan 10 lap, **jejak ban + asap/debu** dari ban yang benar-benar selip, papan klasemen langsung, **10 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI, dan **helikopter siaran** yang gambar udaranya ikut masuk ke siaran TV. Belum ada multiplayer.
+Prototipe **mobil rally 3D di web** (three.js + Rapier) dengan gaya **fotorealistis PBR** (material standar/PBR, environment map dari langitnya sendiri, bayangan matahari asli, tribun penuh penonton): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel **478 m** dengan tiga lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **grid 6 mobil** (kamu + 5 lawan AI) yang balapan 10 lap, **jejak ban + asap/debu** dari ban yang benar-benar selip, papan klasemen langsung, **11 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI, dan **helikopter siaran** yang gambar udaranya ikut masuk ke siaran TV. Belum ada multiplayer.
 
 ## Jalanin
 
@@ -101,24 +101,19 @@ scripts/
 
 ## Arena rallycross
 
-Satu putaran **779,6 m**, searah jarum jam, garis start/finish di `(0, 0)` menghadap `+Z`. Seluruh geometrinya **dihitung**, bukan digambar tangan: `src/world/circuit.ts` membangun tiap tikungan dari busur (pusat, radius, sudut awal/akhir, lebar), menyambungnya dengan lurus, lalu menyampelnya jadi satu spline Catmull-Rom 1,5 m.
+Satu putaran **478 m**, searah jarum jam, garis start/finish di `(0, 0)` menghadap `+Z`:
 
 | Bagian | Isi |
 | --- | --- |
-| Main straight | 140 m (`x = 0`, z −100 → +40), grid 6 kotak, gantry + 5 lampu start, grandstand + race control di sisi luar |
-| T1 | kanan **r = 46 m**, melebar jadi apron gravel di sisi luar |
-| Gravel straight atas | ±55 m gravel dengan *bump* (yump) 0,5 m di `(90, 88)` |
-| T2 | kanan **r = 70 m** (pusat `(138, 16)`); **joker** memotong di dalamnya |
-| Lurus timur | 96 m (`x = 208`, z 16 → −80) |
-| T3 | kanan **r = 60 m** |
-| Lurus bawah | 250 m ke barat, dengan **lompatan**: crest **1,15 m** di `(105, −140)`, lip pendek di kedua sisi |
-| T4 | kanan **r = 30 m** (pusat `(30, −110)`), kembali ke garis start |
+| Main straight | 92 m, grid 6 kotak, gantry + 5 lampu start, grandstand + race control di sisi luar |
+| T1 | kanan sedang, keluar ke straight gravel atas |
+| Gravel-out | ±55 m gravel, ada *bump* (yump) 0,55 m |
+| T2 | kanan cepat; **joker lap** memotong di dalamnya (gravel, ±2,5 m lebih pendek tapi lebih lambat) |
+| JUMP 1 | lompatan aspal di straight timur, crest 1,35 m, lip pendek — mobil terbang ±1 s |
+| T3 + gravel-in | kanan, lalu 60 m gravel dengan JUMP 2 (crest 1,30 m) |
+| Flick + final corner | dua belokan lambat menuju garis start |
 
-### Joker lap: busur kedua di dalam T2
-
-Joker bukan jalan pintas acak — ia **busur dengan pusat yang sama** dengan T2: jalur utama r = 70 m, joker menyusut 18 m ke dalam (r = 52 m) di bagian tengah, lalu kembali mulus ke r = 70 m di kedua ujung (profil *smoothstep* selebar 30° di tiap ujung). Karena selisihnya nol di titik belah (304 m) dan titik gabung (414 m) — dan kemiringannya juga nol — kedua ujungnya menyambung **tangensial**: sudut masuk 0,1°, sudut keluar 1,3° (audit trek mengukur ini setiap build).
-
-Hasilnya: jalur **7,0 m lebih pendek** dari garis balap, dengan **4,3 m ruang kosong** ke tepi aspal utama di bagian tengah — cukup untuk memasang dinding pemisah, jadi mobil joker dan mobil garis balap benar-benar terpisah. Joker tetap **lebih lambat** (±4 s per putaran, karena radius dalam 52 m dan permukaan gravel di mulut joker): persis seperti joker di rallycross sungguhan — bukan jalan pintas, tapi pilihan taktis untuk dapat udara bersih saat terhalang.
+Joker lap keluar dari sisi dalam gravel-out, memotong lurus di dalam T2 (lebar 9–10 m, mulut joker gravel), lalu menyambung kembali ke aspal sebelum T3 — jalurnya **2,5 m lebih pendek** tapi lebih sempit dan lebih lambat, dan melewati JUMP 1 dengan sudut yang berbeda. Keputusan joker jadi soal "udara bersih" vs "jalur cepat".
 
 Permukaan: aspal μ = 1,00, gravel μ = 0,62, rumput μ = 0,55. Barrier keliling solid setinggi pagar pengaman (3,4 m) supaya mobil tidak bisa terlempar keluar arena; ban bekas, kerb merah-putih, banner sponsor, 6 tiang lampu, paddock (tenda + truk servis) ada di infield, dan 190 pohon mengelilingi venue.
 
@@ -294,9 +289,9 @@ Jadi AI-nya **bukan animasi atau jalur rekaman**: setiap frame ia membaca posisi
 
 Yang **belum** ada (jujur): keputusan joker belum memperhitungkan **waktu tempuh** kedua rute (hanya lalu lintas + riwayat lap), AI belum belajar garis balap sendiri (yang naik hanya pace, asumsi grip, dan kerapian lajur), dan belum memprediksi gerakan lawan (hanya jarak & kecepatan saat ini; menyalip di tikungan masih memakai celah yang terlihat sekarang, bukan lintasan lawan 1 detik ke depan). Itu semua bisa ditambahkan tanpa menyentuh fisika.
 
-Hasil uji headless dengan fisika asli di trek baru (**779,6 m**): **31,7 s** satu putaran di garis balap utama, **35,6 s** kalau lewat joker, **0,0 m** keluar tepi trek, dan bodi tetap 100 %. Dengan ban kempes (satu roda), AI tetap di dalam trek (0,0 m) karena perencana kecepatannya ikut turun (`pace` 1,000 → 0,899).
+Hasil uji headless dengan fisika asli di trek ini (**478 m**): **29,8 s** satu putaran, **0,0 m** keluar tepi trek, dan bodi tetap 100 %. Lima lawan menyelesaikan satu putaran dalam 34,3 s (dari grid, dengan lalu lintas), dan dengan ban kempes (satu roda) AI memperlambat diri sendiri (`pace` turun) lalu tetap di dalam trek.
 
-**Kenapa AI-nya sekarang selamat di trek baru:** perencana kecepatan sengaja memakai asumsi cengkeraman **di bawah** batas ban (`gripTarmac` 8,0 m/s², `gripGravel` 4,8 m/s² — ban aslinya ±10/6). Versi sebelumnya memakai 9,0/5,6 dan mobil masuk tikungan tepat di ambang, lalu melebar 20 m begitu permukaannya berganti di tengah tikungan. Skala nalar AI (`tuningFor`) juga diturunkan: grip 7,8–8,2 dan rem 7,4–7,8, jadi nalar 0 % → 37,00 s, 50 % → 36,07 s, 100 % → 35,38 s — **monoton menurun**, bukan lagi terbalik seperti waktu grip taksirannya 9,0.
+**Takaran AI-nya:** skala nalar (`tuningFor`) menaikkan pace 0,95 → 1,0 sekaligus asumsi grip 8,6 → 9,0 dan rem 8,0 → 8,4 — tepat di bawah batas nyata ban (±10 m/s²), karena di atas itu perencana menaksir grip terlalu tinggi, mobil melebar, dan putarannya justru lebih lambat (grip 9,3 sudah jadi 32,8 s). Hasil uji: nalar 0 % → 31,5 s, 100 % → 30,4 s, jadi makin tinggi nalar makin cepat, tanpa melanggar fisika.
 
 ## Kamera TV (broadcast)
 
