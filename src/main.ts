@@ -33,7 +33,8 @@ import {
   createSunSprite,
   PALETTE,
 } from './world/style';
-import { Helicopter } from './world/Heli';
+import { Helicopter, createHelipad } from './world/Heli';
+import { HeliFlight, HELI_HOVER, NEUTRAL_HELI_INPUT, SKID_Y } from './vehicle/HeliFlight';
 
 const FIXED_DT = 1 / 60;
 const MAX_SUBSTEPS = 5;
@@ -274,6 +275,26 @@ async function boot() {
   scene.add(heli.root);
   heli.place(car.position);
 
+  /* ---------------- heli pemain + helipad ---------------- */
+  // Landasan di infield, jauh dari apron pit dan paddock (lihat cek di
+  // `scripts/smoke.ts`: landasan wajib punya jarak bersih ke garis trek):
+  // pemain bisa naik heli kapan saja dengan `F`, terbang mengelilingi sirkuit,
+  // lalu mendarat lagi di sini. Heli ini **bukan** heli siaran di atas —
+  // keduanya punya badan fisika sendiri, jadi tidak bisa saling ganggu.
+  const PAD = new THREE.Vector3(40, -SKID_Y, -30);
+  const helipad = createHelipad();
+  helipad.position.set(PAD.x, 0, PAD.z);
+  scene.add(helipad);
+
+  const playerHeli = new Helicopter();
+  playerHeli.root.name = 'helicopter-player';
+  scene.add(playerHeli.root);
+  const heliShadow = createBlobShadow(3.1, 0.3);
+  scene.add(heliShadow);
+  // Badan dinamis Rapier: gravitasi, dorongan rotor, dan tumbukan semuanya asli.
+  const heliFlight = new HeliFlight(world, PAD.clone(), Math.PI * 0.12);
+  playerHeli.applyManual(heliFlight.position, heliFlight.yaw, 0, 0, 0, 0);
+
   /* ---------------- pit stop, safety car, ambulans ---------------- */
   // Kotak servis: Kotak 0 untuk pemain, 1..5 untuk lawan (urutan `RIVAL_PLANS`).
   const pitBoxes = PIT.boxes;
@@ -466,7 +487,16 @@ async function boot() {
   };
 
   // A reset puts the car back on the grid, so the gear lever follows it.
+  /** Pemain sedang di dalam heli? `F` menukar kendali mobil <-> heli. */
+  let flying = false;
+
   const resetCar = () => {
+    // Saat menerbangkan heli, `R` mengembalikan helinya ke landasan (mobil yang
+    // sedang ditinggal juga di-reset, jadi balapannya tidak jadi kacau).
+    if (flying) {
+      heliFlight.reset();
+      input.setHeliLever(HELI_HOVER);
+    }
     car.reset();
     playerPit.reset();
     raceControl.reset();
@@ -527,12 +557,34 @@ async function boot() {
     spectateToggle?.updateDisplay();
   };
 
+  /**
+   * Masuk/keluar heli. Masuk: kamera pindah ke ekor heli, pedal mobil dikunci
+   * (handbrake), dan tuas kolektif disetel ke titik hover supaya tinggal
+   * menekan `W` untuk naik. Keluar: heli langsung masuk mode auto-hover, jadi
+   * ia tetap melayang di tempat dan tidak jatuh menimpa trek.
+   */
+  const setFlying = (on: boolean) => {
+    if (on === flying) return;
+    flying = on;
+    input.setFlying(on);
+    input.setHeliLever(on ? 0.4 : 0);
+    if (on) {
+      cameraRig.releaseHeli();
+      bannerPit('HELI · W naik · S turun · panah maju/miring · A/D putar · F turun');
+    } else {
+      cameraRig.releaseHeli();
+      cameraRig.setMode('chase');
+      bannerPit('KEMBALI KE MOBIL · heli melayang otomatis (F naik lagi)');
+    }
+  };
+
   const input = new Input({
     reset: resetCar,
     camera: () => cameraRig.toggleMode(),
     gui: () => setGui(!guiOpen),
     ai: () => setAutopilot(!auto.enabled),
     spectate: () => setSpectate(!spectate.on),
+    heli: () => setFlying(!flying),
   });
 
   /** Perintah yang dipakai frame ini: AI kalau aktif, kalau tidak pemain. */
@@ -828,6 +880,9 @@ async function boot() {
         command = input.state;
       }
       car.fixedStep(FIXED_DT, command);
+      // Heli pemain: langkah tetap yang sama dengan mobil. Saat tidak diterbangkan
+      // ia memakai auto-hover, jadi tidak pernah jatuh sendiri ke tengah trek.
+      heliFlight.step(FIXED_DT, flying ? input.heliInput(FIXED_DT) : NEUTRAL_HELI_INPUT, !flying);
       if (race.rivals) {
         for (const r of rivals) {
           const rivalCommand = r.rival.step(FIXED_DT, traffic);
@@ -1017,7 +1072,28 @@ async function boot() {
     // bodi supaya tidak menutupi frame (dan tetap terlihat dari kamera lain).
     heli.root.visible = !cameraRig.aerialActive;
 
-    if (cameraRig.modeName === 'tv') {
+    // Heli pemain: pose visual diambil dari badan fisikanya, rotornya ikut tuas.
+    const heliPose = heliFlight.snapshot();
+    playerHeli.applyManual(
+      heliPose.position,
+      heliPose.yaw,
+      heliPose.pitch,
+      heliPose.roll,
+      raw,
+      heliPose.rotor,
+    );
+    // Bayangan blob mengecil & memudar saat heli naik — dari 40 m bayangan
+    // sebesar heli hanya akan menipu mata.
+    const shadowLift = Math.min(1, heliPose.altitude / 30);
+    heliShadow.visible = !sunRig.shadows && heliPose.altitude < 60;
+    heliShadow.position.set(heliPose.position.x, 0.03, heliPose.position.z);
+    const shadowScale = 1 + shadowLift * 1.4;
+    heliShadow.scale.setScalar(shadowScale);
+    (heliShadow.material as THREE.MeshBasicMaterial).opacity = 0.3 * (1 - shadowLift * 0.85);
+
+    if (flying) {
+      cameraRig.updateHeli(raw, heliPose.position, heliPose.yaw, heliPose.speed, heliPose.landed);
+    } else if (cameraRig.modeName === 'tv') {
       cameraRig.updateBroadcast(
         raw,
         camTarget,
@@ -1058,6 +1134,18 @@ async function boot() {
     hud.setFlag(raceControl.flag, safetyCar.deployed);
     hud.setLeague(skills.average, skills.totalRaces);
     hud.setCamera(cameraRig.modeName === 'tv', cameraRig.broadcastName);
+    hud.setHeli(
+      flying
+        ? {
+            altitude: heliPose.altitude,
+            speed: heliPose.speed,
+            climb: heliPose.climb,
+            rotor: heliPose.rotor,
+            collective: heliFlight.collective,
+            landed: heliPose.landed,
+          }
+        : null,
+    );
     hud.setFinish(
       race.winner === null
         ? null
@@ -1104,6 +1192,12 @@ async function boot() {
     spray,
     cameraRig,
     heli,
+    playerHeli,
+    heliFlight,
+    setFlying,
+    get flying() {
+      return flying;
+    },
     renderer,
     scene,
     snap: () => {

@@ -553,6 +553,68 @@ if (rc) {
   }
 
   rc.cameraRig.setMode('chase');
+
+  // Heli pemain: naik (F), terbang, lalu mendarat. Diperiksa di sini karena
+  // `scripts/smoke.ts` hanya menguji fisikanya — yang bisa rusak tanpa
+  // ketahuan adalah sambungannya ke kamera, HUD, dan loop permainan.
+  {
+    console.log('\n— heli pemain di dalam permainan —');
+    const flight = rc.heliFlight as any;
+    const padAlt = flight.altitude as number;
+    rc.setFlying(true);
+    await waitFrames(4);
+    check(rc.flying === true, 'tombol F membawa pemain ke heli', 'mode heli aktif');
+
+    // Tuas penuh: rotor berputar, heli meninggalkan landasan.
+    rc.input.setHeliLever(1);
+    await waitFrames(240);
+    const climbAlt = flight.altitude as number;
+    check(climbAlt > 10, 'heli benar-benar naik di dalam loop permainan', `${climbAlt.toFixed(1)} m`);
+    const camPos = (rc.cameraRig.camera as THREE.PerspectiveCamera).position as THREE.Vector3;
+    const heliPos = flight.position as THREE.Vector3;
+    const camDist = camPos.distanceTo(heliPos);
+    check(
+      camDist > 5 && camDist < 32 && camPos.y > heliPos.y - 2,
+      'kamera mengikuti heli dari belakang-atas',
+      `${camDist.toFixed(0)} m dari heli · kamera ${camPos.y.toFixed(0)} m`,
+    );
+    check(
+      Math.abs((rc.playerHeli.root.rotation.y as number) - (flight.yaw as number)) < 0.01,
+      'model heli mengikuti pose fisikanya',
+      `yaw ${(flight.yaw * 57.3).toFixed(0)}°`,
+    );
+
+    // Turunkan tuas: heli harus kembali menyentuh landasan.
+    rc.input.setHeliLever(0.25);
+    await waitFrames(60 * 26);
+    check(
+      (flight.altitude as number) < 0.6 && flight.landed === true,
+      'heli bisa mendarat lagi di landasan',
+      `${(flight.altitude as number).toFixed(2)} m · landed ${flight.landed}`,
+    );
+    check(
+      Math.abs((flight.position as THREE.Vector3).x - 40) < 12 &&
+        Math.abs((flight.position as THREE.Vector3).z + 30) < 12,
+      'heli mendarat dekat landasannya (tidak melayang pergi)',
+      `${(flight.position as THREE.Vector3).x.toFixed(0)}, ${(flight.position as THREE.Vector3).z.toFixed(0)}`,
+    );
+
+    // Turun dari heli: kamera balik ke mobil dan heli melayang otomatis.
+    rc.input.setHeliLever(1);
+    await waitFrames(120);
+    rc.setFlying(false);
+    await waitFrames(6);
+    check(
+      rc.flying === false && !rc.cameraRig.heliActive,
+      'F lagi = kembali ke mobil (kamera tidak lagi di heli)',
+      rc.cameraRig.modeName,
+    );
+    await waitFrames(120);
+    const hoverAlt = flight.altitude as number;
+    check(hoverAlt > 2, 'heli yang ditinggal tetap melayang (auto-hover)', `${hoverAlt.toFixed(1)} m`);
+    void padAlt;
+    check(logs.length === 0, 'tidak ada error selama uji heli', logs[0] ?? '');
+  }
 }
 
 clearInterval(drain);

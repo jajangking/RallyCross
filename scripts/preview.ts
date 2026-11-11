@@ -381,6 +381,42 @@ const main = async () => {
     render(root, { eye: new THREE.Vector3(-8, -2, 9), target: new THREE.Vector3(0, 0.6, -0.6), fov: 38 }, SKY, 'shots/heli-low.png');
   }
 
+  if (what === 'helipad' || what === 'all') {
+    const { buildTrackVisuals } = await import('../src/world/track');
+    const { createHelipad, Helicopter: HeliModel } = await import('../src/world/Heli');
+    const { SKID_Y } = await import('../src/vehicle/HeliFlight');
+    const scene = new THREE.Scene();
+    buildTrackVisuals(scene, true);
+    const pad = createHelipad();
+    pad.position.set(40, 0, -30);
+    scene.add(pad);
+    // Heli pemain diparkir di tengah landasan, rotor diam.
+    const parked = new HeliModel();
+    parked.root.position.set(40, -SKID_Y, -30);
+    parked.root.rotation.set(0, Math.PI * 0.12, 0);
+    scene.add(parked.root);
+    render(
+      scene,
+      { eye: new THREE.Vector3(58, 9, -14), target: new THREE.Vector3(40, 1.2, -30), fov: 46 },
+      SKY,
+      'shots/helipad.png',
+    );
+    render(
+      scene,
+      { eye: new THREE.Vector3(30, 6.5, -46), target: new THREE.Vector3(41, 2.0, -29), fov: 52 },
+      SKY,
+      'shots/helipad-ground.png',
+    );
+    // Dari atas: memastikan tanda H terbaca dan tidak ada pohon yang tumbuh
+    // di atas landasan.
+    render(
+      scene,
+      { eye: new THREE.Vector3(40, 26, -30.01), target: new THREE.Vector3(40, 0, -30), fov: 48 },
+      SKY,
+      'shots/helipad-top.png',
+    );
+  }
+
   if (what === 'car' || what === 'all') {
     const RAPIER = (await import('@dimforge/rapier3d-compat')).default;
     const { CarVisual } = await import('../src/vehicle/CarVisual');

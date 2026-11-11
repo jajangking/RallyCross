@@ -35,6 +35,22 @@
       <div id="pit" class="hide"></div>
       <div id="damage" class="hide"></div>
       <div id="auto" class="off">AI nonaktif · P</div>
+      <div id="heli" class="hide">
+        <div class="heli-top">
+          <span class="heli-tag">HELI</span>
+          <span id="heli-state">DI TANAH</span>
+        </div>
+        <div class="heli-row"><b id="heli-alt">0</b><span>m</span><em>ketinggian</em></div>
+        <div class="heli-row"><b id="heli-spd">0</b><span>km/h</span><em>laju</em></div>
+        <div class="heli-gauge">
+          <span>TUAS</span>
+          <div class="heli-bar" id="heli-lever"><i></i><b class="hover-mark"></b></div>
+        </div>
+        <div class="heli-gauge">
+          <span>ROTOR</span>
+          <div class="heli-bar" id="heli-rotor"><i></i></div>
+        </div>
+      </div>
     </div>
 
     <div id="flag" class="hide">
@@ -54,10 +70,26 @@
 
     <div id="help">
       <b>W/↑</b> gas · <b>S/↓</b> rem · <b>A/D ←→</b> setir · <b>Q</b> gigi D/R · <b>Z/X</b> sein ·
-      <b>H</b> hazard · <b>L</b> lampu · <b>Space</b> handbrake · <b>R</b> reset · <b>C</b> kamera · <b>P</b> AI · <b>V</b> tonton AI vs AI · <b>G</b> panel · di HP: tombol <b>AI</b> / <b>⚙</b> di kiri atas
+      <b>H</b> hazard · <b>L</b> lampu · <b>Space</b> handbrake · <b>R</b> reset · <b>C</b> kamera · <b>P</b> AI · <b>V</b> tonton AI vs AI · <b>G</b> panel · <b>F</b> naik heli · di HP: tombol <b>AI</b> / <b>⚙</b> di kiri atas
     </div>
 
     <div id="touch">
+      <div id="heli-pad" aria-label="kontrol heli">
+        <div class="hp-row">
+          <button data-k="yawL" aria-label="putar kiri">⟲</button>
+          <button data-k="fwd" aria-label="maju (hidung turun)">⇡</button>
+          <button data-k="yawR" aria-label="putar kanan">⟳</button>
+        </div>
+        <div class="hp-row">
+          <button data-k="bankL" aria-label="miring kiri">⇠</button>
+          <button data-k="back" aria-label="mundur (hidung naik)">⇣</button>
+          <button data-k="bankR" aria-label="miring kanan">⇢</button>
+        </div>
+        <div class="hp-row">
+          <button data-k="up" class="wide" aria-label="naik">NAIK</button>
+          <button data-k="down" class="wide" aria-label="turun">TURUN</button>
+        </div>
+      </div>
       <div class="ctl steer" data-ctl="steer">
         <span class="tag">setir</span>
         <div class="track"><div class="knob"></div></div>
@@ -81,6 +113,7 @@
     <div id="lampbar">
       <button data-ai class="ai" aria-label="AI mengemudi" aria-pressed="false">AI</button>
       <button data-tv aria-label="tonton AI vs AI" aria-pressed="false">TV</button>
+      <button data-heli aria-label="naik / turun heli" aria-pressed="false">HELI</button>
       <button data-panel aria-label="panel tuning">⚙</button>
       <button data-lamp="left" aria-label="sein kiri" aria-pressed="false">◀</button>
       <button data-lamp="right" aria-label="sein kanan" aria-pressed="false">▶</button>

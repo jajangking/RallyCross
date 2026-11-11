@@ -379,6 +379,36 @@ export class Helicopter {
     this.body.localToWorld(this.cameraPosition);
   }
 
+  /**
+   * Mode manual: pose datang dari luar (heli yang diterbangkan pemain).
+   *
+   * Heli siaran mengatur posisinya sendiri lewat `update()`; yang ini tidak.
+   * Rotornya tetap dianimasikan di sini supaya putaran bilah ikut tuas
+   * kolektif — rotor yang berhenti saat mesin dimatikan adalah detail kecil
+   * yang membuat heli terbaca "hidup".
+   */
+  applyManual(
+    position: THREE.Vector3,
+    yaw: number,
+    pitch: number,
+    roll: number,
+    dt: number,
+    rotorNorm: number,
+  ): void {
+    this.root.position.copy(position);
+    this.root.rotation.set(0, yaw, 0);
+    this.body.rotation.set(pitch, 0, roll);
+    // Rotor idle tetap berputar pelan (0,35) saat mesin hidup.
+    this.spin += dt * (0.35 + rotorNorm * 1.65);
+    this.rotor.rotation.y = this.spin * 40;
+    this.tailRotor.rotation.x = this.spin * 62;
+    const blink = Math.sin(this.spin * 3) > 0.55 ? 2.4 : 0.05;
+    for (const beacon of this.beacons) {
+      (beacon.material as THREE.MeshStandardMaterial).emissiveIntensity = blink;
+    }
+    this.lensPosition();
+  }
+
   /** Titik fokus awal (supaya heli tidak terbang dari titik nol). */
   place(focus: THREE.Vector3): void {
     this.orbitAngle = Math.atan2(focus.z, focus.x);
@@ -441,4 +471,78 @@ export class Helicopter {
     if (k >= 1) this.root.position.copy(this.target);
     else this.root.position.lerp(this.target, k);
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* helipad                                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Landasan heli di infield: lingkaran aspal, tanda **H**, cincin putih, dan
+ * lampu tepi yang menyala. Ditaruh datar di atas tanah (y = 0,012) — di bawah
+ * permukaan trek (2 cm) supaya tidak pernah menonjol ke aspal sirkuit.
+ *
+ * Dikembalikan sebagai grup supaya pemanggil tinggal `scene.add()`, dan
+ * `helipadRadius` dipakai untuk menaruh heli di tengahnya.
+ */
+export const HELIPAD_RADIUS = 6.4;
+export const HELIPAD_Y = 0.012;
+
+export function createHelipad(radius = HELIPAD_RADIUS): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'helipad';
+
+  const asphalt = surface({ color: 0x3a4048, roughness: 0.96 });
+  const paint = surface({ color: 0xe7ecf2, roughness: 0.7, emissive: 0x1a1d21 });
+  const lamp = surface({ color: 0xffd98a, emissive: 0xffc247, emissiveIntensity: 2.2 });
+
+  const base = new THREE.Mesh(new THREE.CircleGeometry(radius, 48), asphalt);
+  base.rotation.x = -Math.PI / 2;
+  base.position.y = HELIPAD_Y;
+  base.receiveShadow = true;
+  group.add(base);
+
+  // Cincin tepi + tanda H (dua batang + satu palang).
+  const ring = new THREE.Mesh(new THREE.RingGeometry(radius - 0.55, radius - 0.15, 48), paint);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = HELIPAD_Y + 0.002;
+  group.add(ring);
+
+  const bar = radius * 0.42;
+  for (const side of [-1, 1]) {
+    const leg = new THREE.Mesh(new THREE.PlaneGeometry(0.7, bar * 2), paint);
+    leg.rotation.x = -Math.PI / 2;
+    leg.position.set(side * bar * 0.55, HELIPAD_Y + 0.003, 0);
+    group.add(leg);
+  }
+  const cross = new THREE.Mesh(new THREE.PlaneGeometry(bar * 1.1, 0.7), paint);
+  cross.rotation.x = -Math.PI / 2;
+  cross.position.y = HELIPAD_Y + 0.003;
+  group.add(cross);
+
+  // Lampu tepi: 8 titik, cukup untuk dibaca dari udara.
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6), lamp);
+    bulb.position.set(Math.cos(a) * (radius - 0.35), HELIPAD_Y + 0.12, Math.sin(a) * (radius - 0.35));
+    group.add(bulb);
+  }
+
+  // Angin: baling-baling penunjuk arah, sekalian penanda "ini helipad".
+  const sockPole = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.06, 0.08, 3.1, 8),
+    surface({ color: 0xb9c0c8, roughness: 0.6, metalness: 0.4 }),
+  );
+  sockPole.position.set(radius - 1.2, 1.55, radius - 1.2);
+  group.add(sockPole);
+  const sock = new THREE.Mesh(
+    new THREE.ConeGeometry(0.28, 1.1, 8, 1, true),
+    surface({ color: 0xff7a2f, roughness: 0.85, side: THREE.DoubleSide }),
+  );
+  sock.rotation.z = Math.PI / 2;
+  sock.position.set(radius - 0.6, 3.0, radius - 1.2);
+  group.add(sock);
+
+  group.updateMatrixWorld(true);
+  return group;
 }

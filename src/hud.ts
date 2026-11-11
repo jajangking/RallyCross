@@ -26,6 +26,13 @@ export class Hud {
   private readonly rows: HTMLElement[] = [];
   private readonly finishEl = document.getElementById('finish');
   private readonly tvEl = document.getElementById('tv');
+  private readonly heliEl = document.getElementById('heli');
+  private readonly heliStateEl = document.getElementById('heli-state');
+  private readonly heliAltEl = document.getElementById('heli-alt');
+  private readonly heliSpdEl = document.getElementById('heli-spd');
+  private readonly heliLeverEl = document.getElementById('heli-lever');
+  private readonly heliRotorEl = document.getElementById('heli-rotor');
+  private heliStateShown = '';
   private readonly indLeft = document.getElementById('ind-left');
   private readonly indRight = document.getElementById('ind-right');
   private readonly indBeam = document.getElementById('ind-beam');
@@ -47,6 +54,52 @@ export class Hud {
       this.bars.push({ root, fill });
     }
     this.maxLoad = ((mass * 9.81) / 4) * 3.2;
+  }
+
+  /**
+   * Panel penerbangan heli. `null` = sembunyikan (pemain kembali ke mobil).
+   *
+   * Angka yang ditampilkan sengaja sedikit: ketinggian, laju, posisi tuas, dan
+   * putaran rotor. Tuas punya penanda hover di 62 % — tanpa itu pemain harus
+   * menebak-nebak berapa dorongan yang menahan heli di udara.
+   */
+  setHeli(
+    state: {
+      altitude: number;
+      speed: number;
+      climb: number;
+      rotor: number;
+      collective: number;
+      landed: boolean;
+    } | null,
+  ) {
+    const el = this.heliEl;
+    if (!el) return;
+    el.classList.toggle('hide', state === null);
+    if (!state) return;
+    const alt = Math.max(0, state.altitude);
+    if (this.heliAltEl) this.heliAltEl.textContent = String(Math.round(alt));
+    if (this.heliSpdEl) this.heliSpdEl.textContent = String(Math.round(state.speed * 3.6));
+    const fill = (bar: HTMLElement | null, fraction: number) => {
+      const inner = bar?.firstElementChild as HTMLElement | null;
+      // `style` bisa kosong di DOM tiruan (boot check) — jangan sampai HUD
+      // melempar error hanya karena itu.
+      if (inner?.style) inner.style.width = `${Math.round(Math.min(1, Math.max(0, fraction)) * 100)}%`;
+    };
+    fill(this.heliLeverEl, state.collective);
+    fill(this.heliRotorEl, state.rotor);
+    const label = state.landed
+      ? 'DI TANAH'
+      : state.climb > 1.2
+        ? 'MENANJAK'
+        : state.climb < -1.2
+          ? 'TURUN'
+          : 'MELAYANG';
+    if (this.heliStateShown !== label) {
+      this.heliStateShown = label;
+      if (this.heliStateEl) this.heliStateEl.textContent = label;
+      el.dataset.state = label.toLowerCase();
+    }
   }
 
   /** Turn-signal / hazard / head-light repeaters. */

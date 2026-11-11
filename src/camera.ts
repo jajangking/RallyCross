@@ -43,6 +43,10 @@ export class CameraRig {
   private readonly prevFocus = new THREE.Vector3();
   private hasFocus = false;
   private readonly aerial = { active: false, wait: 11, held: 0, limit: 5, cut: false };
+  /** Kamera heli pemain sudah pernah dipasang (biar frame pertama tidak melesat). */
+  private hasHeliEye = false;
+  /** fov khusus heli — terpisah supaya `fovBase` mobil tidak ikut berubah. */
+  private heliFov = 62;
   /** Gambar udara dipaksa terus (mis. selama bendera kuning). */
   private forcedAerial = false;
 
@@ -145,6 +149,60 @@ export class CameraRig {
     this.look.copy(this.desiredLook);
     this.camera.position.copy(this.pos);
     this.camera.lookAt(this.look);
+  }
+
+  /**
+   * Kamera heli pemain: mengikuti dari belakang-atas dengan pegas halus.
+   *
+   * Ditaruh di belakang **arah hadap** heli (bukan arah gerak), supaya saat
+   * heli terbang menyamping pemain tetap melihat ke mana hidungnya menunjuk —
+   * itu yang dibutuhkan untuk mendarat. Jarak & tinggi ikut kecepatan: makin
+   * cepat, makin jauh kamera ditarik (dan fov ikut melebar) supaya terbang
+   * cepat terasa cepat.
+   */
+  updateHeli(dt: number, position: THREE.Vector3, yaw: number, speed: number, landed: boolean) {
+    const back = clamp(11 + speed * 0.22, 11, 19);
+    const high = clamp(4.6 + speed * 0.05, 4.6, 7.4);
+    this.desiredPos.set(
+      position.x - Math.sin(yaw) * back,
+      position.y + high,
+      position.z - Math.cos(yaw) * back,
+    );
+    this.desiredLook.copy(position).addScaledVector(up, 1.2);
+    this.desiredLook.x += Math.sin(yaw) * 6;
+    this.desiredLook.z += Math.cos(yaw) * 6;
+
+    if (!this.hasHeliEye) {
+      this.pos.copy(this.desiredPos);
+      this.look.copy(this.desiredLook);
+      this.hasHeliEye = true;
+    } else {
+      const k = 1 - Math.exp(-(landed ? 6 : 4.2) * dt);
+      this.pos.lerp(this.desiredPos, k);
+      this.look.lerp(this.desiredLook, 1 - Math.exp(-6 * dt));
+    }
+    // Jangan menembus tanah saat heli mendarat.
+    if (this.pos.y < 0.8) this.pos.y = 0.8;
+    this.camera.position.copy(this.pos);
+    this.camera.lookAt(this.look);
+    const targetFov = clamp(62 + speed * 0.5, 62, 76);
+    this.heliFov += (targetFov - this.heliFov) * (1 - Math.exp(-3 * dt));
+    this.camera.fov = this.heliFov;
+    this.camera.updateProjectionMatrix();
+  }
+
+  /** Kamera heli pemain sedang dipakai? */
+  get heliActive(): boolean {
+    return this.hasHeliEye;
+  }
+
+  /** Keluar dari kamera heli: kembalikan fov ke setelan mobil. */
+  releaseHeli() {
+    this.hasHeliEye = false;
+    this.heliFov = 62;
+    // Fov chase dikembalikan ke setelan mobil (updateHeli tidak menyentuhnya).
+    this.camera.fov = this.fovBase;
+    this.camera.updateProjectionMatrix();
   }
 
   /**

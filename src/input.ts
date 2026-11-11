@@ -19,6 +19,8 @@ export interface InputActions {
   gui(): void;
   ai(): void;
   spectate(): void;
+  /** Masuk/keluar heli pemain (tombol F). */
+  heli(): void;
 }
 
 interface SliderOpts {
@@ -111,7 +113,7 @@ class TouchSlider {
   }
 }
 
-type TouchKey = 'hand';
+type TouchKey = 'hand' | 'up' | 'down' | 'fwd' | 'back' | 'bankL' | 'bankR' | 'yawL' | 'yawR';
 
 export interface LightControls {
   left: boolean;
@@ -129,12 +131,30 @@ export class Input {
   readonly lights: LightControls = { left: false, right: false, hazard: false, headlights: false };
 
   private readonly keys = new Set<string>();
-  private readonly touch: Record<TouchKey, boolean> = { hand: false };
+  private readonly touch: Record<TouchKey, boolean> = {
+    hand: false,
+    up: false,
+    down: false,
+    fwd: false,
+    back: false,
+    bankL: false,
+    bankR: false,
+    yawL: false,
+    yawR: false,
+  };
+
+  /** Tuas kolektif heli (0..1). Naik/turun menggeser tuas, tidak pegas balik. */
+  private heliLever = 0.62;
+  /** Sedang menerbangkan heli? Diatur `main` saat tombol F ditekan. */
+  flying = false;
+  /** Ada tombol sentuh (layar HP)? Kalau ya, slider gas/rem jadi tuas heli. */
+  private readonly touchPad: boolean;
   private gearBtn: HTMLButtonElement | null = null;
   private gearShown: GearDirection | null = null;
   private lampButtons: HTMLButtonElement[] = [];
   private aiButton: HTMLButtonElement | null = null;
   private tvButton: HTMLButtonElement | null = null;
+  private heliButton: HTMLButtonElement | null = null;
 
   private steer: TouchSlider | null = null;
   private gas: TouchSlider | null = null;
@@ -147,6 +167,7 @@ export class Input {
         'ontouchstart' in window ||
         new URLSearchParams(location.search).has('touch'));
 
+    this.touchPad = this.isTouch;
     if (this.isTouch) document.body.classList.add('is-touch');
 
     window.addEventListener('keydown', (e) => this.onKeyDown(e));
@@ -181,6 +202,14 @@ export class Input {
   }
 
   /** Status tombol TV (tonton AI vs AI). */
+  /** Nyalakan/matikan tampilan tombol heli di layar sentuh. */
+  setFlying(on: boolean) {
+    this.flying = on;
+    this.heliButton?.classList.toggle('on', on);
+    this.heliButton?.setAttribute('aria-pressed', String(on));
+    if (typeof document !== 'undefined') document.body.classList.toggle('is-heli', on);
+  }
+
   setSpectate(on: boolean) {
     const btn = this.tvButton;
     if (!btn) return;
@@ -230,6 +259,14 @@ export class Input {
         this.actions.ai();
       });
       this.aiButton.addEventListener('contextmenu', (e) => e.preventDefault());
+    }
+    this.heliButton = document.querySelector<HTMLButtonElement>('#lampbar button[data-heli]');
+    if (this.heliButton) {
+      this.heliButton.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        this.actions.heli();
+      });
+      this.heliButton.addEventListener('contextmenu', (e) => e.preventDefault());
     }
     this.tvButton = document.querySelector<HTMLButtonElement>('#lampbar button[data-tv]');
     if (this.tvButton) {
@@ -311,6 +348,9 @@ export class Input {
       case 'KeyL':
         this.toggleHeadlights();
         break;
+      case 'KeyF':
+        this.actions.heli();
+        break;
     }
   }
 
@@ -374,6 +414,54 @@ export class Input {
     this.syncGearButton();
   }
 
+  /**
+   * Tuas + kemudi heli untuk frame ini.
+   *
+   * - **W / S** menggeser tuas kolektif (naik/turun) — tuasnya **tetap** di
+   *   posisi terakhir, seperti heli sungguhan; lepas tombol bukan berarti jatuh.
+   * - **A / D** = pedal anti-torsi (putar badan).
+   * - **panah** = stik siklik: atas hidung turun (maju), bawah hidung naik
+   *   (mengerem/mundur), kiri/kanan miring (geser samping).
+   * Di layar sentuh: gas/rem menggeser tuas, setir memutar badan, dan tombol di
+   * `#heli-pad` menggerakkan siklik.
+   */
+  heliInput(dt = 1 / 60): { collective: number; yaw: number; pitch: number; roll: number } {
+    const k = this.keys;
+    const up = k.has('KeyW') || this.touch.up || (this.touchPad && (this.gas?.value ?? 0) > 0.2);
+    const down = k.has('KeyS') || this.touch.down || (this.touchPad && (this.brake?.value ?? 0) > 0.2);
+    const lift = (up ? 1 : 0) - (down ? 1 : 0);
+    this.heliLever = clamp(this.heliLever + lift * 0.62 * dt, 0, 1);
+
+    const yaw = clamp(
+      (k.has('KeyD') || this.touch.yawR ? 1 : 0) -
+        (k.has('KeyA') || this.touch.yawL ? 1 : 0) +
+        (this.steer ? this.steer.value : 0),
+      -1,
+      1,
+    );
+    const pitch = clamp(
+      (k.has('ArrowUp') || this.touch.fwd ? 1 : 0) - (k.has('ArrowDown') || this.touch.back ? 1 : 0),
+      -1,
+      1,
+    );
+    const roll = clamp(
+      (k.has('ArrowRight') || this.touch.bankR ? 1 : 0) -
+        (k.has('ArrowLeft') || this.touch.bankL ? 1 : 0),
+      -1,
+      1,
+    );
+    return { collective: this.heliLever, yaw, pitch, roll };
+  }
+
+  /** Setel tuas langsung (dipakai HUD/test & saat masuk heli lagi). */
+  setHeliLever(value: number) {
+    this.heliLever = clamp(value, 0, 1);
+  }
+
+  get heliLeverValue(): number {
+    return this.heliLever;
+  }
+
   update(dt = 1 / 60) {
     const k = this.keys;
 
@@ -392,6 +480,19 @@ export class Input {
 
     // Gas and brake are independent pedals now: the brake never turns into
     // reverse, that is what the manual R gear is for.
+    // Selama menerbangkan heli, pedal mobil tidak boleh ikut bergerak.
+    if (this.flying) {
+      this.gas?.update(dt, this.touch.up ? 1 : 0, KEY_GAS_ATTACK);
+      this.brake?.update(dt, this.touch.down ? 1 : 0, KEY_BRAKE_ATTACK);
+      this.state.throttle = 0;
+      this.state.brake = 1;
+      this.state.steer = 0;
+      this.state.handbrake = true;
+      this.gas?.render();
+      this.brake?.render();
+      this.steer?.render();
+      return;
+    }
     this.state.throttle = clamp(gas, 0, 1);
     this.state.brake = clamp(brake, 0, 1);
     this.state.steer = this.steer ? this.steer.value : steerKey;

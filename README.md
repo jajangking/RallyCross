@@ -37,7 +37,19 @@ Semua input **analog/proporsional** — bukan tombol on/off:
 | Tonton **AI vs AI** — 6 mobil, kamera TV | `V` | tombol **TV** (kiri atas) |
 | Panel tuning | `G` | tombol **⚙** (kiri atas) |
 | **AI autopilot on/off** | `P` | tombol **AI** (kiri atas) |
+| **Naik/turun heli** (terbang sendiri) | `F` | tombol **HELI** (kiri atas) |
 | Ulangi balapan (grid + lap) | `R` | — |
+
+Saat menerbangkan heli (`F`), tombolnya berganti arti:
+
+| Aksi | Keyboard | Sentuh |
+|---|---|---|
+| Naik / turun (tuas kolektif) | `W` / `S` | slider GAS / REM, atau tombol **NAIK** / **TURUN** |
+| Maju / mengerem di udara (hidung turun/naik) | `↑` / `↓` | tombol **⇡** / **⇣** |
+| Miring kiri / kanan | `←` / `→` | tombol **⇠** / **⇢** |
+| Putar badan (pedal anti-torsi) | `A` / `D` | tombol **⟲** / **⟳** (atau slider setir) |
+| Kembali ke mobil | `F` | tombol **HELI** |
+| Heli kembali ke landasan | `R` | — |
 
 Cara kerjanya:
 
@@ -50,7 +62,7 @@ Cara kerjanya:
 
 Panel lil-gui di kanan atas berisi semua parameter handling + preset **Tarmac / Gravel / Ice**. Semua perubahan langsung terasa (live), tanpa reload.
 
-> Debug handle: `window.rc` → `{ car, world, cfg, input, pilot, auto, setAutopilot, cameraRig, renderer, scene, snap() }`.
+> Debug handle: `window.rc` → `{ car, world, cfg, input, pilot, auto, setAutopilot, cameraRig, heli, playerHeli, heliFlight, setFlying, renderer, scene, snap() }`.
 
 ## Struktur
 
@@ -65,6 +77,7 @@ src/
 │  ├─ CarDamageVisual.ts    # penyok di bodi + roda yang copot
 │  ├─ CarSuspension.ts      # per roda: wishbone, tie rod, coilover, rem
 │  ├─ CarLights.ts          # lampu rem, sein, mundur, lampu utama
+│  ├─ HeliFlight.ts         # heli pemain: rotor, sikap, mendarat (tanpa DOM)
 │  └─ carParts.ts           # material + helper geometri (link, pegas)
 ├─ world/
 │  ├─ style.ts              # material PBR, matahari, langit, environment map
@@ -358,6 +371,27 @@ Cara sutradaranya bekerja (`src/camera/BroadcastDirector.ts`):
 - Overlay **`● LIVE · T3`** muncul saat kamera siaran aktif. Mau lihat semua sudutnya? Panel → *Camera* → **kamera berikutnya** (sutradara otomatis berhenti 6 detik, lalu jalan lagi).
 - Di mode tontonan, kamera mengikuti **pemimpin balapan**; kalau kedua mobil berdekatan (< 30 m), titik bidiknya digeser ke tengah supaya duelnya tetap satu frame.
 
+## Heli pemain: terbang & mendarat
+
+Selain heli siaran, ada **helikopter kedua yang kamu terbangkan sendiri**. Ia menunggu di **helipad** di dalam infield (`x 40, z −30`, lingkaran 6,4 m dengan marka **H**, cincin putih, delapan lampu tepi, dan baling-baling penunjuk angin). Tekan **`F`** kapan saja — bahkan di tengah balapan — dan kamera pindah ke ekor heli. Tekan **`F`** lagi untuk kembali ke mobil.
+
+**Fisikanya bukan animasi.** Badan heli adalah *rigid body* dinamis di dunia Rapier yang sama dengan mobil: gravitasi, dorongan rotor, hambatan badan, dan tumbukan (pagar, tribun, truk) semuanya dari solver. Dorongan rotor diarahkan ke **sumbu-atas badan**, jadi mencondongkan hidung otomatis membuat heli melaju — tidak ada "kecepatan maju" yang di-set langsung. Skid-nya mendarat di tanah dengan gesekan sungguhan, jadi mendarat miring akan membuatnya meluncur.
+
+Pembagian tugas yang disengaja (`src/vehicle/HeliFlight.ts`):
+
+- **Terjemahan (x, y, z) = fisika penuh.** Massa 950 kg, dorongan rotor maksimum 1,6 × berat, sehingga **hover ada di tuas ±62 %** (ditandai garis tipis di bar TUAS pada HUD).
+- **Sikap (pitch/roll/yaw) = kemudi pemain**, diintegrasikan dengan laju terbatas (kemiringan penuh butuh ±0,3 s). Simulasi torsi penuh untuk rotor memang lebih "benar", tapi tanpa fly-by-wire hasilnya heli yang jatuh sendiri — jadi inersianya ada, kestabilannya dijaga.
+- **Rotor punya tenggang.** Putaran rotor mengikuti tuas dengan laju naik/turun berbeda, jadi heli tidak melompat begitu tuas ditarik (dan tetap berputar pelan saat mesin hidup).
+- **Efek tanah**: di bawah 3 m dorongan menguat 9 % (bantalan udara) — mendarat jadi lebih lembut. Di atas **150 m** rotor kehilangan tenaga (udara menipis).
+- **Translational lift**: makin cepat terbang, makin besar angkatnya — sama seperti heli sungguhan, yang justru lebih ringan di penerbangan jelajah daripada saat hover. Ditambah **gubernur rotor** yang menutup 55 % kehilangan angkat saat badan miring, supaya pemain tidak perlu mengejar tuas setiap kali mau maju. Kecepatan puncak ±**112 km/j**, laju panjat ±**8 m/s**.
+- **Auto-hover saat ditinggal.** Keluar dengan `F` di tengah udara dan heli tetap melayang di tempatnya (tidak jatuh menimpa trek balapan), jadi kamu bisa naik lagi kapan saja. Heli yang masih terparkir di landasan tidak pernah lepas landas sendiri.
+
+**Pendaratan.** Turunkan tuas (S) sampai di bawah titik hover, dan heli turun dengan laju yang terkendali; begitu skid menyentuh tanah ia berhenti dan badan diratakan otomatis. Kalau terlalu keras, ia memantul dan bisa meluncur — sama seperti heli sungguhan. `R` saat menerbangkan heli mengembalikan **heli ke landasan** (sekaligus me-reset mobilnya).
+
+HUD menampilkan panel **HELI** khusus selama menerbangkan: ketinggian (m), laju (km/h), status (`DI TANAH` / `MELAYANG` / `MENANJAK` / `TURUN`), posisi tuas kolektif (dengan penanda hover), dan putaran rotor. Kamera mengikuti dari belakang-atas dengan pegas halus, ditarik makin jauh dan fov makin lebar saat laju naik. Bayangan blob ikut mengecil dan memudar seiring ketinggian.
+
+Batas dunia: pagar tak terlihat (±380 m dari pusat arena) menahan heli di dalam peta, jadi tidak ada cara "terbang keluar" dari arena.
+
 ## Grid 6 mobil (5 lawan AI)
 
 Di grid ada **enam mobil**: punyamu + **lima lawan AI** dengan nama dan warna sendiri (Krisna, Bagas, Sari, Damar, Nadia). Balapan **10 lap** (bisa diubah di panel → *Lawan*, 1–20), dan semuanya memakai `VehiclePhysics` yang sama — ban, suspensi, lompatan, dan tabrakan diperlakukan sama seperti mobilmu, jadi tidak ada hax. Yang berbeda cuma pengetahuan garis balap: lajur (`laneOffset` ±0,6/±1,2 m), jarak di grid (18–32 m), dan `pace` 0,97–1,0.
@@ -601,7 +635,8 @@ terbalik beberapa puluh meter kemudian.
 - **kerusakan**: mengemudi normal tidak merusak apa pun; tabrak tembok di 92 km/h → bodi 41 %, mesin 22 %, 1 ban pecah, 1 roda copot; roda copot kehilangan seluruh grip sementara ban pecah masih 29 %; kerusakan **tidak** pulih sendiri selama balapan; mesin mati = bergeser 0,00 m dalam 4 s; reset memperbaiki semuanya; kerusakan bisa dimatikan lewat setelan; setelan 0,5× memangkas kerusakan (bodi 71 % vs 41 %); ban depan pecah menarik setir 2,1°; **dua lap AI tanpa satu pun kerusakan** (tidak ada false positive); dan lima lawan memakai model kerusakan yang sama
 - **tekstur permukaan**: peta aspal/gravel lengkap (warna + normal + kekasaran) dengan ukuran benar, aspal gelap netral, **jalur ban memang lebih gelap** dari bagian tengah trek (55 vs 72), gravel hangat (135/125/103) dengan 5 % batu terang dan 9 % batu gelap, normal map gravel dominan menghadap atas (128/128/254), peta bisa diulang **tanpa jahitan** (selisih tepi 0,2 vs 0,5 antar kolom), dan hasilnya deterministik (dua kali bikin = piksel identik)
 - **percikan gravel**: jatah per frame dihormati, butir hidup setelah dilempar, lalu jatuh dan habis (tidak menggantung di udara), dan berhenti di permukaan (tidak menembus tanah)
-- **helikopter**: menjaga jarak 18–40 m dari mobil pada ketinggian > 20 m, ikut mengikuti mobil sepanjang putaran (< 60 m), posisi kameranya valid, dan dalam 90 detik siaran TV ia mendapat ≥ 5 shot udara yang masing-masing 4–7,5 detik (≈ 30 % dari waktu siaran), kameranya menempel di lensa heli, dan tanpa heli siaran tetap 100 % kamera darat
+- **heli pemain**: helipad berdiri di tanah kosong (32 m dari garis tengah trek, tidak menabrak apron pit/paddock); terparkir diam tanpa tenggelam; tuas penuh → 30 m dalam 6 s tanpa miring sendiri; tuas di titik hover menahan ketinggian (geser 0,0 m); hidung turun → 70 m dalam 6 s ke arah hidung dan tidak menjatuhkan heli; stik kanan memiringkan 30°, pedal memutar 143° dalam 2 s; **mendarat** kembali di landasan tanpa menembus tanah dan tanpa meluncur; **auto-hover** menahan heli 14 s setelah ditinggal; pagar arena menahannya (z 432 → tidak pernah lepas peta); 60 s input acak tanpa NaN dan tanpa tembus tanah; `R` mengembalikan heli ke landasan. Sambungannya ke permainan diuji `npm run check:boot`: `F` menaikkan heli, kamera mengikuti dari belakang-atas, model mengikuti pose fisika, mendarat lagi, dan `F` kedua mengembalikan ke mobil
+- **helikopter siaran**: menjaga jarak 18–40 m dari mobil pada ketinggian > 20 m, ikut mengikuti mobil sepanjang putaran (< 60 m), posisi kameranya valid, dan dalam 90 detik siaran TV ia mendapat ≥ 5 shot udara yang masing-masing 4–7,5 detik (≈ 30 % dari waktu siaran), kameranya menempel di lensa heli, dan tanpa heli siaran tetap 100 % kamera darat
 
 `npm run check:browser` (opsional, perlu Chromium) menambah cek UI: bukaan gas/rem 1:1 (50 %, 85 %, 70 %), gas dan rem saling independen, rem tidak menambah throttle, semuanya menutup saat dilepas, slider setir balik ke tengah, tombol D/R memindah gigi + HUD menampilkan `R` saat mundur, rem tidak membalikkan mobil, dan arah setir cocok dengan layar. Untuk detail visual: lampu rem menguat saat pedal ditekan, sein kiri berkedip sementara kanan tetap mati, repeater HUD menyala, lampu utama menyala, lampu mundur menyala di gigi R, empat hub suspensi berada di rentang travel, dan setir berputar.
 
@@ -613,7 +648,8 @@ Status terakhir: **semua lolos**.
 2. **Suara** — mesin, ban, tabrakan (WebAudio), plus kamera shake.
 3. **AI** — keputusan joker berbasis waktu tempuh (sekarang berbasis lalu lintas + riwayat), dan menyalip di tikungan yang lebih tajam (sekarang dibatasi lengkung < 0,03).
 4. **Multiplayer** — Rapier headless di server (kode fisika sudah DOM-free).
-5. **Optimasi mobile lanjutan** — LOD, KTX2, dan tekstur atlas (draw call sudah ditekan ke ~55 untuk seluruh arena).
+5. **Heli: kestabilan & misi** — sekarang sikap heli dikemudikan pemain (bukan torsi rotor penuh); berikutnya bisa ditambah *fly-by-wire* dengan PID sikap, kerusakan rotor, dan misi (mis. angkut korban ke ambulans).
+6. **Optimasi mobile lanjutan** — LOD, KTX2, dan tekstur atlas (draw call sudah ditekan ke ~55 untuk seluruh arena).
 
 ## Catatan lingkungan
 

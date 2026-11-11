@@ -33,7 +33,8 @@ import {
   makeVergeMaps,
 } from '../src/world/surface-maps';
 import { surface, surfaceFrom, PALETTE } from '../src/world/style';
-import { Helicopter } from '../src/world/Heli';
+import { createHelipad, Helicopter, HELIPAD_RADIUS } from '../src/world/Heli';
+import { HeliFlight, HELI_HOVER, type HeliInput, SKID_Y } from '../src/vehicle/HeliFlight';
 import { createSunRig } from '../src/world/style';
 import { CameraRig } from '../src/camera';
 import { TRACK_BLOCKERS, type PropBox } from '../src/world/track';
@@ -2494,6 +2495,257 @@ async function run() {
       pullCar.damage.steerScale < 1,
       'setir jadi lebih tumpul saat ban depan rusak',
       `sudut setir ${(pullCar.damage.steerScale * 100).toFixed(0)} %`,
+    );
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* heli yang bisa diterbangkan                                         */
+  /* ------------------------------------------------------------------ */
+  console.log('\n— heli pemain: terbang & mendarat —');
+
+  // Landasan harus benar-benar di tanah kosong: bukan di aspal, bukan di
+  // apron pit (x 8–19), bukan di paddock (x ≥ 30). Kalau sirkuit berubah
+  // bentuk, cek ini yang menangkap landasan yang tiba-tiba menimpa trek.
+  const PAD_X = 40;
+  const PAD_Z = -30;
+  let padClearance = Infinity;
+  for (const sample of TRACK.main) {
+    padClearance = Math.min(
+      padClearance,
+      Math.hypot(sample.pos.x - PAD_X, sample.pos.z - PAD_Z),
+    );
+  }
+  check(
+    padClearance > HELIPAD_RADIUS + 2,
+    'helipad berdiri di tanah kosong, bukan di atas aspal',
+    `${padClearance.toFixed(1)} m dari garis tengah trek (landasan ${HELIPAD_RADIUS} m)`,
+  );
+  // Kotak yang tidak boleh disentuh landasan: apron pit (0,4–10,6 m dari tepi
+  // aspal, sisi dalam) dan apron paddock 64 × 38 m di (62, 4).
+  const overlaps = (x0: number, x1: number, z0: number, z1: number) =>
+    PAD_X + HELIPAD_RADIUS > x0 &&
+    PAD_X - HELIPAD_RADIUS < x1 &&
+    PAD_Z + HELIPAD_RADIUS > z0 &&
+    PAD_Z - HELIPAD_RADIUS < z1;
+  const hitsPit = overlaps(8.4, 18.6, -2, 62);
+  const hitsPaddock = overlaps(30, 94, -15, 23);
+  check(
+    !hitsPit && !hitsPaddock,
+    'landasan tidak menabrak apron pit maupun apron paddock',
+    `x ${(PAD_X - HELIPAD_RADIUS).toFixed(1)}–${(PAD_X + HELIPAD_RADIUS).toFixed(1)} m · z ${(PAD_Z - HELIPAD_RADIUS).toFixed(1)}–${(PAD_Z + HELIPAD_RADIUS).toFixed(1)} m`,
+  );
+  const padGroup = createHelipad();
+  check(
+    padGroup.children.length >= 10 && padGroup.name === 'helipad',
+    'landasan punya marka H, cincin, dan lampu tepi',
+    `${padGroup.children.length} bagian`,
+  );
+
+  const heliRig = (startY = -SKID_Y) => {
+    const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    world.timestep = DT;
+    const ground = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+    world.createCollider(
+      RAPIER.ColliderDesc.cuboid(700, 0.5, 700)
+        .setTranslation(0, -0.5, 0)
+        .setFriction(1)
+        .setRestitution(0),
+      ground,
+    );
+    const flight = new HeliFlight(world, new THREE.Vector3(PAD_X, startY, PAD_Z), 0);
+    /** Tes yang mulai di udara: rotor sudah berputar, bukan mesin baru dinyalakan. */
+    const prime = (collective: number) => {
+      flight.collective = collective;
+      flight.rotor = 1;
+    };
+    const run = (seconds: number, cmd: Partial<HeliInput> = {}) => {
+      const full: HeliInput = { collective: 0, yaw: 0, pitch: 0, roll: 0, ...cmd };
+      for (let i = 0; i < Math.round(seconds / DT); i++) {
+        flight.step(DT, full);
+        world.step();
+      }
+      return flight.snapshot();
+    };
+    return { flight, world, run, prime };
+  };
+
+  // 1. Duduk di landasan: rotor diam, skid menapak, tidak tenggelam.
+  {
+    const rig = heliRig();
+    const s = rig.run(4, { collective: 0 });
+    check(
+      Math.abs(s.altitude) < 0.2 && s.landed && s.rotor < 0.05,
+      'helikopter terparkir diam di landasan (tidak tenggelam, rotor mati)',
+      `ketinggian ${(s.altitude * 1000).toFixed(0)} mm · rotor ${(s.rotor * 100).toFixed(0)} %`,
+    );
+  }
+
+  // 2. Angkat: tuas penuh harus benar-benar meninggalkan landasan.
+  {
+    const rig = heliRig();
+    const s = rig.run(6, { collective: 1 });
+    check(
+      s.altitude > 12,
+      'tuas penuh menerbangkan heli ke atas',
+      `${s.altitude.toFixed(1)} m setelah 6 s`,
+    );
+    check(
+      Math.abs(s.pitch) < 0.05 && Math.abs(s.roll) < 0.05,
+      'naik tegak: badan tidak miring sendiri tanpa input',
+      `pitch ${(s.pitch * 57.3).toFixed(1)}° · roll ${(s.roll * 57.3).toFixed(1)}°`,
+    );
+  }
+
+  // 3. Hover: tuas di titik hover menahan ketinggian.
+  {
+    const rig = heliRig(30);
+    rig.prime(HELI_HOVER);
+    rig.run(5, { collective: HELI_HOVER });
+    const a0 = rig.flight.altitude;
+    const s = rig.run(8, { collective: HELI_HOVER });
+    check(
+      Math.abs(s.altitude - a0) < 3,
+      'tuas di titik hover menahan heli melayang di tempat',
+      `${a0.toFixed(1)} m → ${s.altitude.toFixed(1)} m (geser ${(s.altitude - a0).toFixed(1)} m)`,
+    );
+    check(
+      Math.abs(s.climb) < 1 && s.rotor > 0.85,
+      'rotor berputar penuh saat hover',
+      `panjat ${s.climb.toFixed(2)} m/s · rotor ${(s.rotor * 100).toFixed(0)} %`,
+    );
+  }
+
+  // 4. Maju: hidung turun membuat heli benar-benar melaju (dorongan rotor,
+  // bukan kecepatan yang di-set langsung).
+  {
+    const rig = heliRig(40);
+    rig.prime(HELI_HOVER);
+    rig.run(5, { collective: HELI_HOVER });
+    const x0 = rig.flight.position.x;
+    const z0 = rig.flight.position.z;
+    const s = rig.run(6, { collective: HELI_HOVER, pitch: 1 });
+    const moved = Math.hypot(s.position.x - x0, s.position.z - z0);
+    check(moved > 25, 'hidung turun membuat heli melaju ke depan', `${moved.toFixed(0)} m dalam 6 s`);
+    check(
+      s.position.z > z0 + 20 && Math.abs(s.position.x - x0) < 6,
+      'arah laju sesuai arah hidung (bukan menyamping)',
+      `Δz ${(s.position.z - z0).toFixed(0)} m · Δx ${(s.position.x - x0).toFixed(1)} m`,
+    );
+    check(s.altitude > 25, 'terbang maju tidak menjatuhkan heli', `${s.altitude.toFixed(0)} m`);
+  }
+
+  // 5. Miring & berputar.
+  {
+    const rig = heliRig(30);
+    rig.prime(HELI_HOVER);
+    rig.run(3, { collective: HELI_HOVER });
+    const s = rig.run(1, { collective: HELI_HOVER, roll: 1 });
+    check(
+      s.roll < -0.4,
+      'stik kanan memiringkan badan ke kanan',
+      `roll ${(s.roll * 57.3).toFixed(0)}°`,
+    );
+    const y0 = rig.flight.yaw;
+    rig.run(2, { collective: HELI_HOVER, yaw: 1 });
+    check(
+      rig.flight.yaw - y0 > 2,
+      'pedal anti-torsi memutar badan heli',
+      `${((rig.flight.yaw - y0) * 57.3).toFixed(0)}° dalam 2 s`,
+    );
+  }
+
+  // 6. Mendarat: tuas diturunkan, heli turun pelan lalu berhenti di landasan.
+  {
+    const rig = heliRig(14);
+    rig.prime(HELI_HOVER);
+    rig.run(4, { collective: HELI_HOVER });
+    let lowest = 0;
+    for (let i = 0; i < 60 * 25; i++) {
+      rig.flight.step(DT, { collective: 0.3, yaw: 0, pitch: 0, roll: 0 });
+      rig.world.step();
+      lowest = Math.min(lowest, rig.flight.altitude);
+    }
+    const s = rig.flight.snapshot();
+    check(s.landed && Math.abs(s.altitude) < 0.45, 'heli bisa mendarat kembali di landasan', `ketinggian ${(s.altitude * 100).toFixed(2)} m`);
+    check(
+      lowest > -0.35 && Math.hypot(rig.flight.body.linvel().x, rig.flight.body.linvel().z) < 0.6,
+      'mendarat tidak menembus tanah dan tidak meluncur',
+      `terendah ${(lowest * 100).toFixed(0)} mm · sisa laju ${Math.hypot(rig.flight.body.linvel().x, rig.flight.body.linvel().z).toFixed(2)} m/s`,
+    );
+  }
+
+  // 7. Dibesarkan dari udara: heli melayang sendiri, tidak jatuh menimpa trek.
+  {
+    const rig = heliRig(45);
+    rig.prime(HELI_HOVER);
+    const a0 = rig.flight.altitude;
+    for (let i = 0; i < 60 * 14; i++) {
+      rig.flight.step(DT, { collective: 0, yaw: 0, pitch: 0, roll: 0 }, true);
+      rig.world.step();
+    }
+    const s = rig.flight.snapshot();
+    check(
+      Math.abs(s.altitude - a0) < 6 && s.altitude > 30,
+      'heli yang ditinggal pemain melayang otomatis (auto-hover)',
+      `${a0.toFixed(0)} m → ${s.altitude.toFixed(0)} m`,
+    );
+    check(rig.flight.body.linvel().y > -1.5, 'auto-hover tidak menjatuhkan heli', `panjat ${rig.flight.body.linvel().y.toFixed(2)} m/s`);
+  }
+
+  // 8. Pagar arena: heli tidak bisa terbang keluar dunia tanpa batas.
+  {
+    const rig = heliRig(60);
+    rig.prime(0.62);
+    for (let i = 0; i < 60 * 70; i++) {
+      rig.flight.step(DT, { collective: 1, yaw: 0, pitch: 1, roll: 0 });
+      rig.world.step();
+    }
+    const p = rig.flight.body.translation();
+    check(
+      Math.abs(p.x) < 460 && Math.abs(p.z) < 460,
+      'pagar tak terlihat menahan heli di dalam arena',
+      `x ${p.x.toFixed(0)} · z ${p.z.toFixed(0)} · y ${p.y.toFixed(0)}`,
+    );
+  }
+
+  // 9. 60 detik input acak: tidak ada NaN, tidak tembus tanah, tidak keluar HK.
+  {
+    const rig = heliRig();
+    let seed = 1337;
+    const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    let held: HeliInput = { collective: 0.62, yaw: 0, pitch: 0, roll: 0 };
+    let minAlt = Infinity;
+    let maxAlt = -Infinity;
+    let finite = true;
+    for (let i = 0; i < 60 * 60; i++) {
+      if (i % 45 === 0) {
+        held = { collective: rand(), yaw: rand() * 2 - 1, pitch: rand() * 2 - 1, roll: rand() * 2 - 1 };
+      }
+      rig.flight.step(DT, held);
+      rig.world.step();
+      const t = rig.flight.body.translation();
+      if (!Number.isFinite(t.x + t.y + t.z)) finite = false;
+      minAlt = Math.min(minAlt, rig.flight.altitude);
+      maxAlt = Math.max(maxAlt, rig.flight.altitude);
+    }
+    check(finite, 'input acak 60 detik tidak menghasilkan NaN', 'semua koordinat terbatas');
+    check(minAlt > -0.4, 'heli tidak pernah tembus tanah', `terendah ${(minAlt * 100).toFixed(0)} cm`);
+    check(maxAlt < 260, 'ketinggian tetap di bawah langit-langit', `tertinggi ${maxAlt.toFixed(0)} m`);
+  }
+
+  // 10. Reset (tombol R saat terbang) mengembalikan heli ke landasan.
+  {
+    const rig = heliRig();
+    rig.run(6, { collective: 1, pitch: 0.5 });
+    rig.flight.reset();
+    rig.run(1, { collective: 0 });
+    const s = rig.flight.snapshot();
+    check(
+      Math.abs(s.position.x - PAD_X) < 0.2 &&
+        Math.abs(s.position.z - PAD_Z) < 0.2 &&
+        Math.abs(s.altitude) < 0.3,
+      'reset mengembalikan heli ke landasan',
+      `posisi ${s.position.x.toFixed(1)}, ${s.position.z.toFixed(1)} · ketinggian ${s.altitude.toFixed(2)} m`,
     );
   }
 

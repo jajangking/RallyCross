@@ -792,7 +792,8 @@ body.is-touch #lampbar {
   }
 
   #lampbar button.ai,
-  #lampbar button[data-tv] {
+  #lampbar button[data-tv],
+  #lampbar button[data-heli] {
     font-size: 9px;
     letter-spacing: 0.02em;
   }
@@ -871,4 +872,183 @@ body.is-touch #lampbar {
     overflow: hidden;
     text-overflow: ellipsis;
   }
+}
+
+/* ---------------------------------------------------------------- heli HUD */
+
+/*
+ * Panel penerbangan: hanya muncul saat menerbangkan heli, jadi tidak menambah
+ * beban visual saat balapan biasa.
+ */
+#heli {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 4px;
+  min-width: 168px;
+  font-variant-numeric: tabular-nums;
+}
+
+#heli.hide {
+  display: none;
+}
+
+.heli-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.heli-tag {
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.16);
+  font-weight: 700;
+}
+
+#heli-state {
+  color: var(--dim);
+}
+
+#heli[data-state='melayang'] #heli-state {
+  color: #7bd7ff;
+}
+
+#heli[data-state='menanjak'] #heli-state {
+  color: #8ef0a8;
+}
+
+#heli[data-state='turun'] #heli-state {
+  color: #ffc46b;
+}
+
+.heli-row {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.heli-row b {
+  font-size: 22px;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.heli-row em {
+  font-style: normal;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.heli-gauge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: var(--dim);
+  text-transform: uppercase;
+}
+
+.heli-bar {
+  position: relative;
+  width: 108px;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.heli-bar i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #59c2ff, #b8f0ff);
+  transition: width 90ms linear;
+}
+
+#heli-rotor i {
+  background: linear-gradient(90deg, #7fe0a0, #d8ffe6);
+}
+
+/* Penanda tuas untuk hover (62 %) — garis tipis di atas bar. */
+.heli-bar .hover-mark {
+  position: absolute;
+  left: 62%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 4px rgba(255, 255, 255, 0.9);
+}
+
+/* ------------------------------------------------------- kontrol heli (HP) */
+
+#heli-pad {
+  display: none;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+body.is-heli #heli-pad {
+  display: flex;
+}
+
+/* Setir diganti tombol siklik: memutar badan sudah ada di pad. */
+body.is-heli #touch .ctl.steer {
+  display: none;
+}
+
+#heli-pad .hp-row {
+  display: flex;
+  gap: 6px;
+}
+
+#heli-pad button {
+  width: 52px;
+  height: 46px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(14, 18, 22, 0.5);
+  color: #eef4fa;
+  font-size: 18px;
+  line-height: 1;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  backdrop-filter: blur(6px);
+}
+
+#heli-pad button.wide {
+  width: 82px;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+}
+
+#heli-pad button.on {
+  background: rgba(120, 210, 255, 0.35);
+  border-color: rgba(160, 225, 255, 0.8);
+}
+
+/* Saat menerbangkan heli, HUD mobil (kecepatan, gigi, sein, beban roda)
+   disembunyikan: panel HELI sudah memuat semua angka yang dibutuhkan. */
+body.is-heli #speedo,
+body.is-heli #gear,
+body.is-heli #lamps,
+body.is-heli #bars,
+body.is-heli #telem {
+  display: none;
 }
