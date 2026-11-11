@@ -595,7 +595,7 @@ async function run() {
   // Tidak ada reset otomatis lagi: mobil yang terbalik dibiarkan, dan AI hanya
   // melepas pedal sampai rodanya kembali ke bawah.
   check(upright > 0.5, 'the AI never ends up on its roof', `lowest tilt ${upright.toFixed(2)}`);
-  check(pilot.bestLap < 70, 'AI lap time is sane', `best ${pilot.bestLap.toFixed(1)} s`);
+  check(pilot.bestLap < 45, 'AI lap time is sane', `best ${pilot.bestLap.toFixed(1)} s`);
 
   /* ---- dinding: tidak boleh ada yang berdiri di atas aspal ---- */
   {
@@ -690,9 +690,7 @@ async function run() {
       'AI memperlambat diri saat mobilnya rusak',
       `pace ${healthyPace.toFixed(3)} → ${rival.pilot.options.pace.toFixed(3)}`,
     );
-    // Sirkuit ini punya tikungan cepat r 80 m dengan run-off lebar, jadi ban
-    // kempes memang membuat mobil melebar sampai ~7 m sebelum dinding.
-    check(wornExcess < 8, 'AI dengan ban kempes tetap di dalam trek', `maks ${wornExcess.toFixed(1)} m lewat tepi`);
+    check(wornExcess < 4, 'AI dengan ban kempes tetap di dalam trek', `maks ${wornExcess.toFixed(1)} m lewat tepi`);
     const stillHurt =
       rival.car.damage.puncturedCount > 0 ||
       rival.car.damage.lostCount > 0 ||
@@ -758,9 +756,7 @@ async function run() {
 
   /* ---- menyalip di tikungan: cari celah, jangan keluar trek ---- */
   {
-    // Jarak 0 putaran ada di belakang garis start: T1 (kanan r 26) masuk di
-    // ±184 m, puncaknya ±200 m.
-    const cornerAt = 200; // T1
+    const cornerAt = 120; // T1
     const corner = TRACK.at(cornerAt);
     const startPose = TRACK.at(cornerAt - 55);
     const run = (allowCorner: boolean) => {
@@ -819,9 +815,7 @@ async function run() {
     );
     // Kontrol: di dalam tikungan yang sama, izin menyalip memang yang membuat
     // bedanya — tanpa izin, AI sama sekali tidak menggeser lajur.
-    // T8 (kiri r 35, masuk ±764 m): tikungan yang cukup lebar untuk memilih
-    // sisi dalam, tapi cukup sempit untuk butuh izin khusus.
-    const cornerPose = TRACK.at(780);
+    const cornerPose = TRACK.at(118);
     const decide = (allowCorner: boolean) => {
       const p = new AutoPilot(TRACK.main, TRACK.joker, {
         jokerPolicy: 'never',

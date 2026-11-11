@@ -543,7 +543,7 @@ export interface TrackProp {
 export const TRACK_PROPS: TrackProp[] = (() => {
   const stands = [
     { name: 'tribun utama', distance: START_DIST - 16, side: -1, extra: 6.5, length: 34, rows: 7 },
-    { name: 'tribun kedua', distance: START_DIST + 46, side: -1, extra: 7.5, length: 20, rows: 5 },
+    { name: 'tribun kedua', distance: START_DIST + 74, side: -1, extra: 7.5, length: 20, rows: 5 },
   ];
   const props: TrackProp[] = stands.map((st) => {
     // Sama persis dengan `makeStand()`: baris 1,5 m ke belakang, atap di
@@ -1188,7 +1188,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
 
   for (const stand of [
     { length: 34, rows: 7, distance: START_DIST - 16, extra: 6.5 },
-    { length: 20, rows: 5, distance: START_DIST + 46, extra: 7.5 },
+    { length: 20, rows: 5, distance: START_DIST + 74, extra: 7.5 },
   ]) {
     place(makeStand(stand.length, stand.rows), pointAt(MAIN, stand.distance), -1, stand.extra);
   }
