@@ -32,7 +32,7 @@ export class LapCounter {
     // kehilangan beberapa sentimeter tiap putaran.
     const last = path[path.length - 1];
     this.length = last.distance + last.pos.distanceTo(path[0].pos);
-    this.index = this.nearest(path, at ?? this.startPoint(), 0);
+    this.index = this.globalNearest(at ?? this.startPoint());
     this.odometer = path[this.index].distance - startDistance;
     this.prevDistance = path[this.index].distance;
     this.prevPos.copy(path[this.index].pos);
@@ -46,7 +46,7 @@ export class LapCounter {
   /** Kembali ke garis start (dipakai saat balapan diulang dari grid). */
   reset(at?: THREE.Vector3) {
     this.lap = 0;
-    this.index = this.nearest(this.path, at ?? this.startPoint(), 0);
+    this.index = this.globalNearest(at ?? this.startPoint());
     this.odometer = this.path[this.index].distance - this.startDistance;
     this.prevDistance = this.path[this.index].distance;
     this.prevPos.copy(this.path[this.index].pos);
@@ -83,9 +83,11 @@ export class LapCounter {
     this.prevDistance = distance;
     this.prevPos.copy(pos);
     this.odometer += delta;
-    // `+ 1e-6`: odometer bisa mendarat persis di batas putaran, dan sisa
-    // pembulatan float bisa membuat satu putaran tidak terhitung.
-    this.lap = Math.max(0, Math.floor((this.odometer + 1e-6) / this.length));
+    // Toleransi 5 cm: odometer itu penjumlahan float dari jarak antar-sample,
+    // jadi setelah beberapa putaran ia bisa mendarat beberapa milimeter di
+    // bawah garis walau mobil sudah lewat. Tanpa toleransi ini satu putaran
+    // bisa hilang hanya karena galat pembulatan.
+    this.lap = Math.max(0, Math.floor((this.odometer + 0.05) / this.length));
   }
 
   private startPoint(): THREE.Vector3 {
@@ -100,6 +102,27 @@ export class LapCounter {
       }
     }
     return best.pos;
+  }
+
+  /**
+   * Sample terdekat di **seluruh** putaran. Dipakai saat patokan belum ada:
+   * `nearest()` hanya memindai ±65 sampel di sekitar indeks terakhir, dan itu
+   * bisa berhenti di garis start kalau garisnya lebih jauh dari ~90 m dari
+   * ujung array spline.
+   */
+  private globalNearest(p: THREE.Vector3): number {
+    let best = 0;
+    let bestD = Infinity;
+    for (let i = 0; i < this.path.length; i++) {
+      const dx = this.path[i].pos.x - p.x;
+      const dz = this.path[i].pos.z - p.z;
+      const d = dx * dx + dz * dz;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
   }
 
   private nearest(path: PathSample[], p: THREE.Vector3, around: number): number {

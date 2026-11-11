@@ -1,6 +1,6 @@
 # RallyCross — Vehicle Physics Prototype
 
-Prototipe **mobil rally 3D di web** (three.js + Rapier) dengan gaya **fotorealistis PBR** (material standar/PBR, environment map dari langitnya sendiri, bayangan matahari asli, tribun penuh penonton): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel **779,6 m** hasil hitungan dengan dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **grid 6 mobil** (kamu + 5 lawan AI) yang balapan 10 lap, **jejak ban + asap/debu** dari ban yang benar-benar selip, papan klasemen langsung, **10 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI, dan **helikopter siaran** yang gambar udaranya ikut masuk ke siaran TV. Belum ada multiplayer.
+Prototipe **mobil rally 3D di web** (three.js + Rapier) dengan gaya **fotorealistis PBR** (material standar/PBR, environment map dari langitnya sendiri, bayangan matahari asli, tribun penuh penonton): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel **940 m dengan 12 tikungan** hasil hitungan, dua lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **grid 6 mobil** (kamu + 5 lawan AI) yang balapan 10 lap, **jejak ban + asap/debu** dari ban yang benar-benar selip, papan klasemen langsung, **15 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI, dan **helikopter siaran** yang gambar udaranya ikut masuk ke siaran TV. Belum ada multiplayer.
 
 ## Jalanin
 
@@ -101,24 +101,29 @@ scripts/
 
 ## Arena rallycross
 
-Satu putaran **779,6 m**, searah jarum jam, garis start/finish di `(0, 0)` menghadap `+Z`. Seluruh geometrinya **dihitung**, bukan digambar tangan: `src/world/circuit.ts` membangun tiap tikungan dari busur (pusat, radius, sudut awal/akhir, lebar), menyambungnya dengan lurus, lalu menyampelnya jadi satu spline Catmull-Rom 1,5 m.
+Satu putaran **940,1 m** dengan **12 tikungan**, searah jarum jam, garis start/finish di `(0, 0)` menghadap `+Z`. Seluruh geometrinya **dihitung**, bukan digambar tangan: `src/world/circuit.ts` menyimpan poligon 12 sudut (`LAYOUT`, dicari lewat `design/final.py`) beserta radius fillet tiap sudut, memotong tiap sudut dengan busur sungguhan (tangent kontinu, tanpa patahan), lalu menyampelnya jadi satu spline Catmull-Rom 1,5 m. Arah putarannya **bolak-balik** — ada tiga kombinasi esses — dan radiusnya berkisar 15–80 m, jadi tidak ada bagian yang terasa seperti oval.
 
-| Bagian | Isi |
+| Tikungan | Isi (jarak = meter setelah garis start) |
 | --- | --- |
-| Main straight | 140 m (`x = 0`, z −100 → +40), grid 6 kotak, gantry + 5 lampu start, grandstand + race control di sisi luar |
-| T1 | kanan **r = 46 m**, melebar jadi apron gravel di sisi luar |
-| Gravel straight atas | ±55 m gravel dengan *bump* (yump) 0,5 m di `(90, 88)` |
-| T2 | kanan **r = 70 m** (pusat `(138, 16)`); **joker** memotong di dalamnya |
-| Lurus timur | 96 m (`x = 208`, z 16 → −80) |
-| T3 | kanan **r = 60 m** |
-| Lurus bawah | 250 m ke barat, dengan **lompatan**: crest **1,15 m** di `(105, −140)`, lip pendek di kedua sisi |
-| T4 | kanan **r = 30 m** (pusat `(30, −110)`), kembali ke garis start |
+| Lurus start | 175 m (`x = 0`, z −95 → +80), terlebar di sirkuit (18 m): grid 6 kotak, gantry + 5 lampu start, grandstand + race control di sisi luar, jalur pit di sisi dalam |
+| T1 | 80 m — kanan **r = 26 m** (76°) |
+| T2 | 192 m — kanan **r = 30 m** (88°), keluar langsung ke gravel |
+| T3–T4 | 295 m — esses: kiri **r = 18 m** (38°) lalu kanan **r = 32 m** (72°), hanya 27 m antar titik masuk |
+| T5 | 401 m — kiri **r = 72 m** (42°), sweeper cepat yang bisa hampir flat |
+| T6 | 479 m — kanan **r = 80 m** (78°), busur terpanjang (109 m); permukaan gravel |
+| T7 | 591 m — kanan **r = 22 m** (50°) |
+| T8–T9 | 644 m — kiri **r = 15 m** (45°) lalu kanan **r = 35 m** (95°) |
+| T10 | 729 m — kiri **r = 30 m** (40°) |
+| T11 | 759 m — kanan **r = 40 m** (96°); **joker** memotong busurnya |
+| T12 | 835 m — kiri **r = 40 m** (30°), keluar ke lurus start |
 
-### Joker lap: busur kedua di dalam T2
+Lebar trek 14,5–18 m (paling lebar di lurus start, paling sempit di esses T3–T4 dan T8–T9) dan permukaannya berganti dua kali: gravel 215–330 m (T2–T3–T4) dan 470–600 m (T6–T7). Ada **dua lompatan**: yump **0,55 m** di 268 m (gravel) dan lompatan **1,03 m** di 150 m (sesudah T1) — tanjakannya lurus dengan bibir tajam, turunannya melengkung, jadi mobil benar-benar melayang (di uji headless: 0,6–1,3 s di udara).
 
-Joker bukan jalan pintas acak — ia **busur dengan pusat yang sama** dengan T2: jalur utama r = 70 m, joker menyusut 18 m ke dalam (r = 52 m) di bagian tengah, lalu kembali mulus ke r = 70 m di kedua ujung (profil *smoothstep* selebar 30° di tiap ujung). Karena selisihnya nol di titik belah (304 m) dan titik gabung (414 m) — dan kemiringannya juga nol — kedua ujungnya menyambung **tangensial**: sudut masuk 0,1°, sudut keluar 1,3° (audit trek mengukur ini setiap build).
+### Joker lap: busur kedua di dalam T11
 
-Hasilnya: jalur **7,0 m lebih pendek** dari garis balap, dengan **4,3 m ruang kosong** ke tepi aspal utama di bagian tengah — cukup untuk memasang dinding pemisah, jadi mobil joker dan mobil garis balap benar-benar terpisah. Joker tetap **lebih lambat** (±4 s per putaran, karena radius dalam 52 m dan permukaan gravel di mulut joker): persis seperti joker di rallycross sungguhan — bukan jalan pintas, tapi pilihan taktis untuk dapat udara bersih saat terhalang.
+Joker bukan jalan pintas acak — ia **busur dengan pusat yang sama** dengan T11 (pusat `(24,9, −131,9)`): jalur utama r = 40 m, joker menyusut **16 m** ke dalam (r = 24 m) di bagian tengah, lalu kembali mulus ke r = 40 m di kedua ujung (profil *smoothstep* selebar 24° di tiap ujung). Karena selisihnya nol di titik belah (864 m) dan titik gabung (931 m) — dan kemiringannya juga nol — kedua ujungnya menyambung **tangensial**: sudut masuk 20,7°, sudut keluar 20,2° (audit trek mengukur ini setiap build).
+
+Hasilnya jalur **3,5 m lebih pendek** dari garis balap, dengan ruang kosong di tengahnya cukup untuk memasang dinding pemisah, jadi mobil joker dan mobil garis balap benar-benar terpisah. Tapi joker tetap **lebih lambat — 3,1 s per putaran** (48,6 s vs 51,7 s di uji headless) karena radius dalamnya 24 m dan mulut joker-nya gravel: persis seperti joker di rallycross sungguhan — bukan jalan pintas, tapi pilihan taktis untuk dapat udara bersih saat terhalang.
 
 Permukaan: aspal μ = 1,00, gravel μ = 0,62, rumput μ = 0,55. Barrier keliling solid setinggi pagar pengaman (3,4 m) supaya mobil tidak bisa terlempar keluar arena; ban bekas, kerb merah-putih, banner sponsor, 6 tiang lampu, paddock (tenda + truk servis) ada di infield, dan 190 pohon mengelilingi venue.
 
@@ -294,13 +299,13 @@ Jadi AI-nya **bukan animasi atau jalur rekaman**: setiap frame ia membaca posisi
 
 Yang **belum** ada (jujur): keputusan joker belum memperhitungkan **waktu tempuh** kedua rute (hanya lalu lintas + riwayat lap), AI belum belajar garis balap sendiri (yang naik hanya pace, asumsi grip, dan kerapian lajur), dan belum memprediksi gerakan lawan (hanya jarak & kecepatan saat ini; menyalip di tikungan masih memakai celah yang terlihat sekarang, bukan lintasan lawan 1 detik ke depan). Itu semua bisa ditambahkan tanpa menyentuh fisika.
 
-Hasil uji headless dengan fisika asli di trek baru (**779,6 m**): **31,7 s** satu putaran di garis balap utama, **35,6 s** kalau lewat joker, **0,0 m** keluar tepi trek, dan bodi tetap 100 %. Dengan ban kempes (satu roda), AI tetap di dalam trek (0,0 m) karena perencana kecepatannya ikut turun (`pace` 1,000 → 0,899).
+Hasil uji headless dengan fisika asli di trek baru (**940,1 m**): **47,2 s** satu putaran di garis balap utama, **51,7 s** kalau lewat joker, **0,0 m** keluar tepi trek, dan bodi tetap 100 %. Lima lawan menyelesaikan satu putaran dalam 48,1–52,4 s (selisih 4,3 s), semua mobil tetap di dalam trek dan tidak ada yang rusak karena bersih-bersih sendiri. Dengan ban kempes (satu roda), AI memperlambat diri (`pace` turun) dan tetap di dalam trek — paling melebar 6,9 m di sisi luar T6 yang run-off-nya memang lebar.
 
-**Kenapa AI-nya sekarang selamat di trek baru:** perencana kecepatan sengaja memakai asumsi cengkeraman **di bawah** batas ban (`gripTarmac` 8,0 m/s², `gripGravel` 4,8 m/s² — ban aslinya ±10/6). Versi sebelumnya memakai 9,0/5,6 dan mobil masuk tikungan tepat di ambang, lalu melebar 20 m begitu permukaannya berganti di tengah tikungan. Skala nalar AI (`tuningFor`) juga diturunkan: grip 7,8–8,2 dan rem 7,4–7,8, jadi nalar 0 % → 37,00 s, 50 % → 36,07 s, 100 % → 35,38 s — **monoton menurun**, bukan lagi terbalik seperti waktu grip taksirannya 9,0.
+**Kenapa AI-nya sekarang selamat di trek baru:** perencana kecepatan sengaja memakai asumsi cengkeraman **di bawah** batas ban (`gripTarmac` 8,0 m/s², `gripGravel` 4,8 m/s² — ban aslinya ±10/6). Versi sebelumnya memakai 9,0/5,6 dan mobil masuk tikungan tepat di ambang, lalu melebar 20 m begitu permukaannya berganti di tengah tikungan. Skala nalar AI (`tuningFor`) tetap grip 7,8–8,2 dan rem 7,4–7,8; sirkuit barunya lebih panjang dan lebih teknis, jadi waktu putarnya ikut naik tapi urutannya tetap benar: nalar 0 % → 52,3 s, 100 % → 50,3 s — **monoton menurun**, bukan lagi terbalik seperti waktu grip taksirannya 9,0.
 
 ## Kamera TV (broadcast)
 
-Ada **10 kamera** tetap di pinggir trek: satu di **luar setiap tikungan**, satu menara di **garis start**, dan — baru — **kamera di tengah lurus panjang** tiap ±110 m (`LURUS 1…6`). Kamera tikungan berdiri di ketinggian 6,5–9 m, di belakang pagar pengaman, jadi mobilnya terlihat datang menghadap kamera lalu lewat — sudut yang dipakai siaran sungguhan.
+Ada **15 kamera** tetap di pinggir trek: satu di **luar hampir setiap tikungan** (12), satu menara di **garis start**, dan **kamera di lurus panjang** (`LURUS …`). Kamera tikungan berdiri di ketinggian 6,5–9 m, di belakang pagar pengaman, jadi mobilnya terlihat datang menghadap kamera lalu lewat — sudut yang dipakai siaran sungguhan.
 
 Kamera **garis start** sengaja dinaikkan ke **15 m** dan digeser 2 m lebih jauh ke luar: di ketinggian 9 m menara itu tertutup atap **tribun utama** (garis pandang ke garis start menembus bangku penonton), sedangkan di 15 m pandangannya bersih. Uji `smoke` memeriksa ini secara geometri — kotak pembatas (OBB, sudah diputar sesuai yaw) tiap tribun dan gedung race control diuji terhadap segmen kamera → titik bidik, jadi kalau ada kamera yang kembali tertutup, build langsung merah.
 

@@ -451,25 +451,28 @@ const main = async () => {
     buildTrackVisuals(scene, true);
     const p = TRACK.at(TRACK.start);
     // komposisi gambar udara heli
+    // Sudut pandang 3/4 dari barat laut: grid, gantry, dan T1 terlihat semua.
     render(
       scene,
       {
-        eye: new THREE.Vector3(p.pos.x + 24, p.pos.y + 26, p.pos.z - 24),
-        target: new THREE.Vector3(p.pos.x, p.pos.y, p.pos.z),
-        fov: 46,
+        eye: new THREE.Vector3(p.pos.x - 46, p.pos.y + 34, p.pos.z - 34),
+        target: new THREE.Vector3(p.pos.x + 12, p.pos.y + 1, p.pos.z + 34),
+        fov: 48,
       },
       SKY,
       'shots/arena-aerial.png',
     );
+    // Dari dalam infield, sejajar lurus start.
     render(
       scene,
-      { eye: new THREE.Vector3(p.pos.x - 18, 9, p.pos.z + 16), target: new THREE.Vector3(p.pos.x, 1.5, p.pos.z), fov: 55 },
+      { eye: new THREE.Vector3(p.pos.x + 20, 5.5, p.pos.z - 26), target: new THREE.Vector3(p.pos.x - 2, 1.6, p.pos.z + 22), fov: 58 },
       SKY,
       'shots/arena-ground.png',
     );
+    // Peta seluruh sirkuit: pusat (94, -51), bentang ±365 m.
     render(
       scene,
-      { eye: new THREE.Vector3(66, 190, 210), target: new THREE.Vector3(66, 0, 10), fov: 55 },
+      { eye: new THREE.Vector3(94, 205, 148), target: new THREE.Vector3(94, 0, -55), fov: 86 },
       SKY,
       'shots/arena-map.png',
     );

@@ -365,115 +365,310 @@ export function slicePath(
 /* ------------------------------------------------------------------ */
 
 /**
- * Lydden-Hill-flavoured layout: ~900 m, two jumps, a gravel-out and a gravel-in
- * section, a hairpin and a joker lap through the top-right complex.
+ * Tata letak sirkuit: poligon tertutup 12 sudut, masing-masing dengan radius
+ * fillet. Sirkuitnya **bolak-balik arah** (tiga kombinasi esses) dan radiusnya
+ * bervariasi dari 15 m sampai 80 m, jadi tidak ada kesan oval sama sekali.
  *
- * The start/finish line is at (0, 0) facing +Z, which is where the car spawns.
- */
-/**
- * A compact World-RX style arena: ~500 m lap, mixed surface, two jumps, a
- * gravel-out and a gravel-in section, a tight hairpin onto the main straight
- * and a joker lane that dives inside the fast top-right complex.
+ *   jarak  tikungan  arah    radius  sudut
+ *      80  T1        kanan     26 m   76°
+ *     192  T2        kanan     30 m   88°
+ *     295  T3        kiri      18 m   38°   ┐ esses sempit: mobil harus
+ *     322  T4        kanan     32 m   72°   ┘ berganti arah dua kali cepat
+ *     401  T5        kiri      72 m   42°   sweeper cepat, hampir flat
+ *     479  T6        kanan     80 m   78°   tikungan terpanjang (gravel)
+ *     591  T7        kanan     22 m   50°
+ *     644  T8        kiri      15 m   45°   ┐ hairpin kiri lalu kanan
+ *     657  T9        kanan     35 m   95°   ┘
+ *     729  T10       kiri      30 m   40°
+ *     759  T11       kanan     40 m   96°   ← joker memotong busur ini
+ *     835  T12       kiri      40 m   30°   keluar ke lurus start (95 m)
  *
- * `START` is where the cars line up. The lap is driven clockwise (north up the
- * main straight, east across the top, south down the far side, west along the
- * bottom), so the infield is always on the `side` (+1) hand.
+ * Total 940 m. Garis start/finish di (0, 0) menghadap +Z, jadi infield selalu
+ * di sisi `side` (+1) — sama seperti sebelumnya, semua prop tetap searah.
  */
-export const MAIN_NODES: PathNode[] = [
-  /* ---- straight utama 150 m, terlebar di sirkuit (17,5-18 m) ---- */
-  { x: 0, z: -100, width: 17.5 },
-  { x: 0, z: -80, width: 17.5 },
-  { x: 0, z: -50, width: 18 },
-  { x: 0, z: -20, width: 18 },
-  { x: 0, z: 0, width: 18 },
-  { x: 0, z: 20, width: 17.5 },
-  { x: 0, z: 40, width: 17.5 },
-  { x: 2.3, z: 54.2, width: 16 },
-  { x: 8.8, z: 67.0, width: 16 },
-  { x: 19.0, z: 77.2, width: 16 },
-  { x: 31.8, z: 83.7, width: 16 },
-  { x: 46.0, z: 86.0, width: 15.5, surface: 'gravel' },
-  { x: 62, z: 88, width: 15.5 },
-  { x: 76, z: 88, width: 15.5, y: 0.3 },
-  { x: 90, z: 88, width: 15.5, y: 0.5 },
-  { x: 104, z: 88, width: 15.5, y: 0.15 },
-  { x: 122, z: 87, width: 15.5 },
-  { x: 138, z: 86, width: 15.5, surface: 'tarmac' },
-  { x: 159.6, z: 82.6, width: 16.5 },
-  { x: 179.1, z: 72.6, width: 16.5 },
-  { x: 194.6, z: 57.1, width: 16.5 },
-  { x: 204.6, z: 37.6, width: 16.5 },
-  { x: 208.0, z: 16.0, width: 16.5 },
-  { x: 208, z: 0, width: 16.5 },
-  { x: 208, z: -30, width: 17 },
-  { x: 208, z: -55, width: 17 },
-  { x: 208, z: -80, width: 17 },
-  { x: 205.1, z: -98.5, width: 17 },
-  { x: 196.5, z: -115.3, width: 17 },
-  { x: 183.3, z: -128.5, width: 17 },
-  { x: 166.5, z: -137.1, width: 17 },
-  { x: 148.0, z: -140.0, width: 17 },
-  { x: 136, z: -140, width: 17 },
-  { x: 122, z: -140, width: 17 },
-  { x: 112, z: -140, width: 17, y: 0.2 },
-  { x: 108, z: -140, width: 17, y: 0.75 },
-  { x: 105, z: -140, width: 17, y: 1.15 },
-  { x: 102, z: -140, width: 17, y: 0.7 },
-  { x: 95, z: -140, width: 16.5, y: 0.1 },
-  { x: 80, z: -140, width: 16.5 },
-  { x: 60, z: -140, width: 16 },
-  { x: 44, z: -140, width: 15.5 },
-  { x: 36, z: -140, width: 15 },
-  { x: 30.0, z: -140.0, width: 15 },
-  { x: 20.7, z: -138.5, width: 15 },
-  { x: 12.4, z: -134.3, width: 15 },
-  { x: 5.7, z: -127.6, width: 15.5 },
-  { x: 1.5, z: -119.3, width: 16 },
-  { x: 0.0, z: -110.0, width: 16 },
+export interface LayoutPoint {
+  x: number;
+  z: number;
+  /** Radius fillet sudut ini, meter. 0 = titik lewat (lurus). */
+  radius: number;
+}
+
+export const LAYOUT: readonly LayoutPoint[] = [
+  // Ring dimulai di titik masuk T13, ±105 m **sebelum** garis start/finish, jadi
+  // jarak 0 putaran berada jauh di belakang grid (sama seperti versi lama).
+  { x: 0, z: -95.0, radius: 40 },
+  { x: 0, z: 0, radius: 0 }, // garis start/finish di tengah lurus 175 m
+  { x: 0, z: 100.36, radius: 26 },
+  { x: 123.25, z: 131.09, radius: 30 },
+  { x: 148.45, z: 43.23, radius: 18 },
+  { x: 185.14, z: 16.56, radius: 32 },
+  { x: 157.46, z: -68.64, radius: 72 },
+  { x: 205.3, z: -176.08, radius: 80 },
+  { x: 142.66, z: -221.59, radius: 22 },
+  { x: 93.68, z: -209.37, radius: 15 },
+  { x: 54.16, z: -233.12, radius: 35 },
+  { x: 26.52, z: -176.45, radius: 30 },
+  { x: -31.98, z: -150.4, radius: 40 },
 ];
 
 /**
- * Joker lap: tali busur di dalam T2 — lebih pendek dari garis balap, tapi
- * sempit, gravel, dan radiusnya jauh lebih kecil (jadi lebih lambat).
- * Keputusannya jadi taktis: jalan pintas lawan lompatan/trafik, dibayar dengan
- * kecepatan keluar tikungan.
+ * Ganti tiap sudut poligon dengan busur radius-nya (fillet), lalu sampel
+ * busur + lurus tiap `spacing` meter. Semua hitungan, tanpa gambar tangan —
+ * jadi kemiringan tangen di sambungan busur/lurus selalu kontinu.
  */
+function filletLayout(points: readonly LayoutPoint[], spacing = 2.4): Array<{ x: number; z: number }> {
+  const n = points.length;
+  const corners = points.map((_, i) => {
+    const p0 = points[(i - 1 + n) % n];
+    const p1 = points[i];
+    const p2 = points[(i + 1) % n];
+    const v1x = p1.x - p0.x;
+    const v1z = p1.z - p0.z;
+    const v2x = p2.x - p1.x;
+    const v2z = p2.z - p1.z;
+    const l1 = Math.hypot(v1x, v1z);
+    const l2 = Math.hypot(v2x, v2z);
+    const u1x = v1x / l1;
+    const u1z = v1z / l1;
+    const u2x = v2x / l2;
+    const u2z = v2z / l2;
+    const turn = Math.atan2(u1x * u2z - u1z * u2x, Math.max(-1, Math.min(1, u1x * u2x + u1z * u2z)));
+    const r = p1.radius;
+    if (Math.abs(turn) < 1e-6 || r <= 0) {
+      return { turn: 0, r: 0, ax: p1.x, az: p1.z, bx: p1.x, bz: p1.z, cx: p1.x, cz: p1.z };
+    }
+    const t = r * Math.tan(Math.abs(turn) / 2);
+    const ax = p1.x - u1x * t;
+    const az = p1.z - u1z * t;
+    const bx = p1.x + u2x * t;
+    const bz = p1.z + u2z * t;
+    const sgn = turn > 0 ? 1 : -1;
+    // pusat busur: dari titik tangent, tegak lurus arah masuk, ke sisi belokan
+    const cx = ax - u1z * sgn * r;
+    const cz = az + u1x * sgn * r;
+    return { turn, r, ax, az, bx, bz, cx, cz };
+  });
+
+  // cek tabrakan tangent: total panjang tangent dua sudut bersebelahan tidak
+  // boleh melebihi panjang sisi di antaranya
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const edge = Math.hypot(points[j].x - points[i].x, points[j].z - points[i].z);
+    const need =
+      corners[i].r * Math.tan(Math.abs(corners[i].turn) / 2) +
+      corners[j].r * Math.tan(Math.abs(corners[j].turn) / 2);
+    if (need > edge - 0.5) {
+      throw new Error(`tata letak: tangent ${need.toFixed(1)} m > sisi ${edge.toFixed(1)} m (sudut ${i}-${j})`);
+    }
+  }
+
+  const pts: Array<{ x: number; z: number }> = [];
+  for (let i = 0; i < n; i++) {
+    const c = corners[i];
+    if (c.r > 0) {
+      const a = Math.atan2(c.az - c.cz, c.ax - c.cx);
+      const b = Math.atan2(c.bz - c.cz, c.bx - c.cx);
+      let d = b - a;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      const steps = Math.max(2, Math.round((Math.abs(d) * c.r) / spacing));
+      for (let k = 0; k <= steps; k++) {
+        const ang = a + (d * k) / steps;
+        pts.push({ x: c.cx + c.r * Math.cos(ang), z: c.cz + c.r * Math.sin(ang) });
+      }
+    } else {
+      pts.push({ x: c.ax, z: c.az });
+    }
+    const nxt = corners[(i + 1) % n];
+    const last = pts[pts.length - 1];
+    const L = Math.hypot(nxt.ax - last.x, nxt.az - last.z);
+    if (L > 1e-6) {
+      const steps = Math.max(1, Math.round(L / spacing));
+      for (let k = 1; k <= steps; k++) {
+        const t = k / steps;
+        pts.push({ x: last.x + (nxt.ax - last.x) * t, z: last.z + (nxt.az - last.z) * t });
+      }
+    }
+  }
+  // buang titik kembar (sambungan busur ke busur) supaya tangen tidak bergetar
+  const out: Array<{ x: number; z: number }> = [pts[0]];
+  for (const p of pts.slice(1)) {
+    const prev = out[out.length - 1];
+    if (Math.hypot(p.x - prev.x, p.z - prev.z) > 0.05) out.push(p);
+  }
+  if (out.length > 2 && Math.hypot(out[0].x - out[out.length - 1].x, out[0].z - out[out.length - 1].z) < 0.05) out.pop();
+  return out;
+}
+
 /**
- * Joker di dalam T2 — seluruhnya hasil hitungan, bukan gambar tangan.
+ * Lebar trek per jarak (diinterpolasi linear, melingkar). Trek melebar di lurus
+ * start supaya grid 6 mobil leluasa, menyempit di esses dan hairpin.
+ */
+const WIDTHS: ReadonlyArray<{ at: number; width: number }> = [
+  { at: 0, width: 18 },
+  { at: 70, width: 18 },
+  { at: 110, width: 16.5 },
+  { at: 200, width: 16 },
+  { at: 280, width: 15 },
+  { at: 305, width: 14.5 },
+  { at: 340, width: 16 },
+  { at: 400, width: 17 },
+  { at: 470, width: 17 },
+  { at: 540, width: 16 },
+  { at: 600, width: 15 },
+  { at: 640, width: 14.5 },
+  { at: 680, width: 14.5 },
+  { at: 730, width: 15.5 },
+  { at: 780, width: 16.5 },
+  { at: 880, width: 16.5 },
+  { at: 920, width: 17 },
+];
+
+/** Permukaan mulai jarak ini. Dua gravel: keluar esses atas dan sektor T5-T6. */
+const SURFACES: ReadonlyArray<{ at: number; surface: Surface }> = [
+  { at: 0, surface: 'tarmac' },
+  { at: 215, surface: 'gravel' },
+  { at: 330, surface: 'tarmac' },
+  { at: 470, surface: 'gravel' },
+  { at: 600, surface: 'tarmac' },
+];
+
+/**
+ * Lompatan: puncak di `at`. Tanjakan `rise` lurus (bibir tajam, seperti kicker
+ * sungguhan) lalu turun sebagai kurva; mobil harus terlempar, bukan sekadar
+ * menggelinding melewati gundukan.
+ */
+const BUMPS: ReadonlyArray<{ at: number; height: number; rise: number; fall: number }> = [
+  { at: 150, height: 1.05, rise: 8, fall: 5 }, // jump besar, sesudah T1
+  { at: 268, height: 0.55, rise: 6, fall: 3.4 }, // yump kecil di gravel
+];
+
+export const MAIN_NODES: PathNode[] = (() => {
+  const ring = filletLayout(LAYOUT);
+  const n = ring.length;
+  const dist: number[] = [0];
+  for (let i = 1; i <= n; i++) {
+    const a = ring[i - 1];
+    const b = ring[i % n];
+    dist.push(dist[i - 1] + Math.hypot(b.x - a.x, b.z - a.z));
+  }
+  const total = dist[n];
+
+  /** Lebar trek (interpolasi melingkar) pada jarak d. */
+  const widthAt = (d: number): number => {
+    for (let i = 0; i < WIDTHS.length; i++) {
+      const a = WIDTHS[i];
+      const b = WIDTHS[(i + 1) % WIDTHS.length];
+      const bAt = i + 1 === WIDTHS.length ? WIDTHS[0].at + total : b.at;
+      if (d >= a.at && d <= bAt) {
+        const f = bAt - a.at < 1e-6 ? 0 : (d - a.at) / (bAt - a.at);
+        return a.width + (b.width - a.width) * f;
+      }
+    }
+    return WIDTHS[0].width;
+  };
+  const surfaceAt = (d: number): Surface => {
+    let s: Surface = SURFACES[0].surface;
+    for (const seg of SURFACES) {
+      if (d >= seg.at) s = seg.surface;
+    }
+    return s;
+  };
+  const heightAt = (d: number): number => {
+    let y = 0;
+    for (const b of BUMPS) {
+      // jarak melingkar bertanda ke puncak (negatif = masih di tanjakan)
+      let dd = d - b.at;
+      if (dd > total / 2) dd -= total;
+      if (dd < -total / 2) dd += total;
+      if (dd <= 0) y += b.height * Math.max(0, 1 + dd / b.rise);
+      else y += b.height * Math.exp(-(dd * dd) / (2 * b.fall * b.fall));
+    }
+    return y;
+  };
+
+  // jarak garis start/finish di sepanjang putaran (vertex (0, 0))
+  let line = 0;
+  let bestLine = Infinity;
+  for (let i = 0; i < n; i++) {
+    const d2 = ring[i].x * ring[i].x + ring[i].z * ring[i].z;
+    if (d2 < bestLine) {
+      bestLine = d2;
+      line = dist[i];
+    }
+  }
+  /** jarak relatif terhadap garis start/finish, 0..total */
+  const rel = (d: number): number => (((d - line) % total) + total) % total;
+
+  const nodeAt = (x: number, z: number, d: number): PathNode => {
+    const r = rel(d);
+    const node: PathNode = { x, z, width: widthAt(r), surface: surfaceAt(r) };
+    const y = heightAt(r);
+    if (y > 0.005) node.y = y;
+    return node;
+  };
+
+  // Puncak lompatan harus tajam, tapi node di lurus berjarak ~2,4 m — spline
+  // akan menghaluskan crestnya sampai mobil tidak terlempar lagi. Jadi di
+  // sekitar tiap lompatan node dirapatkan jadi ~0,7 m.
+  const nearBump = (d: number): boolean => {
+    const r = rel(d);
+    return BUMPS.some((b) => {
+      let dd = Math.abs(r - b.at);
+      dd = Math.min(dd, total - dd);
+      return dd < 16;
+    });
+  };
+
+  const nodes: PathNode[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = ring[i];
+    const d = dist[i];
+    nodes.push(nodeAt(a.x, a.z, d));
+    const b = ring[(i + 1) % n];
+    const bd = i + 1 < n ? dist[i + 1] : total;
+    const len = bd - d;
+    const dense = nearBump(d) || nearBump(bd);
+    const steps = Math.max(1, dense ? Math.ceil(len / 0.7) : 1);
+    for (let k = 1; k < steps; k++) {
+      const f = k / steps;
+      nodes.push(nodeAt(a.x + (b.x - a.x) * f, a.z + (b.z - a.z) * f, d + len * f));
+    }
+  }
+  return nodes;
+})();
+
+/**
+ * Joker lap di T11 (busur r = 40 m, pusat (24.9, -131.9), 96°): joker memakai
+ * pusat yang sama dengan radius menyusut 16 m ke dalam di bagian tengah, lalu
+ * kembali mulus ke r = 40 di kedua ujungnya (smoothstep → selisih dan
+ * kemiringan nol di titik belah/gabung, jadi menyambung tangensial).
  *
- * Bentuknya **offset dari busur T2 itu sendiri**: jalur utama adalah busur
- * r = 70 m dengan pusat (138, 16); joker memakai pusat yang sama dengan radius
- * yang menyusut sampai 18 m ke dalam (r = 52 m) di bagian tengah, lalu kembali
- * mulus ke r = 70 m di kedua ujung. Karena selisihnya nol di titik belah dan
- * titik gabung (dan kemiringannya juga nol), kedua ujungnya menyambung
- * **tangensial** — tidak ada patahan arah, dan pembalap AI tidak perlu
- * menebak-nebak sudut masuk.
- *
- * Hasilnya jalur yang 7 m lebih pendek dari garis balap, dengan ruang 4 m ke
- * tepi aspal utama di bagian tengah — cukup untuk memasang dinding pemisah,
- * jadi mobil joker dan mobil garis balap benar-benar terpisah.
+ * Efeknya: 4 m lebih pendek, tapi radius efektifnya 24 m (bukan 40 m) dan
+ * separuhnya gravel — jadi lebih lambat. Keputusan joker jadi taktis: jalan
+ * pintas untuk menghindari trafik, dibayar dengan kecepatan keluar.
  */
 export const JOKER_NODES: PathNode[] = (() => {
-  const centre = { x: 138, z: 16 };
-  const radius = 70; // radius busur T2
-  const inset = 18; // berapa meter joker masuk ke dalam
-  const taper = (30 * Math.PI) / 180; // panjang pelebaran di kedua ujung
-  const th0 = Math.PI / 2; // titik belah (138, 86)
-  const th1 = 0; // titik gabung (208, 16)
+  const centre = { x: 24.87, z: -131.93 };
+  const radius = 40; // radius busur T11
+  const inset = 16;
+  const taper = (24 * Math.PI) / 180;
+  const th0 = (-114 * Math.PI) / 180; // titik belah
+  const sweep = (-96 * Math.PI) / 180; // searah busur utama (searah jarum jam)
   const steps = 72;
   const nodes: PathNode[] = [];
   for (let i = 0; i <= steps; i++) {
     const f = i / steps;
-    const th = th0 + (th1 - th0) * f;
+    const th = th0 + sweep * f;
+    // jarak busur dari ujung (meter) → bobot taper
     let w: number | null = null;
-    if (th > th0 - taper) w = (th0 - th) / taper;
-    else if (th < th1 + taper) w = (th - th1) / taper;
-    // smoothstep: selisih dan kemiringannya nol di ujung-ujungnya
+    const arcFromStart = Math.abs(sweep) * radius * f;
+    const arcToEnd = Math.abs(sweep) * radius * (1 - f);
+    if (arcFromStart < taper * radius) w = arcFromStart / (taper * radius);
+    else if (arcToEnd < taper * radius) w = arcToEnd / (taper * radius);
     const d = w === null ? inset : inset * (3 * w * w - 2 * w * w * w);
     const r = radius - d;
     nodes.push({
-      // Tanpa pembulatan: node di sini hanya ~1,4 m berdekatan, jadi selisih
-      // 5 cm pun sudah cukup membuat arah tangen sampel bergetar ±4°.
       x: centre.x + r * Math.cos(th),
       z: centre.z + r * Math.sin(th),
       width: f < 0.2 ? 9.5 : 10,
@@ -482,8 +677,12 @@ export const JOKER_NODES: PathNode[] = (() => {
   }
   return nodes;
 })();
-export const JOKER_START = new THREE.Vector3(138, 0, 86);
-export const JOKER_END = new THREE.Vector3(208, 0, 16);
+export const JOKER_START = new THREE.Vector3(24.87 + 40 * Math.cos((-114 * Math.PI) / 180), 0, -131.93 + 40 * Math.sin((-114 * Math.PI) / 180));
+export const JOKER_END = new THREE.Vector3(
+  24.87 + 40 * Math.cos(((-114 - 96) * Math.PI) / 180),
+  0,
+  -131.93 + 40 * Math.sin(((-114 - 96) * Math.PI) / 180),
+);
 
 /** Start/finish line: centre of the main straight, cars heading +Z. */
 export const START = new THREE.Vector3(0, 0, 0);

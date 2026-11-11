@@ -441,8 +441,21 @@ export function assembleCarModel(
   // shadernya jauh lebih murah. Bodinya tetap di-respray ke warna livery.
   const paint = new THREE.Color(opts.paint ?? DEFAULT_PAINT);
   const convert = (m: THREE.Material): THREE.Material => {
-    if ((m as THREE.MeshStandardMaterial).isMeshStandardMaterial) return m;
     const isPaint = /paint/i.test(m.name);
+    // Material GLB bawaan sudah PBR, jadi tidak perlu diganti — tapi bodinya
+    // tetap **harus** di-respray. Dulu cabang ini balik lebih awal, jadi
+    // `Car_Paint` (faktor warna zaitun dari model) tidak pernah disentuh dan
+    // semua mobil rival tampil dengan warna yang sama.
+    if ((m as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+      if (isPaint) {
+        const body = m as THREE.MeshStandardMaterial;
+        body.color.copy(paint);
+        body.metalness = Math.min(body.metalness, 0.35);
+        body.roughness = Math.max(body.roughness, 0.32);
+        body.needsUpdate = true;
+      }
+      return m;
+    }
     const out = surfaceFrom(m, isPaint ? paint : undefined);
     if (isPaint) {
       out.side = THREE.FrontSide;
