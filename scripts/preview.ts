@@ -247,6 +247,7 @@ const render = (root: THREE.Object3D, cam: Cam, sky: [number, number, number], p
   const m4 = new THREE.Matrix4();
   const instanceMatrix = new THREE.Matrix4();
 
+  let depthBias = 1;
   const triangle = (p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, col: Rgba, alpha: number) => {
     // Tidak ada clipper: buang saja segitiga yang menyentuh bidang dekat.
     if (p0.z > -0.02 || p1.z > -0.02 || p2.z > -0.02) return;
@@ -278,7 +279,11 @@ const render = (root: THREE.Object3D, cam: Cam, sky: [number, number, number], p
         if (w0 < 0 || w1 < 0 || w2 < 0) continue;
         const iz = w0 * iz0 + w1 * iz1 + w2 * iz2;
         if (iz <= 0) continue;
-        const z = 1 / iz;
+        // `polygonOffset` (tanah & bahu trek, lihat `grassMaterial()`): rasterizer
+        // ini memakai float32 dan tanpa depth bias bawaan GPU, jadi rumput yang
+        // cuma 5 cm di bawah aspal menang tipis di kejauhan dan jalan terlihat
+        // tertutup hijau. Paksa geser ke belakang seperti yang dilakukan WebGL.
+        const z = (1 / iz) * depthBias;
         const idx = y * W + x;
         if (z >= depth[idx]) continue;
         depth[idx] = z;
@@ -307,6 +312,7 @@ const render = (root: THREE.Object3D, cam: Cam, sky: [number, number, number], p
     const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
     if (!material) return;
     const { color: base, alpha } = materialColor(material);
+    depthBias = (material as unknown as { polygonOffset?: boolean }).polygonOffset ? 1.0002 : 1;
     const index = geometry.getIndex();
     const count = (mesh as THREE.InstancedMesh).isInstancedMesh
       ? (mesh as THREE.InstancedMesh).count

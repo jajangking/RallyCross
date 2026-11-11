@@ -1,6 +1,6 @@
 # RallyCross — Vehicle Physics Prototype
 
-Prototipe **mobil rally 3D di web** (three.js + Rapier) dengan gaya **fotorealistis PBR** (material standar/PBR, environment map dari langitnya sendiri, bayangan matahari asli, tribun penuh penonton): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel **478 m** dengan tiga lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **grid 6 mobil** (kamu + 5 lawan AI) yang balapan 10 lap, **jejak ban + asap/debu** dari ban yang benar-benar selip, papan klasemen langsung, **11 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI, dan **helikopter siaran** yang gambar udaranya ikut masuk ke siaran TV. Belum ada multiplayer.
+Prototipe **mobil rally 3D di web** (three.js + Rapier) dengan gaya **fotorealistis PBR** (material standar/PBR, environment map dari langitnya sendiri, bayangan matahari asli, tribun penuh penonton): fisika chassis + suspensi raycast, model Honda Civic EG6, dan satu **arena rallycross lengkap** — sirkuit campuran aspal/gravel **635 m** dengan tiga lompatan, joker lap, grandstand, dan race control, plus **AI autopilot**, **grid 6 mobil** (kamu + 5 lawan AI) yang balapan 10 lap, **jejak ban + asap/debu** dari ban yang benar-benar selip, papan klasemen langsung, **11 kamera TV** di pinggir trek untuk menonton pertandingan AI vs AI, dan **helikopter siaran** yang gambar udaranya ikut masuk ke siaran TV. Belum ada multiplayer.
 
 ## Jalanin
 
@@ -101,7 +101,7 @@ scripts/
 
 ## Arena rallycross
 
-Satu putaran **478 m**, searah jarum jam, garis start/finish di `(0, 0)` menghadap `+Z`:
+Satu putaran **635 m**, searah jarum jam, garis start/finish di `(0, 0)` menghadap `+Z`:
 
 | Bagian | Isi |
 | --- | --- |
@@ -111,7 +111,47 @@ Satu putaran **478 m**, searah jarum jam, garis start/finish di `(0, 0)` menghad
 | T2 | kanan cepat; **joker lap** memotong di dalamnya (gravel, ±2,5 m lebih pendek tapi lebih lambat) |
 | JUMP 1 | lompatan aspal di straight timur, crest 1,35 m, lip pendek — mobil terbang ±1 s |
 | T3 + gravel-in | kanan, lalu 60 m gravel dengan JUMP 2 (crest 1,30 m) |
-| Flick + final corner | dua belokan lambat menuju garis start |
+| T4 | belokan kanan panjang (radius ±30 m) yang membelokkan trek turun ke selatan |
+| T5 hairpin | junction lebar 17 m di ujung selatan: dari lurus jadi putaran 180°, apex radius ±16 m |
+| T6 | keluar hairpin, menyapu balik ke utara di sisi barat |
+| T7 + final corner | belokan kanan lambat menuju garis start |
+
+Seksi T4–T7 (150 m) ditambahkan di **luar** arena lama: setelah gravel-in, trek tidak
+langsung pulang ke garis start, tapi turun ke selatan dulu, memutar di hairpin, lalu
+kembali menyusuri sisi barat. Semua tikungan barunya dijaga radius: T4 ±30 m, hairpin
+16–25 m, T6 ±30 m, final corner ±20 m — cukup lebar untuk enam mobil berdampingan dan
+untuk AI yang mengerem di batas grip (lihat "Catatan desain" di bawah).
+
+### Catatan desain seksi baru
+
+Perencana kecepatan AI memakai `v = √(μ·g·r)` tepat **di batas grip**, jadi
+radius tiap tikungan menentukan apakah ia bisa melewatinya. Versi pertama seksi
+T4 memakai busur 21 m yang menyempit mendadak setelah tikungan 50 m: AI masuk
+tepat di batas, ban depan mulai meluncur, lalu setirnya "membeku" beberapa frame
+(sistem penangkap selip memotong setir) dan mobil melebar **6,8 m** keluar trek.
+Setelah T4 dijadikan satu busur ±30 m yang radiusnya berubah mulus 55 → 30 m,
+maksimumnya turun jadi **0,5 m**. Pelajarannya: **jangan gabungkan tikungan yang
+membuka dengan tikungan yang langsung menyempit** — transisi radius yang halus
+lebih penting daripada radius minimum itu sendiri.
+
+### Kenapa dulu ada rumput di aspal
+
+Dua bug, keduanya di geometri (bukan di tekstur):
+
+1. `PathSample.tangent` diambil dari `curve.getTangentAt(u)` milik three.js. Di
+   dekat sambungan lap (u→1) fungsi itu kadang mengembalikan arah yang meleset
+   **±60°** — satu sampel jadi miring, dan semua ribbon turunannya (bahu rumput,
+   pagar) terlempar menyeberang aspal di dekat garis start. Sekarang tangent
+   dihitung dari beda hingga antar-titik sampel, dengan siklus lap yang benar
+   (sampel terakhir adalah duplikat sampel pertama, jadi tidak ikut dihitung).
+2. Bahu rumput digeser 18 m ke kedua sisi tanpa memeriksa apa yang ada di
+   jalannya. Di apex hairpin geseran itu melewati pusat tikungan (baris
+   terjauhnya berbalik arah), dan di mulut jalur joker kedua badan jalan
+   bertumpuk sehingga tidak ada tempat untuk bahu sama sekali. Sekarang lebar
+   bahu dibatasi 0,8 × jari-jari tikungan, ditelusuri per 0,5 m terhadap semua
+   badan jalan (`vergeRibbon(..., blockers)`), dan sampel yang tidak punya ruang
+   dilewati — rumputnya terputus, bukan menyeberang aspal. Audit menguji
+   **semua titik** bahu ke aspal utama dan joker: hasilnya 0 titik.
 
 Joker lap keluar dari sisi dalam gravel-out, memotong lurus di dalam T2 (lebar 9–10 m, mulut joker gravel), lalu menyambung kembali ke aspal sebelum T3 — jalurnya **2,5 m lebih pendek** tapi lebih sempit dan lebih lambat, dan melewati JUMP 1 dengan sudut yang berbeda. Keputusan joker jadi soal "udara bersih" vs "jalur cepat".
 
@@ -289,9 +329,9 @@ Jadi AI-nya **bukan animasi atau jalur rekaman**: setiap frame ia membaca posisi
 
 Yang **belum** ada (jujur): keputusan joker belum memperhitungkan **waktu tempuh** kedua rute (hanya lalu lintas + riwayat lap), AI belum belajar garis balap sendiri (yang naik hanya pace, asumsi grip, dan kerapian lajur), dan belum memprediksi gerakan lawan (hanya jarak & kecepatan saat ini; menyalip di tikungan masih memakai celah yang terlihat sekarang, bukan lintasan lawan 1 detik ke depan). Itu semua bisa ditambahkan tanpa menyentuh fisika.
 
-Hasil uji headless dengan fisika asli di trek ini (**478 m**): **29,8 s** satu putaran, **0,0 m** keluar tepi trek, dan bodi tetap 100 %. Lima lawan menyelesaikan satu putaran dalam 34,3 s (dari grid, dengan lalu lintas), dan dengan ban kempes (satu roda) AI memperlambat diri sendiri (`pace` turun) lalu tetap di dalam trek.
+Hasil uji headless dengan fisika asli di trek ini (**635 m**): **41,7 s** satu putaran, **0,5 m** paling jauh keluar tepi trek, dan bodi tetap 100 %. Satu lawan dari grid dengan lalu lintas menyelesaikan putaran dalam **44,6 s**, dan dengan ban kempes (satu roda) AI memperlambat diri sendiri (`pace` 1,00 → 0,85) lalu tetap di dalam trek (maks 3,0 m lewat tepi, batas uji 4 m).
 
-**Takaran AI-nya:** skala nalar (`tuningFor`) menaikkan pace 0,95 → 1,0 sekaligus asumsi grip 8,6 → 9,0 dan rem 8,0 → 8,4 — tepat di bawah batas nyata ban (±10 m/s²), karena di atas itu perencana menaksir grip terlalu tinggi, mobil melebar, dan putarannya justru lebih lambat (grip 9,3 sudah jadi 32,8 s). Hasil uji: nalar 0 % → 31,5 s, 100 % → 30,4 s, jadi makin tinggi nalar makin cepat, tanpa melanggar fisika.
+**Takaran AI-nya:** skala nalar (`tuningFor`) menaikkan pace 0,95 → 1,0 sekaligus asumsi grip 8,6 → 9,0 dan rem 8,0 → 8,4 — tepat di bawah batas nyata ban (±10 m/s²), karena di atas itu perencana menaksir grip terlalu tinggi, mobil melebar, dan putarannya justru lebih lambat (grip 9,3 sudah jadi 32,8 s). Hasil uji: nalar 0 % → 51,5 s, 100 % → 42,1 s, jadi makin tinggi nalar makin cepat, tanpa melanggar fisika.
 
 ## Kamera TV (broadcast)
 
@@ -415,7 +455,8 @@ yang diunduh, bukan canvas 2D:
 | aspal | abu netral + butiran batu, retak rambut, tambalan tua, **dua jalur ban** yang lebih gelap & lebih mengkilap | warna 512², normal 256², kekasaran 512² |
 | gravel | pasir hangat + tiga lapis kerikil (bongkah 12–30 cm, kerikil, butir lepas terang) dengan bayangan kontak; jalur ban **terpadatkan** dan lebih halus | warna 512², normal 512², kekasaran 512² |
 | kerban | merah-putih pudar, kotor, bercak debu | warna 128² |
-| bahu trek | rumput yang terkelupas jadi tanah, bercak & butiran | warna 256² |
+| bahu trek | rumput kusam yang terkelupas jadi tanah (palet sama dengan lapangan) | warna 256² + normal + kekasaran |
+| tanah lapangan | rumput potong: bercak besar, helai per piksel, pita potong tipis, bercak kering | warna 512², normal 256², kekasaran 512² |
 
 Kenapa prosedural dan bukan tekstur foto:
 
@@ -429,6 +470,24 @@ Kenapa prosedural dan bukan tekstur foto:
   dipakai membedakan jalur ban yang terpoles (0,58) dari aspal di luarnya
   (0,92). Di mode PBR inilah yang membuat jalan terlihat "berbahan", bukan
   sekadar gelap.
+
+**Tanah lapangan akhirnya bukan karpet hijau.** Versi lama cuma dua pita potong
+bergaris keras di atas `#74b446` dengan 350 titik putih — dari kamera mobil
+hasilnya seperti karpet plastik, dan petaknya (30 m) terlihat berulang sejauh
+mata bisa melihat. Sekarang `makeTurfMaps()` menyusun empat lapis: noise besar
+(bercak terang-gelap beberapa meter), bercak kering kekuningan, rumpun + helai
+per piksel (butiran yang menahan pandangan saat kamera menempel tanah), dan
+pita potong 8 kali per petak dengan amplitudo hanya ±5 % — cukup memberi arah
+pada lapangan tanpa jadi zebra. Petaknya 26 m (`repeat` 32) jadi ±5 cm per
+piksel. Ada juga normal map (rumpun) dan peta kekasaran 0,88–0,97: rumput tidak
+pernah mengkilap. Bahu trek memakai palet yang sama, jadi peralihan dari aspal
+ke lapangan tidak terlihat seperti dua bahan yang ditempel.
+
+*Catatan alat:* `scripts/preview.ts` (rasterizer tanpa GPU) membuang segitiga
+yang menyentuh bidang dekat kamera. Tanah dulu satu `PlaneGeometry` 840 m berisi
+2 segitiga raksasa — dua-duanya selalu tersentuh bidang dekat, jadi tanahnya
+hilang dari semua screenshot. Sekarang bidangnya dibagi kisi 24×24, jadi shot
+`shots/arena-*.png` benar-benar menampilkan tanahnya.
 
 **Skala tekstur ikut diperbaiki.** Dulu uv jalan memakai `v = jarak`, artinya
 satu petak tekstur = **1 m** — butiran 3 piksel jadi garis tipis sepanjang
@@ -465,7 +524,7 @@ dibuat lewat satu jalur PBR di `src/world/style.ts`:
 - **Tekstur nyata, bukan warna rata** — aspal, gravel, kerb, dan bahu trek punya
   peta warna + normal + roughness prosedural (`src/world/surface-maps.ts`,
   deterministik lewat `mulberry32`). Jalur karet ban dipanggang ke tekstur aspal
-  (nol z-fighting, nol draw call ekstra), tekstur rumput diulang tiap 30 m, dan
+  (nol z-fighting, nol draw call ekstra), tekstur rumput diulang tiap 26 m, dan
   bahu trek memakai peta terpisah supaya tidak terlihat seperti kamuflase.
 - **Langit & horizon** — kubah gradasi + sprite matahari, dua lapis bukit di
   horizon, awan (instanced, satu draw call), dan 1.100 rumpun rumput di tepi
@@ -494,8 +553,14 @@ tanpa render — lalu keluar dengan kode ≠ 0 kalau ada temuan:
 2. **Kesinambungan pagar** — celah > 3 m dianggap bocor (sekarang 0 m).
 3. **Sisi dalam** — seberapa jauh mobil bisa menyetir ke dalam sebelum ditahan;
    angka besar = jalan pintas memotong lapangan.
-4. **Persimpangan cabang** — sudut masuk/keluar joker (sekarang 11,8° dan 6,0°:
+4. **Persimpangan cabang** — sudut masuk/keluar joker (sekarang 11,7° dan 6,1°:
    tangensial, tidak menusuk pagar).
+5. **Rumput vs aspal** — setiap titik bahu rumput diuji ke badan jalan utama dan
+   jalan joker: **tidak boleh ada satu pun yang masuk aspal** (sekarang 0 titik,
+   dulu 74 titik sedalam 4,6 m di dalam tikungan). Bahu yang dihitung di sini
+   adalah ribbon yang sama dengan collider-nya, jadi bukan cuma soal gambar:
+   rumput yang menyeberang aspal juga membuat mobil masuk tikungan dengan μ
+   rumput 0,55 di atas tarmac.
 
 Catatan dari audit: ekor aspal joker **tidak** diberi collider sendiri. Bagian
 itu menumpang 8 mm di atas aspal trek utama dan seluruhnya berada di dalam

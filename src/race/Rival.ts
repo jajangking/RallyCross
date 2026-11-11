@@ -154,8 +154,14 @@ export class Rival {
     const gripScale = Math.max(0.35, Math.sqrt(Math.max(0.05, grip)));
     const engineScale = 0.6 + 0.4 * d.topSpeedScale;
     this.wear = Math.max(0.3, Math.min(1, gripScale * engineScale));
-    this.pilot.options.gripTarmac = this.baseGrip * Math.max(0.3, grip);
-    this.pilot.options.brakeTarmac = this.baseBrake * Math.max(0.3, gripScale);
+    // Mobil rusak tidak bisa dipakai di batas grip: bannya tidak simetris,
+    // setirnya menarik ke satu sisi, dan tidak ada tenaga untuk mengoreksi.
+    // Perencana kecepatan karena itu diberi margin 15 % saat ada kerusakan —
+    // tanpa ini mobil ban kempes masuk tikungan tepat di batas teoretis lalu
+    // meluncur keluar trek.
+    const margin = 0.85;
+    this.pilot.options.gripTarmac = this.baseGrip * Math.max(0.3, grip) * margin;
+    this.pilot.options.brakeTarmac = this.baseBrake * Math.max(0.3, gripScale) * margin;
     this.applyPace();
   }
 

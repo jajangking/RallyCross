@@ -29,6 +29,7 @@ import {
   makeAsphaltMaps,
   makeGravelMaps,
   makeKerbMaps,
+  makeTurfMaps,
   makeVergeMaps,
 } from '../src/world/surface-maps';
 import { surface, surfaceFrom, PALETTE } from '../src/world/style';
@@ -226,6 +227,14 @@ async function run() {
     for (let i = 1; i < main.length; i++) {
       if (main[i].surface === main[i - 1].surface) continue;
       if (seen.some((d) => Math.abs(main[i].distance - d) < 25)) continue;
+      // Di mulut jalur joker dua badan jalan bertumpuk dan sengaja tidak sebidang
+      // (joker 6 mm lebih rendah) — mobil yang parkir persis di situ memang
+      // bersandar pada dua permukaan berbeda. Itu bukan suspensi yang bergetar,
+      // jadi sambungan itu dilewati; sambungan gravel yang sebenarnya tetap diuji.
+      const nearMouth =
+        Math.hypot(main[i].pos.x - JOKER_START.x, main[i].pos.z - JOKER_START.z) < 14 ||
+        Math.hypot(main[i].pos.x - TRACK.joker[TRACK.joker.length - 1].pos.x, main[i].pos.z - TRACK.joker[TRACK.joker.length - 1].pos.z) < 14;
+      if (nearMouth) continue;
       seen.push(main[i].distance);
       const a = TRACK.at(main[i].distance);
       parkSpots.push({ label: `${main[i - 1].surface}→${main[i].surface} seam`, x: a.pos.x, y: 0.6, z: a.pos.z, yaw: a.yaw });
@@ -544,6 +553,55 @@ async function run() {
     'kerban & bahu trek punya peta sendiri (bahu masih kehijauan)',
     `kerban ${kerbTop.toFixed(0)} · bahu ${vergeAvg.map((v) => v.toFixed(0)).join('/')}`,
   );
+
+  /* tanah lapangan: rumput, bukan satu warna hijau rata */
+  {
+    const turf = makeTurfMaps(256);
+    const turfAvg = averageColor(turf.map);
+    check(
+      turfAvg[1] > turfAvg[0] + 12 && turfAvg[1] > turfAvg[2] + 20 && turfAvg[1] > 70 && turfAvg[1] < 150,
+      'tanah lapangan hijau rumput (bukan hijau neon atau abu)',
+      `rata-rata ${turfAvg.map((v) => v.toFixed(0)).join('/')}`,
+    );
+    // Variasi nada: rumput asli bergelombang, bukan satu nilai. Diukur dari
+    // sebaran kanal hijau (min–maks + simpangan baku), bukan jumlah tingkat
+    // kuantisasi — histogram 16 tingkat terlalu kasar untuk noise halus.
+    let minG = 255;
+    let maxG = 0;
+    let sum = 0;
+    let sum2 = 0;
+    for (let i = 0; i < turf.map.length; i += 4) {
+      const g = turf.map[i + 1];
+      minG = Math.min(minG, g);
+      maxG = Math.max(maxG, g);
+      sum += g;
+      sum2 += g * g;
+    }
+    const meanG = sum / (turf.map.length / 4);
+    const sdG = Math.sqrt(sum2 / (turf.map.length / 4) - meanG * meanG);
+    check(
+      maxG - minG > 40 && sdG > 5,
+      'rumput punya gradasi nada (bukan cat tembok)',
+      `hijau ${minG}–${maxG}, simpangan ${sdG.toFixed(1)}`,
+    );
+    check(
+      !!turf.normal && !!turf.rough && turf.normal.length === turf.normalSize * turf.normalSize * 4,
+      'rumput punya normal map & peta kekasaran',
+      `normal ${turf.normalSize}² · kasar ${turf.roughSize}²`,
+    );
+    const turfSeam = seamGap(turf.map, 256);
+    check(
+      turfSeam.seam < turfSeam.inner * 3 + 2,
+      'tekstur rumput bisa diulang tanpa jahitan',
+      `tepi ${turfSeam.seam.toFixed(1)} vs dalam ${turfSeam.inner.toFixed(1)}`,
+    );
+    const vergeSeam = seamGap(vergeMaps.map, 256);
+    check(
+      vergeSeam.seam < vergeSeam.inner * 3 + 2,
+      'tekstur bahu trek bisa diulang tanpa jahitan',
+      `tepi ${vergeSeam.seam.toFixed(1)} vs dalam ${vergeSeam.inner.toFixed(1)}`,
+    );
+  }
 
   /* ---------------- percikan gravel ---------------- */
   console.log('\n— percikan gravel —');

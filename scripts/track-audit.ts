@@ -13,7 +13,7 @@
  *     tangensial atau menusuk dinding.
  */
 import * as THREE from 'three';
-import { TRACK, TRACK_WALLS, PIT, JUMPS } from '../src/world/track';
+import { TRACK, TRACK_WALLS, PIT, JUMPS, VERGE, JOKER_VERGE } from '../src/world/track';
 import { JOKER_START, JOKER_END } from '../src/world/circuit';
 
 type Sample = { pos: THREE.Vector3; halfWidth: number; distance: number; surface: string };
@@ -108,6 +108,43 @@ console.log('\n— sisi dalam (jalan pintas) —');
   console.log(`  rata-rata jarak tepi-ke-dinding dalam: ${avg.toFixed(1)} m`);
   console.log(`  titik paling terbuka: ${worst.gap.toFixed(1)} m di jarak ${worst.at.toFixed(0)} m`);
   if (worst.gap > 25) fail('sisi dalam praktis tanpa dinding: mobil bisa memotong lapangan');
+}
+
+/* 3b. rumput vs aspal ----------------------------------------------------- */
+console.log('\n— rumput vs aspal —');
+{
+  // Setiap titik bahu rumput (visual *dan* collider-nya ribbon yang sama) harus
+  // berada di luar badan jalan. Toleransi 0,3 m: baris tepi memang ditaruh
+  // 2 cm di dalam garis putih (biar tidak ada celah), dan lebar trek menyempit
+  // sedikit antar-sampel — tanpa toleransi ini yang terdeteksi cuma tepi itu.
+  const check = (name: string, pos: number[], path: Sample[], other: Sample[]) => {
+    let worst = 0;
+    let at = 0;
+    let deep = 0;
+    for (let i = 0; i < pos.length; i += 3) {
+      const p = new THREE.Vector3(pos[i], pos[i + 1], pos[i + 2]);
+      for (const [label, target] of [
+        ['trek utama', path],
+        ['joker', other],
+      ] as const) {
+        const n = nearestOn(target, p);
+        if (n.sample.surface !== 'tarmac' && n.sample.surface !== 'gravel') continue;
+        const intrusion = n.sample.halfWidth - 0.3 - n.dist;
+        if (intrusion > 0) {
+          deep++;
+          if (intrusion > worst) {
+            worst = intrusion;
+            at = n.sample.distance;
+          }
+        }
+        void label;
+      }
+    }
+    if (deep > 0) fail(`${name}: ${deep} titik rumput menembus aspal, paling dalam ${worst.toFixed(2)} m di jarak ${at.toFixed(0)} m`);
+    else console.log(`${OK} ${name}: tidak ada rumput di atas aspal (${(pos.length / 3).toFixed(0)} titik)`);
+  };
+  check('bahu rumput utama', VERGE.positions, MAIN, JOKER);
+  check('bahu rumput joker', JOKER_VERGE.positions, JOKER, MAIN);
 }
 
 /* 4. persimpangan joker --------------------------------------------------- */

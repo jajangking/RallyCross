@@ -445,6 +445,94 @@ export function makeKerbMaps(size = 128): SurfaceMaps {
  * jadi tanah, dengan garis roda dan bercak debu. Lebih gelap dan kotor
  * daripada rumput lapangan di luar arena.
  */
+/**
+ * Padang rumput di luar trek: rumput potong dengan gradasi alami, bukan satu
+ * warna hijau rata. Versi lama cuma dua pita potong bergaris keras di atas
+ * `#74b446` — dari kamera mobil hasilnya seperti karpet plastik, dan petaknya
+ * (30 m) terlihat berulang di seluruh arena.
+ *
+ * Yang dibangun di sini, berlapis:
+ *   - noise besar (3 oktaf) → bercak terang-gelap selebar beberapa meter,
+ *   - bercak kering kekuningan (tidak merata, seperti lapangan yang jarang
+ *     disiram), 
+ *   - rumpun & helai per piksel sebagai butiran halus yang menahan pandangan
+ *     saat kamera menempel ke tanah,
+ *   - pita potong (mower) tipis ±5 %, cukup untuk memberi arah pada lapangan
+ *     tanpa terlihat seperti zebra.
+ * Peta normalnya bikin permukaan tidak terlihat seperti kertas.
+ */
+export function makeTurfMaps(size = 512): SurfaceMaps {
+  const rng = mulberry32(0x2f10a7);
+  const broad = wrapNoise(size, 3, rng);
+  const clumps = wrapNoise(size, 8, rng);
+  const tufts = wrapNoise(size, 26, rng);
+  const blades = wrapNoise(size, 96, rng);
+  const dry = wrapNoise(size, 5, rng);
+
+  const map = new Uint8Array(size * size * 4);
+  const rough = new Uint8Array(size * size * 4);
+  const height = new Float32Array(size * size);
+  // Pita potong: 8 pita per petak, disambung halus supaya tidak ada garis lompat.
+  const stripes = 8;
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      const n = 0.42 * broad[i] + 0.33 * clumps[i] + 0.25 * tufts[i];
+      // Bercak kering: hanya puncak noise yang menguning, sisanya tetap hijau.
+      const dryMix = clamp01((dry[i] - 0.56) * 2.6) * clamp01((clumps[i] - 0.35) * 1.8);
+      const fine = blades[i] - 0.5;
+
+      let r = 0.185 + n * 0.115 + dryMix * 0.105 + fine * 0.045;
+      let g = 0.285 + n * 0.185 + dryMix * 0.055 + fine * 0.06;
+      let b = 0.105 + n * 0.07 + dryMix * 0.02 + fine * 0.025;
+
+      // Butir rumput: sesekali helai terang (ujung kena matahari) dan helai
+      // gelap (bayangan di antara rumpun). Ini yang bikin teksturnya "hidup"
+      // waktu dilihat dekat, bukan cuma gradasi warna.
+      const sp = hash2(x, y, 17);
+      if (sp > 0.972) {
+        r += 0.075;
+        g += 0.085;
+        b += 0.03;
+      } else if (sp < 0.03) {
+        r *= 0.82;
+        g *= 0.8;
+        b *= 0.86;
+      }
+
+      // Pita potong: gelombang lembut 8 kali per petak (amplitudo ±5 %).
+      const stripe = 1 + 0.05 * Math.sin((x / size) * Math.PI * 2 * stripes);
+      r *= stripe;
+      g *= stripe;
+      b *= stripe;
+
+      const px = i * 4;
+      map[px] = Math.round(clamp01(r) * 255);
+      map[px + 1] = Math.round(clamp01(g) * 255);
+      map[px + 2] = Math.round(clamp01(b) * 255);
+      map[px + 3] = 255;
+
+      // Rumput tidak pernah mengkilap: 0,88–0,97, sedikit lebih kering = lebih kasar.
+      const roughV = 0.88 + 0.09 * (1 - clamp01(dryMix + 0.35 * n));
+      rough[px] = rough[px + 1] = rough[px + 2] = Math.round(clamp01(roughV) * 255);
+      rough[px + 3] = 255;
+
+      // Tinggi untuk normal map: rumpun + helai, tanpa pita potong (pita itu
+      // warna, bukan relief).
+      height[i] = tufts[i] * 0.55 + clumps[i] * 0.3 + blades[i] * 0.35;
+    }
+  }
+
+  const normalSize = 256;
+  const normal = normalsFromHeight(
+    size === normalSize ? height : downsample(height, size, normalSize),
+    normalSize,
+    2.6,
+  );
+  return { map, normal, rough, size, normalSize, roughSize: size };
+}
+
 export function makeVergeMaps(size = 256): SurfaceMaps {
   const rng = mulberry32(0x77a31c9);
   const grass = wrapNoise(size, 8, rng);
@@ -452,32 +540,37 @@ export function makeVergeMaps(size = 256): SurfaceMaps {
   const patches = wrapNoise(size, 6, rng);
   const grit = wrapNoise(size, 64, rng);
   const map = new Uint8Array(size * size * 4);
+  const rough = new Uint8Array(size * size * 4);
+  const height = new Float32Array(size * size);
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const i = y * size + x;
       // Peralihan rumput ↔ tanah: bercak besar menentukan di mana tanah
-      // muncul, lalu butiran halus menggerus tepinya supaya tidak seperti
-      // kamuflase.
-      const bare = clamp01((patches[i] - 0.5) * 3 + (dirt[i] - 0.45) * 1.7);
+      // muncul, lalu butiran halus menggerus tepinya. Dulu kurvanya tajam
+      // (×3) sehingga hasilnya bercak kamuflase hijau-cokelat yang keras —
+      // sekarang tanah hanya muncul di puncak bercak, dan sisanya rumput
+      // dengan nada yang sama seperti lapangan di sekelilingnya.
+      const bare = clamp01((patches[i] - 0.62) * 2.6) * clamp01(0.35 + dirt[i] * 0.9);
       const grassTone = grass[i];
       const soil = grit[i];
-      let r = 0.28 + grassTone * 0.15;
-      let g = 0.41 + grassTone * 0.2;
-      let b = 0.19 + grassTone * 0.1;
-      // Tanah: coklat berpasir.
-      const sr = 0.5 + soil * 0.16;
-      const sg = 0.42 + soil * 0.14;
-      const sb = 0.31 + soil * 0.1;
+      // Rumput bahu: palet tanah lapangan (hijau gelap, sedikit kusam).
+      let r = 0.175 + grassTone * 0.1;
+      let g = 0.275 + grassTone * 0.165;
+      let b = 0.105 + grassTone * 0.065;
+      // Tanah: cokelat kusam, bukan pasir terang.
+      const sr = 0.33 + soil * 0.12;
+      const sg = 0.275 + soil * 0.1;
+      const sb = 0.2 + soil * 0.075;
       r = r * (1 - bare) + sr * bare;
       g = g * (1 - bare) + sg * bare;
       b = b * (1 - bare) + sb * bare;
       const speck = hash2(x, y, 91);
-      if (speck > 0.94) {
-        r += 0.05;
-        g += 0.06;
+      if (speck > 0.955) {
+        r += 0.045;
+        g += 0.055;
         b += 0.03;
-      } else if (speck < 0.06) {
-        r *= 0.86;
+      } else if (speck < 0.045) {
+        r *= 0.84;
         g *= 0.86;
         b *= 0.86;
       }
@@ -486,9 +579,22 @@ export function makeVergeMaps(size = 256): SurfaceMaps {
       map[px + 1] = Math.round(clamp01(g) * 255);
       map[px + 2] = Math.round(clamp01(b) * 255);
       map[px + 3] = 255;
+      // Bahu trek ikut punya kekasaran & relief: rumput yang sama dengan tanah,
+      // jadi keduanya menyatu dan tidak terlihat seperti dua bahan berbeda.
+      const roughV = 0.86 + 0.12 * clamp01(1 - bare);
+      rough[px] = rough[px + 1] = rough[px + 2] = Math.round(roughV * 255);
+      rough[px + 3] = 255;
+      height[i] = grass[i] * 0.6 + dirt[i] * 0.4;
     }
   }
-  return { map, size, normalSize: size, roughSize: size };
+  return {
+    map,
+    normal: normalsFromHeight(height, size, 2.2),
+    rough,
+    size,
+    normalSize: size,
+    roughSize: size,
+  };
 }
 
 /* ------------------------------------------------------------------ */

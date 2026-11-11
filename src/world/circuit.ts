@@ -151,10 +151,33 @@ export function samplePath(nodes: PathNode[], spacing = 1.5, closed = true): Pat
     });
   }
 
+  // Tangent/side dari **beda hingga** antar-titik, bukan `curve.getTangentAt()`.
+  // Di dekat sambungan (u→1) three.js kadang mengembalikan arah yang meleset
+  // ~60° (pernah terjadi di sampel 406): satu sampel jadi miring, dan semua
+  // ribbon turunan — bahu rumput & pagar — terlempar menyeberang aspal.
+  //
+  // Sampel terakhir **duplikat** dari sampel pertama (supaya ribbon menutup
+  // rapat), jadi perhitungan dilakukan pada siklus `cycle` = n-1: kalau
+  // duplikatnya ikut dihitung, chord-nya menyusut jadi ~0 m, kelengkungannya
+  // meledak, dan AI mengerem panik tepat di garis start.
+  const n = samples.length;
+  const closedLap = n > 2 && samples[0].pos.distanceTo(samples[n - 1].pos) < 0.01;
+  const cycle = closedLap ? n - 1 : n;
+  for (let i = 0; i < cycle; i++) {
+    const a = samples[(i - 1 + cycle) % cycle].pos;
+    const b = samples[(i + 1) % cycle].pos;
+    const t = b.clone().sub(a);
+    t.y = 0;
+    if (t.lengthSq() < 1e-8) continue;
+    t.normalize();
+    samples[i].tangent.copy(t);
+    samples[i].side.crossVectors(UP, t).normalize();
+  }
+
   // curvature from the tangent turn rate
-  for (let i = 0; i < samples.length; i++) {
-    const a = samples[(i - 1 + samples.length) % samples.length];
-    const b = samples[(i + 1) % samples.length];
+  for (let i = 0; i < cycle; i++) {
+    const a = samples[(i - 1 + cycle) % cycle];
+    const b = samples[(i + 1) % cycle];
     prev.copy(a.pos);
     next.copy(b.pos);
     const chord = prev.distanceTo(next);
@@ -166,16 +189,19 @@ export function samplePath(nodes: PathNode[], spacing = 1.5, closed = true): Pat
     samples[i].curvature = -turn / chord;
   }
   // smooth the curvature so kerbs do not flicker on/off
-  const smooth = samples.map((_s, i) => {
+  const smooth = new Array<number>(cycle);
+  for (let i = 0; i < cycle; i++) {
     let sum = 0;
-    let n = 0;
-    for (let k = -3; k <= 3; k++) {
-      sum += samples[(i + k + samples.length) % samples.length].curvature;
-      n++;
-    }
-    return sum / n;
-  });
-  samples.forEach((s, i) => (s.curvature = smooth[i]));
+    for (let k = -3; k <= 3; k++) sum += samples[(i + k + cycle) % cycle].curvature;
+    smooth[i] = sum / 7;
+  }
+  for (let i = 0; i < cycle; i++) samples[i].curvature = smooth[i];
+  if (closedLap) {
+    const last = samples[n - 1];
+    last.tangent.copy(samples[0].tangent);
+    last.side.copy(samples[0].side);
+    last.curvature = samples[0].curvature;
+  }
 
   return samples;
 }
@@ -247,36 +273,117 @@ export function roadRibbon(samples: PathSample[]): Record<Surface, Ribbon> {
 /**
  * Grass verge that carries the road edge down to the ground plane, so an
  * elevated crest does not look like a floating carpet.
+ *
+ * `blockers` = badan jalan lain di sebelahnya (garis balap utama untuk bahu
+ * joker, dan sebaliknya). Setiap titik bahu diuji terhadap jalan itu: kalau
+ * tidak ada ruang sama sekali — persis di mulut jalur joker, tempat kedua
+ * badan jalan bertumpuk — sampelnya dilewati sehingga rumputnya terputus.
+ * Tanpa ini, rumput tercetak di atas aspal di mulut joker (lihat audit).
  */
 export function vergeRibbon(
   samples: PathSample[],
   outward: number | ((s: PathSample) => number) = 16,
   edgeY = 0.015,
   shoulder = 2.6,
+  blockers: PathSample[][] = [],
 ): Ribbon {
   const out = typeof outward === 'function' ? outward : () => outward;
   const ribbon: Ribbon = { positions: [], uvs: [], distances: [], indices: [] };
   const a = new THREE.Vector3();
   const b = new THREE.Vector3();
   const c = new THREE.Vector3();
+  const probe = new THREE.Vector3();
+  const CLEAR = 0.9; // jarak bebas minimum bahu ke tepi jalan lain, meter
+  const SELF_WINDOW = 25; // sampel sejalur yang lebih dekat dari ini diabaikan
+
+  // Grid seragam untuk jalan lain: kueri jarak jadi O(1)-ish, bukan O(sampel).
+  const CELL = 12;
+  const grid = new Map<string, Array<{ s: PathSample; self: boolean }>>();
+  for (const path of blockers) {
+    for (const o of path) {
+      const key = `${Math.floor(o.pos.x / CELL)},${Math.floor(o.pos.z / CELL)}`;
+      const bucket = grid.get(key);
+      const entry = { s: o, self: path === samples };
+      if (bucket) bucket.push(entry);
+      else grid.set(key, [entry]);
+    }
+  }
+
+  /**
+   * Jarak bebas titik `p` ke tepi jalan terdekat di `blockers`. Sampel dari
+   * **jalur itu sendiri** hanya dihitung kalau jaraknya jauh di sepanjang lap
+   * (> `SELF_WINDOW`), supaya geseran bahu tidak dianggap menabrak jalannya
+   * sendiri — tapi lipatan di tikungan tajam (yang memotong trek jauh di
+   * belakang) tetap tertangkap.
+   */
+  const clearance = (p: THREE.Vector3, s: PathSample) => {
+    let best = Infinity;
+    const cx = Math.floor(p.x / CELL);
+    const cz = Math.floor(p.z / CELL);
+    for (let gx = cx - 1; gx <= cx + 1; gx++) {
+      for (let gz = cz - 1; gz <= cz + 1; gz++) {
+        const bucket = grid.get(`${gx},${gz}`);
+        if (!bucket) continue;
+        for (const e of bucket) {
+          if (e.self && Math.abs(e.s.distance - s.distance) < SELF_WINDOW) continue;
+          const d = Math.hypot(e.s.pos.x - p.x, e.s.pos.z - p.z) - e.s.halfWidth;
+          if (d < best) best = d;
+        }
+      }
+    }
+    return best;
+  };
+
+  /**
+   * Berapa meter bahu boleh melebar ke `sideSign` sebelum menyentuh jalan.
+   * Ditelusuri per 0,5 m dari tepi: berhenti di rintangan **pertama**, bukan
+   * cuma memeriksa ujungnya — kalau tidak, bahu selebar 18 m bisa melompati
+   * jalur joker yang sempit dan mendarat lagi di seberangnya.
+   */
+  const freeReach = (s: PathSample, sideSign: number, want: number) => {
+    if (blockers.length === 0) return want;
+    const STEP = 0.5;
+    let safe = 0;
+    for (let w = STEP; w <= want + 1e-6; w += STEP) {
+      probe.copy(s.pos).addScaledVector(s.side, sideSign * (s.halfWidth + w));
+      if (clearance(probe, s) < CLEAR) return safe;
+      safe = w;
+    }
+    return Math.min(want, safe);
+  };
 
   // Two rows per side: a flat shoulder at road height (so a wheel that runs
   // wide does not catch a lip), then the grass falling away to the ground.
   for (const sideSign of [1, -1]) {
-    const base = ribbon.positions.length / 3;
+    // Indeks vertex pertama tiap sampel (-1 = sampel dilewati).
+    const first: number[] = [];
     for (const s of samples) {
-      const width = Math.max(out(s), shoulder + 0.5);
       a.copy(s.pos).addScaledVector(s.side, sideSign * (s.halfWidth - 0.02));
-      b.copy(s.pos).addScaledVector(s.side, sideSign * (s.halfWidth + shoulder));
-      c.copy(s.pos).addScaledVector(s.side, sideSign * (s.halfWidth + width));
+      // Tepi jalan itu sendiri pun harus bersih dari jalan lain; kalau tidak,
+      // seluruh bahu di sampel ini akan tercetak di atas aspal.
+      if (clearance(a, s) < 0.25) {
+        first.push(-1);
+        continue;
+      }
+      const reach = freeReach(s, sideSign, Math.max(out(s), shoulder + 0.5));
+      if (reach < 0.8) {
+        first.push(-1);
+        continue;
+      }
+      first.push(ribbon.positions.length / 3);
+      const shoulderOut = Math.min(shoulder, Math.max(0.4, reach - 0.3));
+      b.copy(s.pos).addScaledVector(s.side, sideSign * (s.halfWidth + shoulderOut));
+      c.copy(s.pos).addScaledVector(s.side, sideSign * (s.halfWidth + reach));
       ribbon.positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, edgeY, c.z);
       ribbon.uvs.push(a.x * 0.1, a.z * 0.1, b.x * 0.1, b.z * 0.1, c.x * 0.1, c.z * 0.1);
       ribbon.distances.push(s.distance, s.distance, s.distance);
     }
     for (let k = 0; k < samples.length - 1; k++) {
-      const i = base + k * 3;
-      ribbon.indices.push(i, i + 1, i + 4, i, i + 4, i + 3);
-      ribbon.indices.push(i + 1, i + 2, i + 5, i + 1, i + 5, i + 4);
+      const i = first[k];
+      const j = first[k + 1];
+      if (i < 0 || j < 0) continue;
+      ribbon.indices.push(i, i + 1, j + 1, i, j + 1, j);
+      ribbon.indices.push(i + 1, i + 2, j + 2, i + 1, j + 2, j + 1);
     }
   }
 
@@ -413,10 +520,22 @@ export const MAIN_NODES: PathNode[] = [
   { x: 72, z: -62, y: 0.8, width: 14 }, // landing face
   { x: 67, z: -61, y: 0.1, width: 14 },
   { x: 60, z: -60, width: 14 },
-  { x: 50, z: -60, width: 14 },
-  { x: 32, z: -55, width: 14, surface: 'tarmac' }, // onto tarmac for the run home
-  { x: 16, z: -59, width: 14.5 }, // last flick
-  { x: 4, z: -50, width: 15 }, // final corner onto the main straight
+  { x: 52, z: -61, width: 14, surface: 'tarmac' }, // out of the gravel, onto tarmac
+  { x: 42, z: -63, width: 14 }, // T4: one long right-hander, radius ~30 m
+  { x: 31, z: -70, width: 14 },
+  { x: 24, z: -81, width: 14.5 },
+  { x: 22, z: -92, width: 15 },
+  { x: 22, z: -105, width: 15 }, // south straight
+  { x: 20, z: -118, width: 16 }, // T5: hairpin, turn in
+  { x: 12, z: -131, width: 17 },
+  { x: 0, z: -137, width: 17 }, // hairpin apex (luas, seperti junction rallycross)
+  { x: -12, z: -133, width: 17 }, // hairpin exit
+  { x: -18, z: -122, width: 16 }, // T6: back north along the west side
+  { x: -22, z: -110, width: 15 },
+  { x: -26, z: -96, width: 15 },
+  { x: -26, z: -82, width: 15 },
+  { x: -22, z: -69, width: 15 },
+  { x: -13, z: -55, width: 15 }, // T7: final right-hander onto the main straight
 ];
 
 /**

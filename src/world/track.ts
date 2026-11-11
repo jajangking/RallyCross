@@ -5,6 +5,7 @@ import {
   makeAsphaltMaps,
   makeGravelMaps,
   makeKerbMaps,
+  makeTurfMaps,
   makeVergeMaps,
 } from './surface-maps';
 import {
@@ -80,10 +81,16 @@ const JOKER_ROAD = roadRibbon(JOKER);
  * Grass banks: wide where the road is at ground level, but they pull in where
  * the road is raised, so a jump does not bury its own joker lane in turf.
  */
-const vergeWidth = (s: PathSample) =>
-  18 - 13 * Math.min(1, Math.max(0, (s.pos.y - ROAD_LIFT) / 0.45));
-const VERGE = vergeRibbon(MAIN, vergeWidth, 0.01);
-const JOKER_VERGE = vergeRibbon(JOKER, 6, 0.01);
+const vergeWidth = (s: PathSample) => {
+  const flat = 18 - 13 * Math.min(1, Math.max(0, (s.pos.y - ROAD_LIFT) / 0.45));
+  // Di tikungan tajam, geseran 18 m ke **sisi dalam** melewati pusat tikungan:
+  // baris terjauhnya berbalik arah dan menyeberangi aspal (rumput di jalan).
+  // Batasi lebar bahu ±0,8 jari-jari tikungan, jadi bahu menyempit di apex.
+  const radius = Math.abs(s.curvature) > 1e-4 ? 0.8 / Math.abs(s.curvature) : Infinity;
+  return Math.min(flat, radius);
+};
+export const VERGE = vergeRibbon(MAIN, vergeWidth, 0.01, 2.6, [MAIN, JOKER]);
+export const JOKER_VERGE = vergeRibbon(JOKER, 6, 0.01, 2.6, [JOKER, MAIN]);
 
 /** The catch fence runs the whole way round; nothing outside it is drivable. */
 function isWalled(_s: PathSample) {
@@ -357,21 +364,30 @@ function roadMaps(size = 512) {
   };
 }
 
-function grassTexture() {
-  // Rumput: dua garis potong bergantian — pola khas lapangan di game arcade.
-  // `repeat` 28 = satu petak ±30 m di tanah 840 m; tanpa ini garis potongnya
-  // melebar sampai 200 m dan tanahnya terlihat seperti karpet rata.
-  return canvasTexture((ctx, size) => {
-    ctx.fillStyle = '#74b446';
-    ctx.fillRect(0, 0, size, size);
-    ctx.fillStyle = 'rgba(94,158,54,0.55)';
-    const band = size / 4;
-    for (let i = 0; i < 4; i += 2) ctx.fillRect(0, i * band, size, band);
-    ctx.fillStyle = 'rgba(255,255,255,0.045)';
-    for (let i = 0; i < 350; i++) {
-      ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
-    }
-  }, 256, 28);
+/**
+ * Tanah lapangan: rumput potong dari `makeTurfMaps` (lihat alasannya di sana).
+ * Satu petak ±26 m di tanah 840 m (`repeat` 32) — cukup rapat supaya butiran
+ * rumputnya terbaca dari kamera mobil (±5 cm per piksel), cukup longgar supaya
+ * coraknya tidak berulang seperti ubin.
+ */
+function grassMaterial(detail: boolean) {
+  const maps = makeTurfMaps(detail ? 512 : 256);
+  const repeat = 32;
+  const mat = surface({
+    map: dataTexture(maps.map, maps.size, true, repeat),
+    normalMap: dataTexture(maps.normal!, maps.normalSize, false, repeat),
+    normalScale: new THREE.Vector2(0.55, 0.55),
+    roughnessMap: dataTexture(maps.rough!, maps.roughSize, false, repeat),
+    roughness: 1,
+    metalness: 0,
+  });
+  // Tanah digeser sedikit ke belakang di depth buffer: permukaannya cuma 2 cm
+  // di bawah aspal, dan di kejauhan selisih setipis itu bisa berkelip
+  // (z-fighting) — rumput tampak menembus jalan padahal geometrinya benar.
+  mat.polygonOffset = true;
+  mat.polygonOffsetFactor = 1;
+  mat.polygonOffsetUnits = 2;
+  return mat;
 }
 
 function kerbTexture() {
@@ -380,10 +396,25 @@ function kerbTexture() {
   return dataTexture(maps.map, maps.size, true);
 }
 
-function vergeTexture() {
+function vergeMaterial(detail: boolean) {
   // Bahu trek: rumput terkelupas jadi tanah, diulang tiap 10 m (uv dunia ×0,1).
-  const maps = makeVergeMaps(256);
-  return dataTexture(maps.map, maps.size, true);
+  // Palet & reliefnya sama dengan tanah di sekelilingnya, jadi peralihan dari
+  // aspal ke lapangan tidak terlihat seperti dua bahan yang ditempel.
+  const maps = makeVergeMaps(detail ? 256 : 128);
+  const mat = surface({
+    map: dataTexture(maps.map, maps.size, true),
+    normalMap: dataTexture(maps.normal!, maps.normalSize, false),
+    normalScale: new THREE.Vector2(0.5, 0.5),
+    roughnessMap: dataTexture(maps.rough!, maps.roughSize, false),
+    roughness: 0.98,
+    metalness: 0,
+  });
+  // Sama seperti tanah: bahu bertemu tanah di baris terluarnya, jadi keduanya
+  // perlu digeser ke belakang supaya tidak berkelip satu sama lain.
+  mat.polygonOffset = true;
+  mat.polygonOffsetFactor = 1;
+  mat.polygonOffsetUnits = 2;
+  return mat;
 }
 
 function checkerTexture() {
@@ -745,7 +776,7 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   // Di HP lemah (`?quality=low`) teksturnya 256²: sepertiga biaya hitung saat
   // boot, dan di layar kecil bedanya hampir tidak terlihat.
   const surfaces = roadMaps(detail ? 512 : 256);
-  const grass = grassTexture();
+  const groundMat = grassMaterial(detail);
   const crowd = crowdTexture();
 
   const start = pointAt(MAIN, START_DIST);
@@ -766,16 +797,20 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
   };
 
   /* ---------------- ground + verges + road ---------------- */
+  // Dibagi jadi kisi: satu bidang 840 m hanya 2 segitiga, dan segitiga raksasa
+  // itu selalu menyentuh bidang dekat kamera sehingga dibuang rasterizer
+  // preview (`scripts/preview.ts`) — tanahnya hilang dari screenshot. Kisi
+  // 24×24 tetap datar, tidak menambah collider, dan aman untuk fog.
   const groundMesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(GROUND_HALF * 2, GROUND_HALF * 2),
-    surface({ map: grass, roughness: 1, metalness: 0 }),
+    new THREE.PlaneGeometry(GROUND_HALF * 2, GROUND_HALF * 2, 24, 24),
+    groundMat,
   );
   groundMesh.rotation.x = -Math.PI / 2;
   groundMesh.position.y = -0.005;
   groundMesh.receiveShadow = true;
   scene.add(groundMesh);
 
-  const vergeMat = surface({ map: vergeTexture(), roughness: 0.98, metalness: 0 });
+  const vergeMat = vergeMaterial(detail);
   for (const ribbon of [VERGE, JOKER_VERGE]) {
     const mesh = new THREE.Mesh(ribbonGeometry(ribbon), vergeMat);
     mesh.receiveShadow = true;
@@ -1295,7 +1330,9 @@ export function buildTrackVisuals(scene: THREE.Scene, detail = true): TrackHandl
     surface({ map: apronTex, roughness: 0.95 }),
   );
   apron.rotation.x = -Math.PI / 2;
-  apron.position.set(62, 0.008, 4);
+  // Sedikit di bawah apron pit (`PIT.y` = ROAD_LIFT + 12 mm) supaya lantai
+  // paddock tidak menonjol ke atasnya saat ROAD_LIFT berubah.
+  apron.position.set(62, PIT.y - 0.02, 4);
   apron.receiveShadow = true;
   paddock.add(apron);
 
